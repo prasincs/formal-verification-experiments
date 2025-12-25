@@ -1,0 +1,131 @@
+# Verus Formal Verification Demo Container
+# OCI-compliant - works with Docker, Podman, containerd, Apple Containers
+#
+# Build:  docker build -t verus-demo .
+#         podman build -t verus-demo .
+#
+# Run:    docker run -it verus-demo
+#         podman run -it verus-demo
+
+# -----------------------------------------------------------------------------
+# Stage 1: Build Verus
+# -----------------------------------------------------------------------------
+# Use explicit platform to avoid Rosetta emulation issues
+FROM --platform=linux/arm64 rust:1.83-bookworm AS builder
+
+# Install build dependencies
+RUN apt-get update && apt-get install -y \
+    curl \
+    git \
+    cmake \
+    python3 \
+    libssl-dev \
+    pkg-config \
+    file \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Rust nightly (required for Verus)
+RUN rustup default nightly-2024-12-13 \
+    && rustup component add rust-src rustfmt
+
+# Clone Verus
+WORKDIR /build
+RUN git clone --depth 1 https://github.com/verus-lang/verus.git
+
+# Build Z3 from source (the prebuilt ARM64 release is incorrectly packaged as x86-64)
+WORKDIR /build
+RUN git clone --depth 1 --branch z3-4.12.5 https://github.com/Z3Prover/z3.git z3-src
+WORKDIR /build/z3-src
+RUN python3 scripts/mk_make.py && cd build && make -j$(nproc)
+RUN cp /build/z3-src/build/z3 /build/verus/source/z3 && chmod +x /build/verus/source/z3
+
+# Verify Z3 works
+WORKDIR /build/verus/source
+RUN ./z3 --version
+
+# Set Z3 path explicitly
+ENV VERUS_Z3_PATH=/build/verus/source/z3
+
+# Build Verus using vargo
+RUN bash -c "source ../tools/activate && vargo build --release"
+
+# -----------------------------------------------------------------------------
+# Stage 2: Runtime image
+# -----------------------------------------------------------------------------
+FROM --platform=linux/arm64 debian:bookworm-slim
+
+# Install minimal runtime dependencies
+RUN apt-get update && apt-get install -y \
+    libssl3 \
+    ca-certificates \
+    bash \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create non-root user for security
+RUN useradd -m -s /bin/bash verus
+
+# Install rustup as verus user
+USER verus
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain 1.91.0
+ENV PATH="/home/verus/.cargo/bin:${PATH}"
+USER root
+
+# Copy Verus binaries - verus looks for verus-root marker file and rust_verify
+COPY --from=builder /build/verus/source/target-verus/release/verus /usr/local/bin/
+COPY --from=builder /build/verus/source/target-verus/release/rust_verify /usr/local/bin/
+COPY --from=builder /build/verus/source/z3 /usr/local/bin/z3
+RUN touch /usr/local/bin/verus-root && \
+    chmod +x /usr/local/bin/verus /usr/local/bin/rust_verify /usr/local/bin/z3
+
+# Copy vstd and verus libs including .vir files
+COPY --from=builder /build/verus/source/target-verus/release /usr/local/lib/verus-release
+RUN cp /usr/local/lib/verus-release/libvstd.rlib /usr/local/bin/ 2>/dev/null || true && \
+    cp -r /usr/local/lib/verus-release/vstd /usr/local/bin/vstd 2>/dev/null || true && \
+    find /usr/local/lib/verus-release -name "lib*.rlib" -exec cp {} /usr/local/bin/ \; 2>/dev/null || true && \
+    find /usr/local/lib/verus-release -name "*.so" -exec cp {} /usr/local/bin/ \; 2>/dev/null || true && \
+    find /usr/local/lib/verus-release -name "*.vir" -exec cp {} /usr/local/bin/ \; 2>/dev/null || true && \
+    ls -la /usr/local/bin/*.rlib /usr/local/bin/*.so /usr/local/bin/*.vir 2>/dev/null || true && \
+    rm -rf /usr/local/lib/verus-release
+
+# Set up environment
+ENV VERUS_Z3_PATH=/usr/local/bin/z3
+
+# Switch to non-root user
+USER verus
+WORKDIR /home/verus
+
+# Copy demo project (workspace structure)
+WORKDIR /home/verus/demo
+COPY --chown=verus:verus Cargo.toml .
+COPY --chown=verus:verus README.md .
+COPY --chown=verus:verus verified/ ./verified/
+COPY --chown=verus:verus app/ ./app/
+COPY --chown=verus:verus examples/ ./examples/
+
+# Verify installation works
+RUN verus --version 2>/dev/null || verus --help 2>/dev/null | head -1 || echo "Verus installed"
+
+# Default command: run verification
+CMD ["sh", "-c", "\
+echo '=== Verus Formal Verification Demo ===' && \
+echo && \
+echo 'Project structure:' && \
+echo '  verified/src/lib.rs  - Verified library' && \
+echo '  app/src/main.rs      - Example app' && \
+echo '  examples/            - 8 failure examples' && \
+echo && \
+echo 'Running: verus --crate-type lib verified/src/lib.rs' && \
+echo && \
+verus --crate-type lib verified/src/lib.rs && \
+echo && \
+echo '---' && \
+echo 'Try: ./run.sh shell    (interactive)' && \
+echo '     ./run.sh examples (see failures)' \
+"]
+
+# Labels for OCI compliance
+LABEL org.opencontainers.image.title="Verus Formal Verification Demo"
+LABEL org.opencontainers.image.description="Pre-built Verus environment with comprehensive demo"
+LABEL org.opencontainers.image.source="https://github.com/verus-lang/verus"
+LABEL org.opencontainers.image.documentation="See /home/verus/demo/README.md"

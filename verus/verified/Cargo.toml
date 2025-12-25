@@ -1,0 +1,12 @@
+[package]
+name = "verified"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# The official verus! macro - strips specs when compiled with cargo
+verus_builtin_macros = "0.0.0-2025-12-07-0054"
+verus_builtin = "0.0.0-2025-12-07-0054"
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(verus_keep_ghost)'] }
