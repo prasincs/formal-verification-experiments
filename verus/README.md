@@ -218,5 +218,4 @@ From real incidents: a single unguarded `.unwrap()` can cause hours of global ou
 ## Resources
 
 - [Verus Guide](https://verus-lang.github.io/verus/guide/)
-- [Verus by Example](https://verus-lang.github.io/verus/verus_by_example/)
 - [Verus GitHub](https://github.com/verus-lang/verus)
