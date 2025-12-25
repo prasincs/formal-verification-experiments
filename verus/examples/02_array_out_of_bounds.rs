@@ -14,7 +14,7 @@ use vstd::prelude::*;
 verus! {
 
 fn get_element_unsafe(arr: &[u64], index: usize) -> u64 {
-    arr[index]  // ERROR: No proof that index < arr.len()
+    arr[index]  // error: precondition not satisfied
 }
 
 // Uncomment to see the fix:

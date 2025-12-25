@@ -21,7 +21,7 @@ fn broken_loop_invariant(n: u64) -> usize
     let mut count: usize = 0;
     while i < n as usize
         invariant
-            count <= i,  // ERROR: Violated because count grows by 2, i grows by 1
+            count <= i,  // error: invariant not satisfied at end of loop body
         decreases
             n - i as u64,
     {

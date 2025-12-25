@@ -67,7 +67,7 @@ RUN useradd -m -s /bin/bash verus
 
 # Install rustup as verus user
 USER verus
-RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain 1.91.0
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain 1.91.0
 ENV PATH="/home/verus/.cargo/bin:${PATH}"
 USER root
 

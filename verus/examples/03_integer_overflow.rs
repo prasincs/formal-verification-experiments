@@ -14,7 +14,7 @@ use vstd::prelude::*;
 verus! {
 
 fn add_unsafe(a: u64, b: u64) -> u64 {
-    a + b  // ERROR: Could overflow if a + b > u64::MAX
+    a + b  // error: possible arithmetic underflow/overflow
 }
 
 // Uncomment to see the fix:

@@ -22,7 +22,7 @@ fn missing_decreases(n: u64) -> u64
         invariant
             i <= n,
             sum == i * (i - 1) / 2,  // Sum of 0..i
-        // ERROR: Missing decreases clause
+        // error: loop must have a decreases clause
     {
         sum = sum + i;
         i = i + 1;

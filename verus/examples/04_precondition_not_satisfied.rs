@@ -20,7 +20,7 @@ fn safe_divide(a: u64, b: u64) -> u64
 }
 
 fn call_without_checking(x: u64, y: u64) -> u64 {
-    safe_divide(x, y)  // ERROR: Caller doesn't prove y != 0
+    safe_divide(x, y)  // error: precondition not satisfied
 }
 
 // Uncomment to see fix option 1 - propagate the requirement:

@@ -15,7 +15,7 @@ use vstd::prelude::*;
 verus! {
 
 fn unsafe_unwrap(opt: Option<u64>) -> u64 {
-    opt.unwrap()  // ERROR: Could be None!
+    opt.unwrap()  // error: precondition not satisfied
 }
 
 //Uncomment to see fix option 1 - require Some:

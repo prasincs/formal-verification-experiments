@@ -16,7 +16,7 @@ verus! {
 fn broken_max(a: u64, b: u64) -> (result: u64)
     ensures
         result >= a,
-        result >= b,  // ERROR: Not satisfied when b > a
+        result >= b,  // error: postcondition not satisfied
 {
     a  // Bug: always returns a, even when b > a
 }

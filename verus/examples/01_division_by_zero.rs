@@ -2,7 +2,7 @@
 //!
 //! Run: verus examples/01_division_by_zero.rs
 //!
-//! Expected error: "precondition not satisfied"
+//! Expected error: "possible division by zero"
 //!
 //! The division operator in Verus requires proof that the denominator is non-zero.
 //! Without a `requires` clause, Verus cannot verify this is safe.
@@ -14,7 +14,7 @@ use vstd::prelude::*;
 verus! {
 
 fn divide_unsafe(a: u64, b: u64) -> u64 {
-    a / b  // ERROR: No proof that b != 0
+    a / b  // error: possible division by zero
 }
 
 // Uncomment to see the fix:
