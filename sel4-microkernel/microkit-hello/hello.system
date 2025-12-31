@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+    seL4 Microkit System Description
+
+    This file defines the system architecture:
+    - Protection Domains (isolated components)
+    - Communication channels between them
+    - Memory regions and mappings
+
+    The Microkit tool processes this to generate:
+    - Capability derivation tree
+    - Memory layout
+    - Boot configuration
+-->
+<system>
+    <!--
+        Hello World Protection Domain
+
+        This is the simplest possible Microkit system:
+        a single protection domain that prints "Hello" and demonstrates
+        the seL4 formally verified kernel is running.
+    -->
+    <protection_domain name="hello" priority="254" pp="true">
+        <program_image path="hello.elf" />
+    </protection_domain>
+
+    <!--
+        Memory region for shared data (example)
+        Can be used for inter-PD communication
+    -->
+    <!--
+    <memory_region name="shared_mem" size="0x1000" />
+
+    <protection_domain name="producer" priority="100">
+        <program_image path="producer.elf" />
+        <map mr="shared_mem" vaddr="0x5000000" perms="rw" />
+    </protection_domain>
+
+    <protection_domain name="consumer" priority="99">
+        <program_image path="consumer.elf" />
+        <map mr="shared_mem" vaddr="0x5000000" perms="r" />
+    </protection_domain>
+
+    <channel>
+        <end pd="producer" id="1" />
+        <end pd="consumer" id="1" />
+    </channel>
+    -->
+</system>

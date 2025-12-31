@@ -1,0 +1,26 @@
+[package]
+name = "sel4-x86-rootserver"
+version = "0.1.0"
+edition = "2021"
+description = "seL4 x86_64 root server written in Rust"
+
+[dependencies]
+# sel4 provides low-level seL4 syscall bindings
+sel4 = { git = "https://github.com/seL4/rust-sel4" }
+sel4-root-task = { git = "https://github.com/seL4/rust-sel4" }
+sel4-sys = { git = "https://github.com/seL4/rust-sel4" }
+
+# Verus verification support
+verus_builtin_macros = "0.0.0-2025-12-07-0054"
+verus_builtin = "0.0.0-2025-12-07-0054"
+
+[profile.release]
+panic = "abort"
+lto = true
+opt-level = "z"
+
+[profile.dev]
+panic = "abort"
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(verus_keep_ghost)'] }
