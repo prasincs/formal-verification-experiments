@@ -821,6 +821,287 @@ pub fn generate_quote(
 };
 ```
 
+## Display Trust Boundaries and Verifiable Alternatives
+
+### The HDMI/VideoCore Trust Gap
+
+With the standard HDMI output path, there is an **unverifiable gap** between our verified framebuffer code and what actually appears on the display:
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                     HDMI DISPLAY PATH - TRUST GAP                            │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  ┌──────────────────┐     ┌──────────────────┐     ┌──────────────────┐    │
+│  │   Framebuffer    │     │   VideoCore VI   │     │   HDMI Display   │    │
+│  │   (Verus ✓)      │────→│   (Closed src)   │────→│   (External)     │    │
+│  │                  │     │                  │     │                  │    │
+│  │  We prove:       │     │  We trust:       │     │  We assume:      │    │
+│  │  - Bounds check  │     │  - Reads our FB  │     │  - Shows what    │    │
+│  │  - No overflow   │     │  - Outputs HDMI  │     │    it receives   │    │
+│  │  - Correct color │     │  - No tampering  │     │                  │    │
+│  └──────────────────┘     └──────────────────┘     └──────────────────┘    │
+│          ✓                        ❌                        ❌              │
+│      VERIFIED                 TRUST ONLY               TRUST ONLY          │
+│                                                                             │
+│  Guarantees we CAN provide:                                                 │
+│  ✓ Correct pixel values written to framebuffer memory                      │
+│  ✓ No buffer overflows in our code                                         │
+│  ✓ Memory isolation via seL4                                               │
+│                                                                             │
+│  Guarantees we CANNOT provide with HDMI:                                    │
+│  ✗ VideoCore reads our exact framebuffer values                            │
+│  ✗ HDMI signal faithfully represents framebuffer                           │
+│  ✗ Display renders HDMI signal correctly                                   │
+│  ✗ No firmware-level manipulation of display output                        │
+│                                                                             │
+│  HDMI spec lacks integrity verification:                                    │
+│  - No cryptographic binding between source and display                     │
+│  - No attestation mechanism in HDMI 2.0/2.1                                │
+│  - HDCP is for copy protection, not integrity                              │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Verifiable Display Alternative: Direct SPI/I2C Displays
+
+**Solution**: Bypass VideoCore entirely using a display connected directly to GPIO pins.
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                 VERIFIABLE DISPLAY PATH - SPI/I2C                            │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  ┌──────────────────┐     ┌──────────────────┐     ┌──────────────────┐    │
+│  │   Framebuffer    │     │   SPI Driver     │     │   SPI Display    │    │
+│  │   (Verus ✓)      │────→│   (Verus ✓)      │────→│   Controller     │    │
+│  │                  │     │                  │     │                  │    │
+│  │  Bounds-checked  │     │  Verified:       │     │  Simple logic:   │    │
+│  │  pixel writes    │     │  - Byte sequence │     │  - Receives SPI  │    │
+│  │                  │     │  - CS timing     │     │  - Sets pixels   │    │
+│  │                  │     │  - Clock edges   │     │  - No firmware   │    │
+│  └──────────────────┘     └──────────────────┘     └──────────────────┘    │
+│          ✓                        ✓                       ⚠️               │
+│      VERIFIED                 VERIFIED              SIMPLE HARDWARE         │
+│                                                                             │
+│  ARM Cortex-A72 directly controls SPI peripheral:                          │
+│  - No VideoCore in path                                                     │
+│  - No closed-source firmware                                                │
+│  - Byte-level control of display data                                       │
+│                                                                             │
+│  Remaining trust assumptions (minimal):                                     │
+│  ⚠️ Display controller IC follows its datasheet                            │
+│  ⚠️ Physical SPI bus not tampered with                                     │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Compatible Verified-Path Displays
+
+| Display | Resolution | Interface | Controller | Verification Level |
+|---------|------------|-----------|------------|-------------------|
+| **Waveshare 2.9" E-Paper** | 296×128 | SPI | SSD1680 | ⭐⭐⭐ Best - bistable, auditable |
+| **Adafruit 2.8" TFT** | 320×240 | SPI | ILI9341 | ⭐⭐ Good - fast, simple protocol |
+| **Pimoroni Display HAT** | 320×240 | SPI | ST7789 | ⭐⭐ Good - compact, fast |
+| **SSD1306 OLED** | 128×64 | I2C/SPI | SSD1306 | ⭐⭐ Good - tiny, very simple |
+| **Sharp Memory LCD** | 400×240 | SPI | LS027B7DH01 | ⭐⭐⭐ Low power, readable |
+
+### E-Paper: Highest Assurance Display
+
+E-paper displays are ideal for high-assurance applications:
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    E-PAPER VERIFICATION PROPERTIES                           │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  1. BISTABLE (Image persists without power)                                 │
+│     ────────                                                                │
+│     - Display shows last written image indefinitely                         │
+│     - Can be photographed and verified after system powers off              │
+│     - Tamper-evident: modifying display requires power cycle                │
+│                                                                             │
+│  2. SIMPLE PROTOCOL (Fully documentable)                                    │
+│     ───────────────                                                         │
+│     - SPI command set: ~20 commands total                                   │
+│     - Each command well-specified in datasheet                              │
+│     - Can Verus-verify entire command sequence                              │
+│                                                                             │
+│  3. NO HIDDEN STATE (What you write is what you see)                        │
+│     ───────────────                                                         │
+│     - No framebuffer reinterpretation                                       │
+│     - 1-bit or 3-bit per pixel (simple mapping)                             │
+│     - No color space conversions                                            │
+│                                                                             │
+│  4. PHYSICAL ATTESTATION                                                    │
+│     ────────────────────                                                    │
+│     - Remote party can request photograph of e-paper display                │
+│     - Compare against expected output for attestation                       │
+│     - E-paper's high contrast makes OCR reliable                            │
+│                                                                             │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │                     ATTESTATION DISPLAY                              │   │
+│  │  ┌─────────────────────────────────────────────────────────────┐   │   │
+│  │  │ DEVICE ID: RPi4-001                                          │   │   │
+│  │  │ BOOT TIME: 2025-01-15 14:32:07 UTC                          │   │   │
+│  │  │                                                              │   │   │
+│  │  │ PCR[0]: a7f3...b2c1 (Firmware)                              │   │   │
+│  │  │ PCR[1]: 8d2e...f4a9 (seL4 Kernel)                           │   │   │
+│  │  │ PCR[2]: 3c7b...e1d0 (Microkit)                              │   │   │
+│  │  │ PCR[3]: 9f4a...c8b2 (Graphics PD)                           │   │   │
+│  │  │                                                              │   │   │
+│  │  │ ████████████████████████████████ (QR: signed attestation)  │   │   │
+│  │  │ ████████████████████████████████                            │   │   │
+│  │  │ ████████████████████████████████                            │   │   │
+│  │  └─────────────────────────────────────────────────────────────┘   │   │
+│  │                  (Photograph this for remote attestation)           │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Hardware Setup for Verified Display
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    SPI DISPLAY WIRING (E-Paper Example)                      │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│   Raspberry Pi 4 GPIO Header              Waveshare 2.9" E-Paper            │
+│   ┌─────────────────────────┐            ┌─────────────────┐               │
+│   │  Pin 19 (GPIO 10) MOSI  │───────────→│ DIN (Data In)   │               │
+│   │  Pin 23 (GPIO 11) SCLK  │───────────→│ CLK (Clock)     │               │
+│   │  Pin 24 (GPIO 8)  CE0   │───────────→│ CS (Chip Sel)   │               │
+│   │  Pin 22 (GPIO 25)       │───────────→│ DC (Data/Cmd)   │               │
+│   │  Pin 18 (GPIO 24)       │───────────→│ RST (Reset)     │               │
+│   │  Pin 11 (GPIO 17)       │←───────────│ BUSY            │               │
+│   │  Pin 1          3.3V    │───────────→│ VCC             │               │
+│   │  Pin 6          GND     │───────────→│ GND             │               │
+│   └─────────────────────────┘            └─────────────────┘               │
+│                                                                             │
+│   Note: These GPIO pins are controlled directly by ARM cores,               │
+│   not by VideoCore. The entire display path is ARM-controlled.              │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Verified SPI Display Driver (Verus)
+
+```rust
+verus! {
+    /// Verified SPI display driver for e-paper/LCD
+    pub struct VerifiedSpiDisplay {
+        width: u32,
+        height: u32,
+        spi_base: usize,  // BCM2711 SPI0 peripheral base
+    }
+
+    impl VerifiedSpiDisplay {
+        /// Send a command byte (DC pin low)
+        pub fn send_command(&mut self, cmd: u8)
+            requires
+                self.spi_base == 0xFE204000,  // Valid SPI0 address
+        {
+            // Set DC low, send byte via SPI
+        }
+
+        /// Send display data (DC pin high)
+        /// Verified: data.len() matches expected framebuffer size
+        pub fn send_framebuffer(&mut self, data: &[u8])
+            requires
+                data.len() == (self.width * self.height / 8) as usize,
+            ensures
+                // All bytes transmitted in order
+        {
+            // Set DC high, send all bytes
+        }
+
+        /// Verified full refresh sequence for e-paper
+        pub fn refresh(&mut self, framebuffer: &[u8])
+            requires
+                framebuffer.len() == (self.width * self.height / 8) as usize,
+            ensures
+                // Display now shows contents of framebuffer
+        {
+            self.send_command(0x10);  // Write RAM (Black)
+            self.send_framebuffer(framebuffer);
+            self.send_command(0x12);  // Display Refresh
+            // Wait for BUSY pin
+        }
+    }
+}
+```
+
+### Dual-Display Architecture for Maximum Assurance
+
+For critical applications, use **both** HDMI (for rich graphics) and e-paper (for attestation):
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    DUAL DISPLAY ARCHITECTURE                                 │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│                          ┌─────────────────────┐                            │
+│                          │   Graphics PD       │                            │
+│                          │   (Verus ✓)         │                            │
+│                          └──────────┬──────────┘                            │
+│                                     │                                        │
+│                    ┌────────────────┴────────────────┐                      │
+│                    │                                 │                      │
+│                    ▼                                 ▼                      │
+│     ┌──────────────────────────┐     ┌──────────────────────────┐          │
+│     │   HDMI Framebuffer       │     │   E-Paper Framebuffer    │          │
+│     │   (1920×1080, rich)      │     │   (296×128, 1-bit)       │          │
+│     └────────────┬─────────────┘     └────────────┬─────────────┘          │
+│                  │                                │                         │
+│                  ▼                                ▼                         │
+│     ┌──────────────────────────┐     ┌──────────────────────────┐          │
+│     │   VideoCore (trusted)    │     │   SPI Driver (Verus ✓)   │          │
+│     └────────────┬─────────────┘     └────────────┬─────────────┘          │
+│                  │                                │                         │
+│                  ▼                                ▼                         │
+│     ┌──────────────────────────┐     ┌──────────────────────────┐          │
+│     │      HDMI Monitor        │     │     E-Paper Display      │          │
+│     │   (Architecture Diagram) │     │   (Attestation Info)     │          │
+│     │                          │     │   - Device ID            │          │
+│     │   ┌────────────────┐     │     │   - PCR values           │          │
+│     │   │ ┌─────┐ ┌────┐ │     │     │   - QR code              │          │
+│     │   │ │ PD  │ │ PD │ │     │     │   - Boot timestamp       │          │
+│     │   │ └──┬──┘ └──┬─┘ │     │     │                          │          │
+│     │   │    └───┬───┘   │     │     │   [Photograph for        │          │
+│     │   │  ┌─────┴────┐  │     │     │    remote attestation]   │          │
+│     │   │  │ MICROKIT │  │     │     │                          │          │
+│     │   │  └─────┬────┘  │     │     │                          │          │
+│     │   │  ┌─────┴────┐  │     │     │                          │          │
+│     │   │  │  seL4    │  │     │     │                          │          │
+│     │   │  └──────────┘  │     │     │                          │          │
+│     │   └────────────────┘     │     │                          │          │
+│     └──────────────────────────┘     └──────────────────────────┘          │
+│              ❌                              ✓                              │
+│         TRUST ONLY                    FULLY VERIFIABLE                      │
+│    (rich visualization)            (attestation display)                    │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Verification Summary by Display Type
+
+| Display Type | Path Verified | Firmware-Free | Attestable | Use Case |
+|--------------|---------------|---------------|------------|----------|
+| HDMI (VideoCore) | ❌ | ❌ | ❌ | Rich graphics (trusted) |
+| SPI TFT (ILI9341) | ✅ | ✅ | ⚠️ Volatile | Fast updates, demos |
+| SPI E-Paper | ✅ | ✅ | ✅ Bistable | Attestation, critical info |
+| I2C OLED | ✅ | ✅ | ⚠️ Volatile | Status, small text |
+| Parallel LCD | ✅ | ✅ | ⚠️ | Legacy, fast |
+
+### Recommended Approach for High-Assurance Systems
+
+1. **Use HDMI for main interface** (user experience, rich graphics)
+2. **Add e-paper for attestation display** (tamper-evident, photographable)
+3. **Verify the SPI driver with Verus** (complete path verification)
+4. **Include QR code on e-paper** (machine-readable attestation)
+5. **Remote verifier photographs e-paper** (physical attestation protocol)
+
 ## References
 
 - [seL4 Raspberry Pi 4 Docs](https://docs.sel4.systems/Hardware/Rpi4.html)
