@@ -54,8 +54,8 @@ export SEL4_INCLUDE_DIRS := $(SDK_BOARD)/include
 
 all: $(SYSTEM_IMAGE)
 
-# Custom target for seL4 Microkit
-TARGET_JSON := support/targets/aarch64-sel4-microkit.json
+# Custom target for seL4 Microkit (absolute path for reliability)
+TARGET_JSON := $(PWD)/support/targets/aarch64-sel4-microkit.json
 
 # Build the Rust protection domain
 $(PD_ELF): src/main.rs src/lib.rs Cargo.toml | $(BUILD_DIR)
