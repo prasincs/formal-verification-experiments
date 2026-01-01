@@ -54,11 +54,17 @@ export SEL4_INCLUDE_DIRS := $(SDK_BOARD)/include
 
 all: $(SYSTEM_IMAGE)
 
+# Custom target for seL4 Microkit
+TARGET_JSON := support/targets/aarch64-sel4-microkit.json
+
 # Build the Rust protection domain
-# Uses .cargo/config.toml for target and build-std settings
 $(PD_ELF): src/main.rs src/lib.rs Cargo.toml | $(BUILD_DIR)
 	@echo "=== Building Graphics Protection Domain ==="
-	$(CARGO) build --release
+	$(CARGO) build \
+		--release \
+		--target $(TARGET_JSON) \
+		-Z build-std=core,alloc,compiler_builtins \
+		-Z build-std-features=compiler-builtins-mem
 	@mkdir -p $(BUILD_DIR)
 	@# sel4-microkit produces .elf files
 	cp target/aarch64-sel4-microkit/release/graphics_pd.elf $@
