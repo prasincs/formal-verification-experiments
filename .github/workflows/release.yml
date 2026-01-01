@@ -22,13 +22,8 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Build verus library
-        working-directory: verus
-        run: cargo build --release --verbose
-
-      - name: Run tests
-        working-directory: verus
-        run: cargo test --release --verbose
+      - name: Build and test
+        run: ./scripts/build-verus.sh --release --test
 
   # Build verified components library
   build-verified:
@@ -40,13 +35,8 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Build verified library
-        working-directory: sel4-microkernel/verified
-        run: cargo build --release --verbose
-
-      - name: Run tests
-        working-directory: sel4-microkernel/verified
-        run: cargo test --release --verbose
+      - name: Build and test
+        run: ./scripts/build-verified.sh --release --test
 
   # Build Microkit system for AArch64
   build-microkit:
@@ -56,13 +46,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            build-essential \
-            gcc-aarch64-linux-gnu \
-            libclang-dev \
-            qemu-system-arm
+        run: ./scripts/install-deps.sh --microkit
 
       - name: Install Rust nightly
         uses: dtolnay/rust-toolchain@nightly
@@ -78,36 +62,10 @@ jobs:
 
       - name: Download Microkit SDK
         if: steps.cache-sdk.outputs.cache-hit != 'true'
-        run: |
-          sudo mkdir -p /opt/microkit-sdk
-          curl -L "https://github.com/seL4/microkit/releases/download/${MICROKIT_SDK_VERSION}/microkit-sdk-${MICROKIT_SDK_VERSION}-linux-x86-64.tar.gz" | \
-            sudo tar -xzf - -C /opt/microkit-sdk --strip-components=1
+        run: ./scripts/download-microkit-sdk.sh --version ${{ env.MICROKIT_SDK_VERSION }}
 
       - name: Build Microkit system
-        working-directory: sel4-microkernel/microkit-hello
-        env:
-          MICROKIT_SDK: /opt/microkit-sdk
-          SEL4_INCLUDE_DIRS: /opt/microkit-sdk/board/qemu_virt_aarch64/debug/include
-        run: |
-          # Build the Rust protection domain
-          cargo +nightly build \
-            --release \
-            --target aarch64-sel4-microkit \
-            -Z build-std=core,alloc \
-            -Z build-std-features=compiler-builtins-mem
-
-          # Create output directory and copy ELF
-          mkdir -p build/aarch64
-          cp target/aarch64-sel4-microkit/release/hello.elf build/aarch64/
-
-          # Build system image with Microkit tool
-          /opt/microkit-sdk/bin/microkit \
-            hello.system \
-            --search-path build/aarch64 \
-            --board qemu_virt_aarch64 \
-            --config debug \
-            -o build/aarch64/loader.img \
-            -r build/aarch64/report.txt
+        run: ./scripts/build-microkit.sh
 
       - name: Upload microkit artifacts
         uses: actions/upload-artifact@v4
@@ -247,7 +205,7 @@ jobs:
           body: |
             ## Latest Development Build
 
-            ⚠️ **This is an automated rolling release from the `main` branch.**
+            > **This is an automated rolling release from the `main` branch.**
 
             This release is updated automatically with every push to main. For stable releases, please use a versioned release (e.g., v0.0.1).
 

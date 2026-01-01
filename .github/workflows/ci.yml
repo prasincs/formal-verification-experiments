@@ -8,6 +8,7 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  MICROKIT_SDK_VERSION: "2.1.0"
 
 jobs:
   # Test the Verus-verified components library
@@ -31,13 +32,8 @@ jobs:
             sel4-microkernel/verified/target/
           key: ${{ runner.os }}-cargo-verified-${{ hashFiles('sel4-microkernel/verified/Cargo.toml') }}
 
-      - name: Build verified library
-        working-directory: sel4-microkernel/verified
-        run: cargo build --verbose
-
-      - name: Run tests
-        working-directory: sel4-microkernel/verified
-        run: cargo test --verbose
+      - name: Build and test
+        run: ./scripts/build-verified.sh --test
 
   # Test the Verus demo project
   verus-demo:
@@ -60,32 +56,18 @@ jobs:
             verus/target/
           key: ${{ runner.os }}-cargo-verus-${{ hashFiles('verus/Cargo.lock') }}
 
-      - name: Build verus library
-        working-directory: verus
-        run: cargo build --verbose
-
-      - name: Run tests
-        working-directory: verus
-        run: cargo test --verbose
+      - name: Build and test
+        run: ./scripts/build-verus.sh --test
 
   # Build Microkit system for AArch64
-  # Based on https://github.com/seL4/rust-microkit-demo approach
   microkit-build:
     name: Microkit Build (AArch64)
     runs-on: ubuntu-latest
-    env:
-      MICROKIT_SDK_VERSION: "2.1.0"
     steps:
       - uses: actions/checkout@v4
 
       - name: Install system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            build-essential \
-            gcc-aarch64-linux-gnu \
-            libclang-dev \
-            qemu-system-arm
+        run: ./scripts/install-deps.sh --microkit
 
       - name: Install Rust nightly
         uses: dtolnay/rust-toolchain@nightly
@@ -101,10 +83,7 @@ jobs:
 
       - name: Download Microkit SDK
         if: steps.cache-sdk.outputs.cache-hit != 'true'
-        run: |
-          sudo mkdir -p /opt/microkit-sdk
-          curl -L "https://github.com/seL4/microkit/releases/download/${MICROKIT_SDK_VERSION}/microkit-sdk-${MICROKIT_SDK_VERSION}-linux-x86-64.tar.gz" | \
-            sudo tar -xzf - -C /opt/microkit-sdk --strip-components=1
+        run: ./scripts/download-microkit-sdk.sh --version ${{ env.MICROKIT_SDK_VERSION }}
 
       - name: Cache cargo
         uses: actions/cache@v4
@@ -118,33 +97,7 @@ jobs:
           key: ${{ runner.os }}-cargo-microkit-${{ hashFiles('sel4-microkernel/microkit-hello/Cargo.toml') }}
 
       - name: Build Microkit system
-        working-directory: sel4-microkernel/microkit-hello
-        env:
-          MICROKIT_SDK: /opt/microkit-sdk
-          SEL4_INCLUDE_DIRS: /opt/microkit-sdk/board/qemu_virt_aarch64/debug/include
-        run: |
-          # Build the Rust protection domain
-          cargo +nightly build \
-            --release \
-            --target aarch64-sel4-microkit \
-            -Z build-std=core,alloc \
-            -Z build-std-features=compiler-builtins-mem
-
-          # Create output directory and copy ELF
-          mkdir -p build/aarch64
-          cp target/aarch64-sel4-microkit/release/hello.elf build/aarch64/
-
-          # Build system image with Microkit tool
-          /opt/microkit-sdk/bin/microkit \
-            hello.system \
-            --search-path build/aarch64 \
-            --board qemu_virt_aarch64 \
-            --config debug \
-            -o build/aarch64/loader.img \
-            -r build/aarch64/report.txt
-
-          echo "Build successful!"
-          ls -la build/aarch64/
+        run: ./scripts/build-microkit.sh
 
   # Lint check
   clippy:
