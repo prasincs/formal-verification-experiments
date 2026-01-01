@@ -6,13 +6,13 @@
 #![no_std]
 #![no_main]
 
-use sel4_microkit::{debug_println, protection_domain, Handler, Channel};
+use sel4_microkit::{debug_println, protection_domain, Handler, Channel, ChannelSet};
 
 use rpi4_graphics::{
     Mailbox, Framebuffer, MAILBOX_BASE,
     graphics::{Color, draw_box, draw_arrow_down},
-    font::{draw_string, draw_string_scaled, CHAR_HEIGHT},
-    crypto::{Sha256, Sha256Digest, VerifyResult, verify_sha256, constant_time_compare, hex_to_bytes, digest_to_hex},
+    font::{draw_string, draw_string_scaled},
+    crypto::{Sha256, VerifyResult, constant_time_compare, hex_to_bytes, digest_to_hex},
 };
 
 /// Screen dimensions
@@ -103,7 +103,7 @@ impl GraphicsHandler {
         draw_string_scaled(fb, sub_x, 70, subtitle, TEXT_COLOR, 2);
 
         // Layout constants
-        let box_width = 200u32;
+        let _box_width = 200u32;
         let box_height = 60u32;
         let layer_y_start = 140u32;
         let layer_spacing = 100u32;
@@ -327,8 +327,8 @@ impl core::fmt::Display for HandlerError {
 impl Handler for GraphicsHandler {
     type Error = HandlerError;
 
-    fn notified(&mut self, channel: Channel) -> Result<(), Self::Error> {
-        debug_println!("Received notification on channel {}", channel.index());
+    fn notified(&mut self, _channels: ChannelSet) -> Result<(), Self::Error> {
+        debug_println!("Received notification");
         Ok(())
     }
 
