@@ -1,1 +1,19 @@
 .claude
+
+# Rust build artifacts
+target/
+Cargo.lock
+
+# seL4 build artifacts
+sel4-kit/
+microkit-sdk/
+build/
+*.elf
+*.img
+
+# Editor files
+*.swp
+*.swo
+*~
+.vscode/
+.idea/

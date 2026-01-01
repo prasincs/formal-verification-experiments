@@ -1,0 +1,29 @@
+[package]
+name = "hello"
+version = "0.1.0"
+edition = "2021"
+authors = ["Formal Verification Experiments"]
+
+[[bin]]
+name = "hello"
+path = "src/main.rs"
+
+[dependencies]
+# sel4-microkit provides the Microkit runtime and API
+sel4-microkit = { git = "https://github.com/seL4/rust-sel4" }
+
+# Verus verification support (specs stripped in normal builds)
+verus_builtin_macros = "0.0.0-2025-12-07-0054"
+verus_builtin = "0.0.0-2025-12-07-0054"
+
+[profile.release]
+lto = true
+opt-level = "z"
+panic = "abort"
+codegen-units = 1
+
+[profile.dev]
+panic = "abort"
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(verus_keep_ghost)'] }
