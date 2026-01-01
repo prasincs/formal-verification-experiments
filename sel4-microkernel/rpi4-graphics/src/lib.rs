@@ -1,6 +1,7 @@
 //! # Raspberry Pi 4 Graphics Library for seL4 Microkit
 //!
 //! This library provides framebuffer graphics for Raspberry Pi 4 running on seL4.
+//! Uses Verus for formal verification of safety-critical functions.
 //!
 //! ## Architecture
 //!
