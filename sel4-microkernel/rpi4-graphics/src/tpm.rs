@@ -18,8 +18,6 @@
 //! - ST33KTPM2I3WBZA9 datasheet
 //! - TCG TPM 2.0 Library Specification
 
-use core::ptr::{read_volatile, write_volatile};
-
 /// TPM TIS (TPM Interface Specification) register offsets
 pub mod regs {
     pub const TPM_ACCESS: usize = 0x0000;

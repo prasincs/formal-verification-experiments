@@ -9,7 +9,6 @@ license = "MIT"
 [lib]
 name = "rpi4_graphics"
 path = "src/lib.rs"
-crate-type = ["staticlib"]
 
 [[bin]]
 name = "graphics_pd"

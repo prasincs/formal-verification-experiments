@@ -6,7 +6,7 @@
 #![no_std]
 #![no_main]
 
-use sel4_microkit::{debug_println, protection_domain, Handler};
+use sel4_microkit::{debug_println, protection_domain, Handler, Channel};
 
 use rpi4_graphics::{
     Mailbox, Framebuffer, MAILBOX_BASE,
@@ -314,17 +314,27 @@ impl GraphicsHandler {
     }
 }
 
-impl Handler for GraphicsHandler {
-    type Error = ();
+/// Error type for the graphics handler
+#[derive(Debug)]
+struct HandlerError;
 
-    fn notified(&mut self, channel: sel4_microkit::Channel) -> Result<(), Self::Error> {
+impl core::fmt::Display for HandlerError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "Graphics handler error")
+    }
+}
+
+impl Handler for GraphicsHandler {
+    type Error = HandlerError;
+
+    fn notified(&mut self, channel: Channel) -> Result<(), Self::Error> {
         debug_println!("Received notification on channel {}", channel.index());
         Ok(())
     }
 
     fn protected(
         &mut self,
-        channel: sel4_microkit::Channel,
+        channel: Channel,
         msg_info: sel4_microkit::MessageInfo,
     ) -> Result<sel4_microkit::MessageInfo, Self::Error> {
         debug_println!(
