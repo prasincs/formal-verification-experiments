@@ -59,7 +59,8 @@ $(PD_ELF): src/main.rs src/lib.rs Cargo.toml | $(BUILD_DIR)
 		-Z build-std=core,alloc \
 		-Z build-std-features=compiler-builtins-mem
 	@mkdir -p $(BUILD_DIR)
-	cp target/aarch64-sel4-microkit/release/graphics_pd $@
+	@# sel4-microkit produces .elf files
+	cp target/aarch64-sel4-microkit/release/graphics_pd.elf $@
 	@echo "Built: $@"
 
 $(BUILD_DIR):
