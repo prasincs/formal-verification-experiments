@@ -186,15 +186,14 @@ jobs:
         run: |
           echo "=== Setting up swtpm (Software TPM 2.0) ==="
           mkdir -p /tmp/tpm-state
+          mkdir -p /tmp/swtpm-localca
 
-          # Initialize TPM state with certificates
+          # Initialize TPM state (without certs to avoid CA permission issues)
+          # For CI testing, we don't need EK/platform certs
           swtpm_setup --tpm2 \
             --tpmstate /tmp/tpm-state \
             --createek \
             --decryption \
-            --create-ek-cert \
-            --create-platform-cert \
-            --lock-nvram \
             --overwrite \
             --display
 
