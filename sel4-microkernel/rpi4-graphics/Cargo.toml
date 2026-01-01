@@ -20,9 +20,9 @@ path = "src/main.rs"
 # Pinned to specific commit for reproducible builds (rust-sel4 v3.0.0-dev, 2025-11-26)
 sel4-microkit = { git = "https://github.com/seL4/rust-sel4", rev = "3059c2d236bf56b066936dd48d8966255e172c3b" }
 
-# Verus verification support (specs stripped in normal builds)
-verus_builtin_macros = "=0.0.0-2025-12-07-0054"
-verus_builtin = "=0.0.0-2025-12-07-0054"
+# Verus verification support (disabled for CI debugging)
+# verus_builtin_macros = "=0.0.0-2025-12-07-0054"
+# verus_builtin = "=0.0.0-2025-12-07-0054"
 
 # RustCrypto SHA-256 (no_std compatible, well-audited)
 sha2 = { version = "=0.10.8", default-features = false }
