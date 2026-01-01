@@ -92,9 +92,12 @@ jobs:
         working-directory: sel4-microkernel/rpi4-graphics
         run: |
           export MICROKIT_SDK=$PWD/microkit-sdk
+          export SEL4_INCLUDE_DIRS=$MICROKIT_SDK/board/rpi4b_${{ env.RPI4_MEMORY }}/debug/include
           echo "=== Environment ==="
           echo "MICROKIT_SDK=$MICROKIT_SDK"
+          echo "SEL4_INCLUDE_DIRS=$SEL4_INCLUDE_DIRS"
           ls -la $MICROKIT_SDK/board/ || true
+          ls -la $SEL4_INCLUDE_DIRS/ || echo "Include dir not found!"
           echo "=== Rust version ==="
           rustc --version
           cargo --version
@@ -212,6 +215,7 @@ jobs:
         working-directory: sel4-microkernel/rpi4-graphics
         run: |
           export MICROKIT_SDK=$PWD/microkit-sdk
+          export SEL4_INCLUDE_DIRS=$MICROKIT_SDK/board/rpi4b_${{ matrix.memory }}/debug/include
           make RPI4_MEMORY=${{ matrix.memory }} bootfiles
 
           # Create SD card image
