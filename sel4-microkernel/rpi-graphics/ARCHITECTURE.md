@@ -468,10 +468,165 @@ The Pi 5 requires additional work:
 **Strategy**: Use firmware-initialized framebuffer (simple mode) to avoid
 needing full VC7 driver. The mailbox property interface is largely compatible.
 
+## Boot-Time Firmware Verification
+
+### Secure Boot Chain (Pi 4 rev 1.4+, Pi 5)
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         SECURE BOOT CHAIN                                    │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  ┌────────────────┐                                                         │
+│  │  Boot ROM      │  ← Hardcoded in silicon (immutable root of trust)      │
+│  │  (VideoCore)   │     Verifies bootcode.bin signature                    │
+│  └───────┬────────┘                                                         │
+│          │                                                                  │
+│          ▼                                                                  │
+│  ┌────────────────┐                                                         │
+│  │  bootcode.bin  │  ← Signed by: Raspberry Pi                             │
+│  │  (2nd stage)   │     + Customer key on Pi 5                             │
+│  └───────┬────────┘                                                         │
+│          │                                                                  │
+│          ▼                                                                  │
+│  ┌────────────────┐                                                         │
+│  │  start4.elf    │  ← GPU firmware (closed source)                        │
+│  │  (VC firmware) │     Signed by Raspberry Pi                             │
+│  │                │     Initializes HDMI, framebuffer, clocks              │
+│  └───────┬────────┘                                                         │
+│          │                                                                  │
+│          ▼                                                                  │
+│  ┌────────────────┐                                                         │
+│  │  kernel8.img   │  ← seL4 kernel + root task                             │
+│  │  (seL4)        │     Signed by customer private key                     │
+│  └────────────────┘                                                         │
+│                                                                             │
+│  OTP (One-Time Programmable) Memory:                                        │
+│  ┌─────────────────────────────────────────────┐                            │
+│  │  SHA256(customer_public_key) - IRREVERSIBLE │                            │
+│  │  secure_boot_enabled flag                   │                            │
+│  │  jtag_lock flag (optional)                  │                            │
+│  └─────────────────────────────────────────────┘                            │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Mailbox Verification Tags
+
+Query these at boot to verify hardware/firmware state:
+
+```rust
+/// Firmware verification mailbox tags
+pub mod verify_tags {
+    /// Get VC firmware revision (git hash as u32)
+    pub const GET_FIRMWARE_REV: u32 = 0x00000001;
+
+    /// Get board model (Pi 4 = 0x11, Pi 5 = 0x17)
+    pub const GET_BOARD_MODEL: u32 = 0x00010001;
+
+    /// Get board revision (encodes memory, manufacturer, etc.)
+    pub const GET_BOARD_REV: u32 = 0x00010002;
+
+    /// Get unique board serial number (u64)
+    pub const GET_BOARD_SERIAL: u32 = 0x00010004;
+
+    /// Get ARM memory base and size
+    pub const GET_ARM_MEMORY: u32 = 0x00010005;
+
+    /// Get VideoCore memory base and size
+    pub const GET_VC_MEMORY: u32 = 0x00010006;
+}
+
+verus! {
+    /// Verified boot check - ensures we're on expected hardware
+    pub fn verify_boot_environment(
+        expected_model: u32,
+        min_firmware_rev: u32,
+    ) -> (result: Result<BootInfo, BootError>)
+        ensures
+            result.is_ok() ==> result.unwrap().model == expected_model,
+            result.is_ok() ==> result.unwrap().firmware_rev >= min_firmware_rev,
+    {
+        // Query mailbox and verify responses
+        // ...
+    }
+}
+```
+
+### What Can Be Verified
+
+| Check | Method | Verification Level |
+|-------|--------|-------------------|
+| Firmware version | Mailbox tag 0x1 | ✅ Can compare against known-good |
+| Board identity | Tags 0x10001-0x10004 | ✅ Cryptographic binding via serial |
+| Memory layout | Tags 0x10005-0x10006 | ✅ Sanity check |
+| Kernel signature | Secure Boot | ✅ If OTP programmed |
+| Bootloader signature | Secure Boot | ✅ Raspberry Pi signed |
+| GPU firmware behavior | N/A | ❌ Closed source, no proofs |
+| Runtime integrity | N/A | ❌ No measured boot/TPM |
+
+### Verified Boot Checker (Verus)
+
+```rust
+verus! {
+    /// Known-good firmware revisions (git commit hashes truncated to u32)
+    pub const KNOWN_GOOD_FIRMWARE: &[u32] = &[
+        0x8ba1771f,  // 2024-01-15 release
+        0xa2c3d4e5,  // 2024-03-20 release
+        // Add more as verified
+    ];
+
+    /// Verify firmware is in allowlist
+    pub fn is_firmware_known_good(rev: u32) -> (good: bool)
+        ensures
+            good <==> exists|i: int| 0 <= i < KNOWN_GOOD_FIRMWARE.len()
+                       && KNOWN_GOOD_FIRMWARE[i] == rev,
+    {
+        let mut i = 0;
+        while i < KNOWN_GOOD_FIRMWARE.len()
+            invariant
+                i <= KNOWN_GOOD_FIRMWARE.len(),
+                forall|j: int| 0 <= j < i ==> KNOWN_GOOD_FIRMWARE[j] != rev,
+        {
+            if KNOWN_GOOD_FIRMWARE[i] == rev {
+                return true;
+            }
+            i = i + 1;
+        }
+        false
+    }
+}
+```
+
+### Enabling Secure Boot (One-Time, Irreversible)
+
+```bash
+# Generate signing keys
+openssl genrsa -out private.pem 2048
+openssl rsa -in private.pem -outform PEM -pubout -out public.pem
+
+# Sign seL4 kernel
+rpi-eeprom-digest --sign kernel8.img private.pem
+
+# Program OTP (⚠️ PERMANENT - CANNOT BE UNDONE)
+# Only do this after verifying signed boot works!
+vcmailbox 0x00038044  # Enable secure boot in OTP
+```
+
+### Limitations
+
+| Limitation | Impact | Mitigation |
+|------------|--------|------------|
+| No TPM | Cannot do remote attestation | Use device serial for binding |
+| Closed GPU firmware | Cannot verify start4.elf behavior | Accept as trusted, minimize interface |
+| No measured boot | Cannot detect runtime tampering | Rely on seL4 isolation |
+| OTP is permanent | Cannot recover if keys lost | Test thoroughly before programming |
+
 ## References
 
 - [seL4 Raspberry Pi 4 Docs](https://docs.sel4.systems/Hardware/Rpi4.html)
 - [Raspberry Pi Mailbox Interface](https://github.com/raspberrypi/firmware/wiki/Mailbox-property-interface)
+- [Raspberry Pi Secure Boot](https://github.com/raspberrypi/usbboot/blob/master/secure-boot-recovery/README.md)
 - [BCM2711 Peripherals](https://datasheets.raspberrypi.com/bcm2711/bcm2711-peripherals.pdf)
 - [RPi4 Bare Metal Framebuffer](https://www.rpi4os.com/part5-framebuffer/)
 - [Verus Lang](https://github.com/verus-lang/verus)
