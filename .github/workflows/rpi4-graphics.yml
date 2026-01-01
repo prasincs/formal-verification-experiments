@@ -17,8 +17,6 @@ on:
         default: '4gb'
         type: choice
         options:
-          - 1gb
-          - 2gb
           - 4gb
           - 8gb
       create_release:
@@ -143,7 +141,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        memory: [1gb, 2gb, 4gb, 8gb]
+        memory: [4gb, 8gb]
 
     steps:
       - name: Checkout repository
@@ -247,8 +245,6 @@ jobs:
 
           | Model | Image |
           |-------|-------|
-          | Pi 4 (1GB) | `rpi4-sel4-graphics-1gb.img` |
-          | Pi 4 (2GB) | `rpi4-sel4-graphics-2gb.img` |
           | Pi 4 (4GB) | `rpi4-sel4-graphics-4gb.img` |
           | Pi 4 (8GB) | `rpi4-sel4-graphics-8gb.img` |
 

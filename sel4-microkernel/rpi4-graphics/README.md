@@ -42,7 +42,7 @@ When booted, the system:
 ## Requirements
 
 ### Hardware
-- Raspberry Pi 4 Model B (1GB, 2GB, 4GB, or 8GB)
+- Raspberry Pi 4 Model B (4GB or 8GB)
 - MicroSD card (8GB+)
 - HDMI display
 - Optional: USB-to-serial adapter for debug output
@@ -162,8 +162,8 @@ const SCREEN_HEIGHT: u32 = 1080;
 ### Pi 4 Memory Variant
 
 ```bash
+make RPI4_MEMORY=4gb   # For 4GB model (default)
 make RPI4_MEMORY=8gb   # For 8GB model
-make RPI4_MEMORY=2gb   # For 2GB model
 ```
 
 ## Verification Status
