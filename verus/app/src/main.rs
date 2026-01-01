@@ -2,7 +2,7 @@
 //!
 //! Build and run with: `cargo run`
 
-use verified::{Amount, safe_divide, MAX_AMOUNT};
+use verified::{safe_divide, Amount, MAX_AMOUNT};
 
 fn main() {
     println!("=== Using Verified Library ===\n");

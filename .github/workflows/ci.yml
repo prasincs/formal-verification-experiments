@@ -1,0 +1,163 @@
+name: CI
+
+on:
+  push:
+    branches: [main, "claude/*"]
+  pull_request:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  # Test the Verus-verified components library
+  verified-library:
+    name: Verified Components
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-action@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            sel4-microkernel/verified/target/
+          key: ${{ runner.os }}-cargo-verified-${{ hashFiles('sel4-microkernel/verified/Cargo.toml') }}
+
+      - name: Build verified library
+        working-directory: sel4-microkernel/verified
+        run: cargo build --verbose
+
+      - name: Run tests
+        working-directory: sel4-microkernel/verified
+        run: cargo test --verbose
+
+  # Test the Verus demo project
+  verus-demo:
+    name: Verus Demo
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-action@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            verus/target/
+          key: ${{ runner.os }}-cargo-verus-${{ hashFiles('verus/Cargo.lock') }}
+
+      - name: Build verus library
+        working-directory: verus
+        run: cargo build --verbose
+
+      - name: Run tests
+        working-directory: verus
+        run: cargo test --verbose
+
+  # Build Microkit system (requires SDK download)
+  microkit-build:
+    name: Microkit Build (AArch64)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust nightly
+        uses: dtolnay/rust-action@nightly
+        with:
+          components: rust-src
+
+      - name: Install AArch64 target
+        run: rustup target add aarch64-unknown-none --toolchain nightly
+
+      - name: Install cross-compiler
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            sel4-microkernel/microkit-hello/target/
+          key: ${{ runner.os }}-cargo-microkit-${{ hashFiles('sel4-microkernel/microkit-hello/Cargo.toml') }}
+
+      - name: Cache Microkit SDK
+        uses: actions/cache@v4
+        with:
+          path: sel4-microkernel/microkit-hello/microkit-sdk
+          key: microkit-sdk-1.4.1-linux
+
+      - name: Download Microkit SDK
+        working-directory: sel4-microkernel/microkit-hello
+        run: |
+          if [ ! -d "microkit-sdk" ]; then
+            echo "Downloading Microkit SDK..."
+            curl -L -o microkit-sdk.tar.gz \
+              "https://github.com/seL4/microkit/releases/download/1.4.1/microkit-sdk-1.4.1-linux-x86-64.tar.gz"
+            mkdir -p microkit-sdk
+            tar -xzf microkit-sdk.tar.gz -C microkit-sdk --strip-components=1
+            rm microkit-sdk.tar.gz
+          fi
+
+      - name: Build Microkit system
+        working-directory: sel4-microkernel/microkit-hello
+        run: make ARCH=aarch64
+
+  # Lint check
+  clippy:
+    name: Clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-action@stable
+        with:
+          components: clippy
+
+      - name: Run clippy on verified library
+        working-directory: sel4-microkernel/verified
+        run: cargo clippy -- -D warnings
+
+      - name: Run clippy on verus demo
+        working-directory: verus
+        run: cargo clippy -- -D warnings
+
+  # Format check
+  fmt:
+    name: Format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-action@stable
+        with:
+          components: rustfmt
+
+      - name: Check formatting (verified)
+        working-directory: sel4-microkernel/verified
+        run: cargo fmt --check
+
+      - name: Check formatting (verus)
+        working-directory: verus
+        run: cargo fmt --check

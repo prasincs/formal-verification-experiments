@@ -21,6 +21,10 @@
 
 #![no_std]
 #![allow(unused)]
+// Verus requires explicit arithmetic (e.g., `x = x + 1`) for verification specs
+#![allow(clippy::assign_op_pattern)]
+// Default impls can't be derived inside verus! macro blocks
+#![allow(clippy::new_without_default)]
 
 use verus_builtin_macros::verus;
 
@@ -582,7 +586,7 @@ mod tests {
             assert!(counter.increment());
         }
         assert_eq!(counter.get(), 5);
-        assert!(!counter.increment());  // At limit
+        assert!(!counter.increment()); // At limit
     }
 
     #[test]
@@ -597,6 +601,6 @@ mod tests {
         assert_ne!(slot1, slot2);
 
         assert!(alloc.free(slot1.unwrap()));
-        assert!(!alloc.free(slot1.unwrap()));  // Double free
+        assert!(!alloc.free(slot1.unwrap())); // Double free
     }
 }
