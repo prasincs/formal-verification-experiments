@@ -55,14 +55,10 @@ export SEL4_INCLUDE_DIRS := $(SDK_BOARD)/include
 all: $(SYSTEM_IMAGE)
 
 # Build the Rust protection domain
-# Using explicit build flags (same approach as microkit-hello)
+# Uses .cargo/config.toml for target and build-std settings
 $(PD_ELF): src/main.rs src/lib.rs Cargo.toml | $(BUILD_DIR)
 	@echo "=== Building Graphics Protection Domain ==="
-	$(CARGO) build \
-		--release \
-		--target aarch64-sel4-microkit \
-		-Z build-std=core,alloc \
-		-Z build-std-features=compiler-builtins-mem
+	$(CARGO) build --release
 	@mkdir -p $(BUILD_DIR)
 	@# sel4-microkit produces .elf files
 	cp target/aarch64-sel4-microkit/release/graphics_pd.elf $@
