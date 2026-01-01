@@ -8,11 +8,10 @@
 //! - Rectangle containment: correct boundary logic
 //! - All pixel operations bounds-checked
 
-// Verus verification imports (used when running verus verification)
 #[allow(unused_imports)]
 use verus_builtin::*;
 #[allow(unused_imports)]
-use verus_builtin_macros::*;
+use verus_builtin_macros::verus;
 
 /// ARGB color (Alpha, Red, Green, Blue)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -34,33 +33,6 @@ impl Color {
         Self { r, g, b, a }
     }
 
-    /// Convert to ARGB u32 for framebuffer
-    ///
-    /// # Verification
-    /// Verified to correctly pack ARGB components.
-    /// ensures result == ((self.a as u32) << 24) | ((self.r as u32) << 16) | ((self.g as u32) << 8) | (self.b as u32)
-    #[inline]
-    pub const fn to_argb(&self) -> u32 {
-        ((self.a as u32) << 24)
-            | ((self.r as u32) << 16)
-            | ((self.g as u32) << 8)
-            | (self.b as u32)
-    }
-
-    /// Create from ARGB u32
-    ///
-    /// # Verification
-    /// Verified round-trip: `from_argb(to_argb(c)) == c`
-    /// ensures result.a == ((argb >> 24) & 0xFF), result.r == ((argb >> 16) & 0xFF), etc.
-    pub const fn from_argb(argb: u32) -> Self {
-        Self {
-            a: ((argb >> 24) & 0xFF) as u8,
-            r: ((argb >> 16) & 0xFF) as u8,
-            g: ((argb >> 8) & 0xFF) as u8,
-            b: (argb & 0xFF) as u8,
-        }
-    }
-
     // Predefined colors
     pub const BLACK: Color = Color::rgb(0, 0, 0);
     pub const WHITE: Color = Color::rgb(255, 255, 255);
@@ -77,6 +49,47 @@ impl Color {
     // seL4/Microkit themed colors
     pub const SEL4_GREEN: Color = Color::rgb(0, 166, 81);
     pub const SEL4_DARK: Color = Color::rgb(0, 51, 51);
+}
+
+verus! {
+    impl Color {
+        /// Convert to ARGB u32 for framebuffer
+        ///
+        /// # Verification
+        /// Verified to correctly pack ARGB components.
+        #[inline]
+        pub const fn to_argb(&self) -> (result: u32)
+            ensures
+                result == ((self.a as u32) << 24)
+                    | ((self.r as u32) << 16)
+                    | ((self.g as u32) << 8)
+                    | (self.b as u32),
+        {
+            ((self.a as u32) << 24)
+                | ((self.r as u32) << 16)
+                | ((self.g as u32) << 8)
+                | (self.b as u32)
+        }
+
+        /// Create from ARGB u32
+        ///
+        /// # Verification
+        /// Verified round-trip: `from_argb(to_argb(c)) == c`
+        pub const fn from_argb(argb: u32) -> (result: Self)
+            ensures
+                result.a == ((argb >> 24) & 0xFF) as u8,
+                result.r == ((argb >> 16) & 0xFF) as u8,
+                result.g == ((argb >> 8) & 0xFF) as u8,
+                result.b == (argb & 0xFF) as u8,
+        {
+            Self {
+                a: ((argb >> 24) & 0xFF) as u8,
+                r: ((argb >> 16) & 0xFF) as u8,
+                g: ((argb >> 8) & 0xFF) as u8,
+                b: (argb & 0xFF) as u8,
+            }
+        }
+    }
 }
 
 /// 2D point
@@ -108,20 +121,6 @@ impl Rect {
         Self { x, y, width, height }
     }
 
-    /// Check if a point is inside this rectangle
-    ///
-    /// # Verification
-    /// Verified to correctly implement half-open interval containment:
-    /// - x in [rect.x, rect.x + width)
-    /// - y in [rect.y, rect.y + height)
-    /// ensures result == (p.x >= self.x && p.y >= self.y && p.x < self.x + self.width && p.y < self.y + self.height)
-    pub fn contains(&self, p: Point) -> bool {
-        p.x >= self.x
-            && p.y >= self.y
-            && p.x < self.x + self.width as i32
-            && p.y < self.y + self.height as i32
-    }
-
     /// Get the right edge x coordinate
     pub fn right(&self) -> i32 {
         self.x + self.width as i32
@@ -130,6 +129,29 @@ impl Rect {
     /// Get the bottom edge y coordinate
     pub fn bottom(&self) -> i32 {
         self.y + self.height as i32
+    }
+}
+
+verus! {
+    impl Rect {
+        /// Check if a point is inside this rectangle
+        ///
+        /// # Verification
+        /// Verified to correctly implement half-open interval containment:
+        /// - x in [rect.x, rect.x + width)
+        /// - y in [rect.y, rect.y + height)
+        pub fn contains(&self, p: Point) -> (result: bool)
+            ensures
+                result == (p.x >= self.x
+                    && p.y >= self.y
+                    && p.x < self.x + self.width as i32
+                    && p.y < self.y + self.height as i32),
+        {
+            p.x >= self.x
+                && p.y >= self.y
+                && p.x < self.x + self.width as i32
+                && p.y < self.y + self.height as i32
+        }
     }
 }
 

@@ -10,11 +10,10 @@
 use crate::mailbox::{Mailbox, MailboxError, tags};
 use crate::graphics::Color;
 
-// Verus verification imports (used when running verus verification)
 #[allow(unused_imports)]
 use verus_builtin::*;
 #[allow(unused_imports)]
-use verus_builtin_macros::*;
+use verus_builtin_macros::verus;
 
 /// Framebuffer configuration
 #[derive(Debug, Clone, Copy)]
@@ -150,36 +149,42 @@ impl Framebuffer {
     pub fn dimensions(&self) -> (u32, u32) {
         (self.info.width, self.info.height)
     }
+}
 
-    /// Put a pixel at (x, y) with bounds checking
-    ///
-    /// Returns false if coordinates are out of bounds.
-    ///
-    /// # Verification
-    /// Verified that:
-    /// - Returns false when x >= width or y >= height
-    /// - Returns true only when coordinates are valid
-    /// - No memory write occurs for out-of-bounds coordinates
-    ///
-    /// # Verus Specification
-    /// ensures result == (x < self.info.width && y < self.info.height)
-    #[inline]
-    pub fn put_pixel(&mut self, x: u32, y: u32, color: Color) -> bool {
-        if x >= self.info.width || y >= self.info.height {
-            return false;
+verus! {
+    impl Framebuffer {
+        /// Put a pixel at (x, y) with bounds checking
+        ///
+        /// Returns false if coordinates are out of bounds.
+        ///
+        /// # Verification
+        /// Verified that:
+        /// - Returns false when x >= width or y >= height
+        /// - Returns true only when coordinates are valid
+        /// - No memory write occurs for out-of-bounds coordinates
+        #[inline]
+        pub fn put_pixel(&mut self, x: u32, y: u32, color: Color) -> (result: bool)
+            ensures
+                result == (x < self.info.width && y < self.info.height),
+        {
+            if x >= self.info.width || y >= self.info.height {
+                return false;
+            }
+
+            // Calculate offset (pitch is in bytes, we're working with u32)
+            let pitch_pixels = self.info.pitch / 4;
+            let offset = (y * pitch_pixels + x) as usize;
+
+            unsafe {
+                self.buffer.add(offset).write_volatile(color.to_argb());
+            }
+
+            true
         }
-
-        // Calculate offset (pitch is in bytes, we're working with u32)
-        let pitch_pixels = self.info.pitch / 4;
-        let offset = (y * pitch_pixels + x) as usize;
-
-        unsafe {
-            self.buffer.add(offset).write_volatile(color.to_argb());
-        }
-
-        true
     }
+}
 
+impl Framebuffer {
     /// Put a pixel without bounds checking
     ///
     /// # Safety
