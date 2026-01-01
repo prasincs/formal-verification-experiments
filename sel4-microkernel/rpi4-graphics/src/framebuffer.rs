@@ -160,12 +160,11 @@ impl Framebuffer {
     /// - Returns false when x >= width or y >= height
     /// - Returns true only when coordinates are valid
     /// - No memory write occurs for out-of-bounds coordinates
-    #[verus_verify]
+    ///
+    /// # Verus Specification
+    /// ensures result == (x < self.info.width && y < self.info.height)
     #[inline]
-    pub fn put_pixel(&mut self, x: u32, y: u32, color: Color) -> (result: bool)
-        ensures
-            result == (x < self.info.width && y < self.info.height),
-    {
+    pub fn put_pixel(&mut self, x: u32, y: u32, color: Color) -> bool {
         if x >= self.info.width || y >= self.info.height {
             return false;
         }

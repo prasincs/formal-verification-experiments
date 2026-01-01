@@ -5,9 +5,10 @@
 use crate::framebuffer::Framebuffer;
 use crate::graphics::Color;
 
-/// 8x8 bitmap font (ASCII 32-127)
+/// 8x8 bitmap font (ASCII 32-95: space to underscore)
 /// Each character is 8 bytes, one per row, MSB is leftmost pixel
-pub static FONT_8X8: [u8; 768] = [
+/// 64 characters × 8 bytes = 512 bytes
+pub static FONT_8X8: [u8; 512] = [
     // Space (32)
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     // ! (33)

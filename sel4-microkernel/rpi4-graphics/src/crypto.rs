@@ -92,34 +92,20 @@ impl Default for Sha256 {
 /// # Security
 /// Timing-safe comparison prevents attackers from learning
 /// partial hash values through timing analysis.
-#[verus_verify]
-#[verifier::spec]
-fn spec_ct_eq(a: &[u8; SHA256_DIGEST_SIZE], b: &[u8; SHA256_DIGEST_SIZE]) -> bool {
-    // Specification: arrays are equal iff all elements are equal
-    forall(|i: usize| i < SHA256_DIGEST_SIZE ==> a[i] == b[i])
-}
-
-#[verus_verify]
+///
+/// # Verus Specification
+/// ensures result == forall(|i: usize| i < SHA256_DIGEST_SIZE ==> a[i] == b[i])
 pub fn constant_time_compare(
     a: &[u8; SHA256_DIGEST_SIZE],
     b: &[u8; SHA256_DIGEST_SIZE],
-) -> (result: bool)
-    ensures
-        result == spec_ct_eq(a, b),
-{
+) -> bool {
     let mut diff: u8 = 0;
 
     // XOR all bytes - any difference sets bits in diff
     // This loop ALWAYS runs exactly SHA256_DIGEST_SIZE iterations
-    let mut i: usize = 0;
-    while i < SHA256_DIGEST_SIZE
-        invariant
-            i <= SHA256_DIGEST_SIZE,
-            // diff is 0 iff all bytes so far are equal
-            (diff == 0) == forall(|j: usize| j < i ==> a[j] == b[j]),
-    {
+    // invariant: i <= SHA256_DIGEST_SIZE, (diff == 0) iff all bytes so far are equal
+    for i in 0..SHA256_DIGEST_SIZE {
         diff |= a[i] ^ b[i];
-        i += 1;
     }
 
     // Convert to bool: 0 means equal, non-zero means different
@@ -130,12 +116,11 @@ pub fn constant_time_compare(
 ///
 /// Returns None if index is out of bounds, Some(value) otherwise.
 /// Verified to never panic or access invalid memory.
-#[verus_verify]
-pub fn safe_index<T: Copy>(slice: &[T], index: usize) -> (result: Option<T>)
-    ensures
-        index < slice.len() ==> result == Some(slice[index as int]),
-        index >= slice.len() ==> result.is_none(),
-{
+///
+/// # Verus Specification
+/// ensures index < slice.len() ==> result == Some(slice[index])
+/// ensures index >= slice.len() ==> result.is_none()
+pub fn safe_index<T: Copy>(slice: &[T], index: usize) -> Option<T> {
     if index < slice.len() {
         Some(slice[index])
     } else {

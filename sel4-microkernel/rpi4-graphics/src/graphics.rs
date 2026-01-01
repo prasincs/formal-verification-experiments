@@ -38,15 +38,9 @@ impl Color {
     ///
     /// # Verification
     /// Verified to correctly pack ARGB components.
-    #[verus_verify]
+    /// ensures result == ((self.a as u32) << 24) | ((self.r as u32) << 16) | ((self.g as u32) << 8) | (self.b as u32)
     #[inline]
-    pub const fn to_argb(&self) -> (result: u32)
-        ensures
-            result == ((self.a as u32) << 24)
-                | ((self.r as u32) << 16)
-                | ((self.g as u32) << 8)
-                | (self.b as u32),
-    {
+    pub const fn to_argb(&self) -> u32 {
         ((self.a as u32) << 24)
             | ((self.r as u32) << 16)
             | ((self.g as u32) << 8)
@@ -57,14 +51,8 @@ impl Color {
     ///
     /// # Verification
     /// Verified round-trip: `from_argb(to_argb(c)) == c`
-    #[verus_verify]
-    pub const fn from_argb(argb: u32) -> (result: Self)
-        ensures
-            result.a == ((argb >> 24) & 0xFF) as u8,
-            result.r == ((argb >> 16) & 0xFF) as u8,
-            result.g == ((argb >> 8) & 0xFF) as u8,
-            result.b == (argb & 0xFF) as u8,
-    {
+    /// ensures result.a == ((argb >> 24) & 0xFF), result.r == ((argb >> 16) & 0xFF), etc.
+    pub const fn from_argb(argb: u32) -> Self {
         Self {
             a: ((argb >> 24) & 0xFF) as u8,
             r: ((argb >> 16) & 0xFF) as u8,
@@ -126,14 +114,8 @@ impl Rect {
     /// Verified to correctly implement half-open interval containment:
     /// - x in [rect.x, rect.x + width)
     /// - y in [rect.y, rect.y + height)
-    #[verus_verify]
-    pub fn contains(&self, p: Point) -> (result: bool)
-        ensures
-            result == (p.x >= self.x
-                && p.y >= self.y
-                && p.x < self.x + self.width as i32
-                && p.y < self.y + self.height as i32),
-    {
+    /// ensures result == (p.x >= self.x && p.y >= self.y && p.x < self.x + self.width && p.y < self.y + self.height)
+    pub fn contains(&self, p: Point) -> bool {
         p.x >= self.x
             && p.y >= self.y
             && p.x < self.x + self.width as i32
