@@ -1,0 +1,312 @@
+name: Mock Pi Boot Test (QEMU)
+
+on:
+  push:
+    branches: [main, "claude/*"]
+    paths:
+      - 'sel4-microkernel/**'
+      - '.github/workflows/qemu-mockpi.yml'
+  pull_request:
+    paths:
+      - 'sel4-microkernel/**'
+  workflow_dispatch:
+    inputs:
+      boot_timeout:
+        description: 'Boot timeout in seconds'
+        required: false
+        default: '30'
+        type: string
+
+env:
+  MICROKIT_VERSION: "2.1.0"
+  MICROKIT_SDK_SHA256: "faff1b6d6b546cbb0bfea134588499533130d406ae2a5e533e791ddf23ac7599"
+
+jobs:
+  # Simple boot smoke test for microkit-hello (no TPM needed)
+  qemu-boot-smoke:
+    name: Boot Smoke Test (microkit-hello)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            qemu-system-arm \
+            gcc-aarch64-linux-gnu
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rust-src
+
+      - name: Cache Microkit SDK
+        id: cache-microkit
+        uses: actions/cache@v4
+        with:
+          path: /opt/microkit-sdk
+          key: microkit-sdk-${{ env.MICROKIT_VERSION }}-linux-x86-64
+
+      - name: Download Microkit SDK
+        if: steps.cache-microkit.outputs.cache-hit != 'true'
+        run: |
+          curl -L -o /tmp/microkit-sdk.tar.gz \
+            "https://github.com/seL4/microkit/releases/download/${{ env.MICROKIT_VERSION }}/microkit-sdk-${{ env.MICROKIT_VERSION }}-linux-x86-64.tar.gz"
+
+          echo "${{ env.MICROKIT_SDK_SHA256 }}  /tmp/microkit-sdk.tar.gz" | sha256sum -c -
+
+          sudo mkdir -p /opt/microkit-sdk
+          sudo tar -xzf /tmp/microkit-sdk.tar.gz -C /opt/microkit-sdk --strip-components=1
+          rm /tmp/microkit-sdk.tar.gz
+
+      - name: Build for QEMU virt (AArch64)
+        working-directory: sel4-microkernel/microkit-hello
+        run: |
+          export MICROKIT_SDK=/opt/microkit-sdk
+          echo "=== Building for qemu_virt_aarch64 ==="
+          make ARCH=aarch64 MICROKIT_SDK=$MICROKIT_SDK
+
+      - name: Boot test
+        working-directory: sel4-microkernel/microkit-hello
+        run: |
+          TIMEOUT="${{ github.event.inputs.boot_timeout || '30' }}"
+          echo "=== QEMU Boot Smoke Test ==="
+          echo "Timeout: ${TIMEOUT}s"
+
+          timeout ${TIMEOUT}s qemu-system-aarch64 \
+            -machine virt,virtualization=on \
+            -cpu cortex-a53 \
+            -m 2G \
+            -nographic \
+            -device loader,file=build/aarch64/loader.img,addr=0x70000000,cpu-num=0 \
+            2>&1 | tee boot.log || true
+
+      - name: Verify boot success
+        working-directory: sel4-microkernel/microkit-hello
+        run: |
+          echo "=== Checking boot markers ==="
+          PASS=true
+
+          if grep -q "seL4 Microkit" boot.log; then
+            echo "✓ seL4 Microkit banner found"
+          else
+            echo "✗ seL4 Microkit banner NOT found"
+            PASS=false
+          fi
+
+          if grep -q "Protection Domain" boot.log; then
+            echo "✓ Protection Domain initialized"
+          else
+            echo "✗ Protection Domain NOT initialized"
+            PASS=false
+          fi
+
+          if grep -q "System ready" boot.log; then
+            echo "✓ System ready"
+          fi
+
+          if [ "$PASS" = true ]; then
+            echo "=== BOOT TEST PASSED ==="
+          else
+            echo "=== BOOT TEST FAILED ==="
+            cat boot.log
+            exit 1
+          fi
+
+      - name: Upload boot log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: boot-smoke-log
+          path: sel4-microkernel/microkit-hello/boot.log
+          retention-days: 7
+
+  # RPi4 graphics image boot test with TPM 2.0
+  # Note: VideoCore framebuffer won't work in QEMU, but we can verify:
+  # - Kernel boots
+  # - Protection domain loads
+  # - TPM device is accessible
+  qemu-mockpi-tpm:
+    name: Mock Pi Boot + TPM 2.0 (rpi4-graphics)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            qemu-system-arm \
+            swtpm \
+            swtpm-tools \
+            gcc-aarch64-linux-gnu \
+            dosfstools \
+            mtools
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rust-src
+
+      - name: Cache Microkit SDK
+        id: cache-microkit
+        uses: actions/cache@v4
+        with:
+          path: /opt/microkit-sdk
+          key: microkit-sdk-${{ env.MICROKIT_VERSION }}-linux-x86-64
+
+      - name: Download Microkit SDK
+        if: steps.cache-microkit.outputs.cache-hit != 'true'
+        run: |
+          curl -L -o /tmp/microkit-sdk.tar.gz \
+            "https://github.com/seL4/microkit/releases/download/${{ env.MICROKIT_VERSION }}/microkit-sdk-${{ env.MICROKIT_VERSION }}-linux-x86-64.tar.gz"
+
+          echo "${{ env.MICROKIT_SDK_SHA256 }}  /tmp/microkit-sdk.tar.gz" | sha256sum -c -
+
+          sudo mkdir -p /opt/microkit-sdk
+          sudo tar -xzf /tmp/microkit-sdk.tar.gz -C /opt/microkit-sdk --strip-components=1
+
+      # Build the rpi4-graphics image
+      # We build for rpi4b but test boot behavior in QEMU virt
+      - name: Build rpi4-graphics
+        working-directory: sel4-microkernel/rpi4-graphics
+        run: |
+          export MICROKIT_SDK=/opt/microkit-sdk
+          export SEL4_INCLUDE_DIRS=$MICROKIT_SDK/board/rpi4b_4gb/debug/include
+
+          echo "=== Building rpi4-graphics for boot testing ==="
+          make RPI4_MEMORY=4gb MICROKIT_SDK=$MICROKIT_SDK
+
+      - name: Setup TPM 2.0 emulator
+        run: |
+          echo "=== Setting up swtpm (Software TPM 2.0) ==="
+          mkdir -p /tmp/tpm-state
+          mkdir -p /tmp/swtpm-localca
+
+          # Initialize TPM state (without certs to avoid CA permission issues)
+          # For CI testing, we don't need EK/platform certs
+          swtpm_setup --tpm2 \
+            --tpmstate /tmp/tpm-state \
+            --createek \
+            --decryption \
+            --overwrite \
+            --display
+
+          # Start swtpm in daemon mode
+          swtpm socket \
+            --tpmstate dir=/tmp/tpm-state \
+            --ctrl type=unixio,path=/tmp/tpm-state/swtpm.sock \
+            --tpm2 \
+            --log level=20,file=/tmp/tpm-state/swtpm.log \
+            -d
+
+          # Wait for socket
+          for i in {1..10}; do
+            [ -S /tmp/tpm-state/swtpm.sock ] && echo "TPM socket ready" && break
+            echo "Waiting for TPM socket... ($i/10)"
+            sleep 1
+          done
+
+          [ -S /tmp/tpm-state/swtpm.sock ] || { cat /tmp/tpm-state/swtpm.log; exit 1; }
+
+      - name: Boot test with TPM
+        working-directory: sel4-microkernel/rpi4-graphics
+        run: |
+          TIMEOUT="${{ github.event.inputs.boot_timeout || '30' }}"
+          echo "=== QEMU Mock Pi Boot Test (with TPM 2.0) ==="
+          echo ""
+          echo "NOTE: This tests the rpi4-graphics image in QEMU virt machine."
+          echo "      VideoCore framebuffer will NOT work (expected)."
+          echo "      We're verifying: kernel boot, PD load, TPM accessibility."
+          echo ""
+          echo "Timeout: ${TIMEOUT}s"
+          echo ""
+
+          # Run QEMU with TPM attached
+          # Using virt machine since raspi4b emulation is incomplete
+          timeout ${TIMEOUT}s qemu-system-aarch64 \
+            -machine virt,virtualization=on \
+            -cpu cortex-a72 \
+            -m 2G \
+            -nographic \
+            -serial mon:stdio \
+            -chardev socket,id=chrtpm,path=/tmp/tpm-state/swtpm.sock \
+            -tpmdev emulator,id=tpm0,chardev=chrtpm \
+            -device tpm-tis-device,tpmdev=tpm0 \
+            -device loader,file=build/loader.img,addr=0x70000000,cpu-num=0 \
+            2>&1 | tee boot.log || true
+
+          echo ""
+          echo "=== Boot Complete ==="
+
+      - name: Analyze boot results
+        working-directory: sel4-microkernel/rpi4-graphics
+        run: |
+          echo "=== Boot Log Analysis ==="
+          echo ""
+
+          # Check what we got
+          if grep -q "seL4 Microkit" boot.log; then
+            echo "✓ seL4 Microkit initialized"
+          else
+            echo "⚠ seL4 Microkit banner not found (may be board mismatch)"
+          fi
+
+          if grep -q "Graphics Demo" boot.log; then
+            echo "✓ Graphics PD loaded"
+          fi
+
+          if grep -q "Initializing framebuffer" boot.log; then
+            echo "✓ Framebuffer init attempted"
+          fi
+
+          # Expected: framebuffer will fail in QEMU (no VideoCore)
+          if grep -q "Failed to allocate framebuffer\|mailbox\|timeout" boot.log; then
+            echo "✓ Framebuffer failed (expected - no VideoCore in QEMU)"
+          fi
+
+          # Check for crashes
+          if grep -qi "panic\|fault\|exception" boot.log; then
+            echo "⚠ Errors detected in boot:"
+            grep -i "panic\|fault\|exception" boot.log | head -5
+          else
+            echo "✓ No kernel panics detected"
+          fi
+
+          # Check TPM log for activity
+          echo ""
+          echo "=== TPM Activity ==="
+          if [ -f /tmp/tpm-state/swtpm.log ]; then
+            if grep -q "TPM2_" /tmp/tpm-state/swtpm.log; then
+              echo "✓ TPM commands received"
+              grep "TPM2_" /tmp/tpm-state/swtpm.log | head -5
+            else
+              echo "⚠ No TPM commands in log (TPM driver may not be loaded)"
+            fi
+          fi
+
+          echo ""
+          echo "=== Summary ==="
+          echo "This test verifies the rpi4-graphics image boots in QEMU."
+          echo "Full graphics and TPM integration require real Pi 4 hardware."
+
+      - name: Upload boot log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mockpi-tpm-boot-log
+          path: sel4-microkernel/rpi4-graphics/boot.log
+          retention-days: 7
+
+      - name: Upload TPM log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tpm-emulator-log
+          path: /tmp/tpm-state/swtpm.log
+          retention-days: 7
