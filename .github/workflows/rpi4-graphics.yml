@@ -92,7 +92,14 @@ jobs:
         working-directory: sel4-microkernel/rpi4-graphics
         run: |
           export MICROKIT_SDK=$PWD/microkit-sdk
-          make RPI4_MEMORY=${{ env.RPI4_MEMORY }}
+          echo "=== Environment ==="
+          echo "MICROKIT_SDK=$MICROKIT_SDK"
+          ls -la $MICROKIT_SDK/board/ || true
+          echo "=== Rust version ==="
+          rustc --version
+          cargo --version
+          echo "=== Build ==="
+          make RPI4_MEMORY=${{ env.RPI4_MEMORY }} CARGO="cargo -v"
 
       - name: Create boot files
         working-directory: sel4-microkernel/rpi4-graphics
