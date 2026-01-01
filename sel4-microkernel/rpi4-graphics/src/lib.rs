@@ -42,11 +42,13 @@ pub mod framebuffer;
 pub mod graphics;
 pub mod font;
 pub mod tpm;
+pub mod crypto;
 
 pub use mailbox::{Mailbox, MailboxError};
 pub use framebuffer::{Framebuffer, FramebufferInfo};
 pub use graphics::{Color, Point, Rect};
 pub use tpm::{Tpm, TpmError};
+pub use crypto::{Sha256, Sha256Digest, VerifyResult, constant_time_compare, verify_sha256};
 
 /// BCM2711 peripheral base address (Raspberry Pi 4)
 pub const BCM2711_PERIPH_BASE: usize = 0xFE00_0000;
