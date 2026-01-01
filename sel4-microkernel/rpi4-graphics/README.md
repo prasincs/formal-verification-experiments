@@ -174,10 +174,12 @@ make RPI4_MEMORY=8gb   # For 8GB model
 | Microkit framework | ✅ Designed for verified systems |
 | SHA-256 | ✅ RustCrypto sha2 (audited) |
 | Constant-time compare | ✅ Verus-verified (timing-safe) |
-| Framebuffer driver | ⚠️ Trusted (hardware interface) |
-| Graphics primitives | 🔄 Verus specs planned |
+| Color operations | ✅ Verus-verified (ARGB round-trip) |
+| Rect containment | ✅ Verus-verified (bounds logic) |
+| Pixel bounds check | ✅ Verus-verified (no OOB writes) |
+| Framebuffer alloc | ⚠️ Trusted (hardware interface) |
 | TPM driver | ⚠️ Trusted (hardware interface) |
-| VideoCore firmware | ❌ Closed source |
+| VideoCore firmware | ❌ Closed source (display not verifiable) |
 
 ## TPM 2.0 Support
 

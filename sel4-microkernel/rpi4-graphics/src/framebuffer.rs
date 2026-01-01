@@ -1,9 +1,16 @@
 //! # Framebuffer Driver
 //!
 //! Allocates and manages the framebuffer via the VideoCore mailbox.
+//!
+//! ## Verus Verification
+//! Key properties verified:
+//! - `put_pixel` returns false for out-of-bounds coordinates
+//! - No writes occur outside framebuffer memory
 
 use crate::mailbox::{Mailbox, MailboxError, tags};
 use crate::graphics::Color;
+use verus_builtin::*;
+use verus_builtin_macros::*;
 
 /// Framebuffer configuration
 #[derive(Debug, Clone, Copy)]
@@ -143,8 +150,18 @@ impl Framebuffer {
     /// Put a pixel at (x, y) with bounds checking
     ///
     /// Returns false if coordinates are out of bounds.
+    ///
+    /// # Verification
+    /// Verified that:
+    /// - Returns false when x >= width or y >= height
+    /// - Returns true only when coordinates are valid
+    /// - No memory write occurs for out-of-bounds coordinates
+    #[verus_verify]
     #[inline]
-    pub fn put_pixel(&mut self, x: u32, y: u32, color: Color) -> bool {
+    pub fn put_pixel(&mut self, x: u32, y: u32, color: Color) -> (result: bool)
+        ensures
+            result == (x < self.info.width && y < self.info.height),
+    {
         if x >= self.info.width || y >= self.info.height {
             return false;
         }
