@@ -61,8 +61,8 @@ When booted, the system:
 ### 1. Set up Microkit SDK
 
 ```bash
-# Download SDK (update version as needed)
-curl -LO https://github.com/seL4/microkit/releases/download/1.4.1/microkit-sdk-1.4.1-linux-x86-64.tar.gz
+# Download SDK 2.1.0 (latest stable)
+curl -LO https://github.com/seL4/microkit/releases/download/2.1.0/microkit-sdk-2.1.0-linux-x86-64.tar.gz
 mkdir -p microkit-sdk
 tar -xzf microkit-sdk-*.tar.gz -C microkit-sdk --strip-components=1
 export MICROKIT_SDK=$PWD/microkit-sdk

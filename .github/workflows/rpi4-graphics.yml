@@ -26,7 +26,7 @@ on:
         type: boolean
 
 env:
-  MICROKIT_VERSION: "1.4.1"
+  MICROKIT_VERSION: "2.1.0"
   RPI4_MEMORY: ${{ github.event.inputs.rpi4_memory || '4gb' }}
 
 jobs:

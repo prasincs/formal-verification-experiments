@@ -50,9 +50,14 @@ export SEL4_INCLUDE_DIRS := $(SDK_BOARD)/include
 all: $(SYSTEM_IMAGE)
 
 # Build the Rust protection domain
+# Using explicit build flags (same approach as microkit-hello)
 $(PD_ELF): src/main.rs src/lib.rs Cargo.toml | $(BUILD_DIR)
 	@echo "=== Building Graphics Protection Domain ==="
-	$(CARGO) build --release --target aarch64-sel4-microkit
+	$(CARGO) build \
+		--release \
+		--target aarch64-sel4-microkit \
+		-Z build-std=core,alloc \
+		-Z build-std-features=compiler-builtins-mem
 	@mkdir -p $(BUILD_DIR)
 	cp target/aarch64-sel4-microkit/release/graphics_pd $@
 	@echo "Built: $@"
@@ -195,11 +200,10 @@ check:
 # Download and set up Microkit SDK
 setup:
 	@echo "=== Setting up Microkit SDK ==="
-	@echo "Downloading Microkit SDK..."
+	@echo "Downloading Microkit SDK 2.1.0..."
 	mkdir -p $(MICROKIT_SDK)
-	# Note: Update version as needed
 	curl -L -o /tmp/microkit-sdk.tar.gz \
-		https://github.com/seL4/microkit/releases/download/1.4.1/microkit-sdk-1.4.1-linux-x86-64.tar.gz
+		https://github.com/seL4/microkit/releases/download/2.1.0/microkit-sdk-2.1.0-linux-x86-64.tar.gz
 	tar -xzf /tmp/microkit-sdk.tar.gz -C $(MICROKIT_SDK) --strip-components=1
 	rm /tmp/microkit-sdk.tar.gz
 	@echo "SDK installed at: $(MICROKIT_SDK)"
