@@ -46,6 +46,7 @@ When booted, the system:
 - MicroSD card (8GB+)
 - HDMI display
 - Optional: USB-to-serial adapter for debug output
+- Optional: TPM 2.0 module for measured boot (see [TPM Support](#tpm-20-support))
 
 ### Software
 - Linux or macOS
@@ -140,7 +141,8 @@ rpi4-graphics/
 │   ├── mailbox.rs      # VideoCore mailbox driver
 │   ├── framebuffer.rs  # Framebuffer allocation & primitives
 │   ├── graphics.rs     # Drawing primitives (colors, shapes)
-│   └── font.rs         # 8x8 bitmap font
+│   ├── font.rs         # 8x8 bitmap font
+│   └── tpm.rs          # TPM 2.0 driver (ST33K via SPI)
 ├── graphics.system     # Microkit system description
 ├── Makefile            # Build system
 ├── Cargo.toml
@@ -172,7 +174,57 @@ make RPI4_MEMORY=2gb   # For 2GB model
 | Microkit framework | ✅ Designed for verified systems |
 | Framebuffer driver | ⚠️ Trusted (hardware interface) |
 | Graphics primitives | 🔄 Verus specs planned |
+| TPM driver | ⚠️ Trusted (hardware interface) |
 | VideoCore firmware | ❌ Closed source |
+
+## TPM 2.0 Support
+
+Optional TPM 2.0 support enables **measured boot** and **remote attestation**.
+
+### Compatible TPM Modules
+
+| Board | Chip | Interface | Availability | Where to Buy |
+|-------|------|-----------|--------------|--------------|
+| **GeeekPi TPM9670** | Infineon SLB9670 | SPI | ✅ In Stock | [Amazon](https://www.amazon.com/GeeekPi-Raspberry-Infineon-OptigaTM-Compatible/dp/B09G2BZQT5) |
+| **LetsTrust TPM** | Infineon SLB9672 | SPI | ✅ Ships from EU | [buyzero.de](https://buyzero.de/en/products/letstrust-hardware-tpm-trusted-platform-module), [Pi Hut](https://thepihut.com/products/letstrust-tpm-for-raspberry-pi) |
+| STPM4RasPI | ST33TPHF2XSPI | SPI | ⚠️ 19 week lead | [Newark](https://www.newark.com/stmicroelectronics/sct-tpm-raspihe4/trusted-platform-module-st33/dp/49AM3002) |
+
+All boards plug directly onto the Raspberry Pi 4's 40-pin GPIO header. The Infineon SLB9670/SLB9672 chips use the same Linux driver (`tpm-slb9670`) as the ST33.
+
+### TPM Features
+
+| Feature | Description |
+|---------|-------------|
+| Measured Boot | Each boot stage extends its hash into TPM PCRs |
+| Remote Attestation | Cryptographic proof of system state to verifier |
+| Sealed Secrets | Keys bound to specific PCR values |
+| Hardware RNG | True random number generation |
+
+### GPIO Pinout
+
+```
+STPM4RasPI → Raspberry Pi 4
+─────────────────────────────
+MOSI       → GPIO 10 (Pin 19)
+MISO       → GPIO 9  (Pin 21)
+SCLK       → GPIO 11 (Pin 23)
+CS         → GPIO 8  (Pin 24)
+RST        → GPIO 24 (Pin 18)
+VCC        → 3.3V    (Pin 1)
+GND        → GND     (Pin 6)
+```
+
+### PCR Allocation
+
+| PCR | Contents |
+|-----|----------|
+| 0 | Firmware (bootcode.bin, start4.elf) |
+| 1 | seL4 kernel |
+| 2 | Microkit system config |
+| 3 | Protection Domain images |
+| 4 | Runtime measurements |
+
+See [ARCHITECTURE.md](../rpi-graphics/ARCHITECTURE.md) for detailed TPM integration docs.
 
 ## Troubleshooting
 
@@ -196,6 +248,8 @@ make RPI4_MEMORY=2gb   # For 2GB model
 - [Microkit Manual](https://github.com/seL4/microkit/blob/main/docs/manual.md)
 - [Raspberry Pi Mailbox Interface](https://github.com/raspberrypi/firmware/wiki/Mailbox-property-interface)
 - [BCM2711 Peripherals](https://datasheets.raspberrypi.com/bcm2711/bcm2711-peripherals.pdf)
+- [STPM4RasPI Data Brief](https://www.st.com/resource/en/data_brief/stpm4raspi.pdf)
+- [ST33K TPM Application Note](https://www.st.com/resource/en/application_note/an5714-integrating-the-st33tphf2xspi-and-st33tphf2xi2c-trusted-platform-modules-with-linux-stmicroelectronics.pdf)
 
 ## License
 
