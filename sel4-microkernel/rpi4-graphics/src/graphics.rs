@@ -8,7 +8,10 @@
 //! - Rectangle containment: correct boundary logic
 //! - All pixel operations bounds-checked
 
+// Verus verification imports (used when running verus verification)
+#[allow(unused_imports)]
 use verus_builtin::*;
+#[allow(unused_imports)]
 use verus_builtin_macros::*;
 
 /// ARGB color (Alpha, Red, Green, Blue)

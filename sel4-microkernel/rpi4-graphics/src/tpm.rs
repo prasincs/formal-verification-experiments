@@ -300,7 +300,8 @@ impl<SPI: SpiInterface> Tpm<SPI> {
 
         // Copy random bytes from response
         let random_size = u16::from_be_bytes([response[10], response[11]]) as usize;
-        output[..random_size.min(output.len())].copy_from_slice(&response[12..12 + random_size.min(output.len())]);
+        let copy_len = random_size.min(output.len());
+        output[..copy_len].copy_from_slice(&response[12..12 + copy_len]);
 
         Ok(())
     }
@@ -358,7 +359,7 @@ pub fn sha256(data: &[u8]) -> [u8; 32] {
 pub fn measure_component<SPI: SpiInterface>(
     tpm: &mut Tpm<SPI>,
     pcr: usize,
-    component_name: &str,
+    _component_name: &str,
     component_data: &[u8],
 ) -> Result<(), TpmError> {
     let digest = sha256(component_data);

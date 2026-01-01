@@ -9,7 +9,11 @@
 
 use crate::mailbox::{Mailbox, MailboxError, tags};
 use crate::graphics::Color;
+
+// Verus verification imports (used when running verus verification)
+#[allow(unused_imports)]
 use verus_builtin::*;
+#[allow(unused_imports)]
 use verus_builtin_macros::*;
 
 /// Framebuffer configuration
