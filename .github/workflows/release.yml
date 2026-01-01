@@ -10,6 +10,8 @@ on:
 env:
   CARGO_TERM_COLOR: always
   MICROKIT_SDK_VERSION: "2.1.0"
+  MICROKIT_SDK_SHA256: "faff1b6d6b546cbb0bfea134588499533130d406ae2a5e533e791ddf23ac7599"
+  RPI_FIRMWARE_TAG: "1.20250915"
 
 jobs:
   # Build the Verus demo library
@@ -76,11 +78,102 @@ jobs:
             sel4-microkernel/microkit-hello/build/aarch64/hello.elf
             sel4-microkernel/microkit-hello/build/aarch64/report.txt
 
+  # Build Raspberry Pi 4 graphics images for both memory variants
+  build-rpi4-graphics:
+    name: Build RPi4 Graphics (${{ matrix.memory }})
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        memory: [4gb, 8gb]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            gcc-aarch64-linux-gnu \
+            dosfstools \
+            mtools \
+            curl
+
+      - name: Install Rust nightly
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rust-src
+
+      - name: Cache Microkit SDK
+        id: cache-sdk
+        uses: actions/cache@v4
+        with:
+          path: sel4-microkernel/rpi4-graphics/microkit-sdk
+          key: microkit-sdk-${{ env.MICROKIT_SDK_VERSION }}-linux-x86-64
+
+      - name: Download Microkit SDK
+        if: steps.cache-sdk.outputs.cache-hit != 'true'
+        working-directory: sel4-microkernel/rpi4-graphics
+        run: |
+          curl -L -o microkit-sdk.tar.gz \
+            "https://github.com/seL4/microkit/releases/download/${{ env.MICROKIT_SDK_VERSION }}/microkit-sdk-${{ env.MICROKIT_SDK_VERSION }}-linux-x86-64.tar.gz"
+
+          # Verify SHA256 checksum
+          echo "${{ env.MICROKIT_SDK_SHA256 }}  microkit-sdk.tar.gz" | sha256sum -c -
+
+          mkdir -p microkit-sdk
+          tar -xzf microkit-sdk.tar.gz -C microkit-sdk --strip-components=1
+          rm microkit-sdk.tar.gz
+
+      - name: Cache Raspberry Pi firmware
+        id: cache-firmware
+        uses: actions/cache@v4
+        with:
+          path: sel4-microkernel/rpi4-graphics/build/firmware
+          key: rpi-firmware-${{ env.RPI_FIRMWARE_TAG }}
+
+      - name: Download Raspberry Pi firmware
+        if: steps.cache-firmware.outputs.cache-hit != 'true'
+        working-directory: sel4-microkernel/rpi4-graphics
+        run: make firmware
+
+      - name: Build system image for ${{ matrix.memory }}
+        working-directory: sel4-microkernel/rpi4-graphics
+        run: |
+          export MICROKIT_SDK=$PWD/microkit-sdk
+          export SEL4_INCLUDE_DIRS=$MICROKIT_SDK/board/rpi4b_${{ matrix.memory }}/debug/include
+          make RPI4_MEMORY=${{ matrix.memory }} bootfiles
+
+      - name: Create SD card image
+        working-directory: sel4-microkernel/rpi4-graphics
+        run: |
+          # Create 64MB FAT32 image
+          dd if=/dev/zero of=build/rpi4-sel4-graphics-${{ matrix.memory }}.img bs=1M count=64
+
+          # Create FAT32 filesystem
+          mkfs.vfat -F 32 -n SEL4BOOT build/rpi4-sel4-graphics-${{ matrix.memory }}.img
+
+          # Copy boot files using mtools (no root required)
+          mcopy -i build/rpi4-sel4-graphics-${{ matrix.memory }}.img build/boot/* ::
+
+      - name: Generate checksums
+        working-directory: sel4-microkernel/rpi4-graphics/build
+        run: |
+          sha256sum rpi4-sel4-graphics-${{ matrix.memory }}.img > rpi4-sel4-graphics-${{ matrix.memory }}.img.sha256
+
+      - name: Upload RPi4 artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: rpi4-graphics-${{ matrix.memory }}
+          path: |
+            sel4-microkernel/rpi4-graphics/build/rpi4-sel4-graphics-${{ matrix.memory }}.img
+            sel4-microkernel/rpi4-graphics/build/rpi4-sel4-graphics-${{ matrix.memory }}.img.sha256
+            sel4-microkernel/rpi4-graphics/build/report.txt
+
   # Create versioned release (only on tag push)
   release-versioned:
     name: Create Versioned Release
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [build-verus, build-verified, build-microkit]
+    needs: [build-verus, build-verified, build-microkit, build-rpi4-graphics]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -99,14 +192,19 @@ jobs:
 
       - name: Create release archive
         run: |
-          mkdir -p release
+          mkdir -p release/qemu
+          mkdir -p release/rpi4
 
-          # Copy microkit artifacts
-          cp -r artifacts/microkit-aarch64/* release/ || true
+          # Copy QEMU microkit artifacts
+          cp -r artifacts/microkit-aarch64/* release/qemu/ || true
+
+          # Copy RPi4 artifacts
+          cp -r artifacts/rpi4-graphics-4gb/* release/rpi4/ || true
+          cp -r artifacts/rpi4-graphics-8gb/* release/rpi4/ || true
 
           # Generate checksums
           cd release
-          sha256sum * > SHA256SUMS.txt 2>/dev/null || echo "No files to checksum"
+          find . -type f ! -name "SHA256SUMS.txt" -exec sha256sum {} \; > SHA256SUMS.txt 2>/dev/null || echo "No files to checksum"
 
           # Create tarball
           cd ..
@@ -127,15 +225,22 @@ jobs:
             - **Verus Demo**: Verified Rust data structures and algorithms
             - **seL4 Verified Components**: Formally verified seL4 microkernel components
             - **Microkit Hello World**: AArch64 system image for QEMU
+            - **RPi4 Graphics Demo**: Bootable SD card images for Raspberry Pi 4
 
-            ### Artifacts
+            ### QEMU Artifacts
 
             - `loader.img` - Bootable system image for QEMU AArch64
             - `hello.elf` - Protection domain ELF binary
             - `report.txt` - Build report with memory layout
-            - `SHA256SUMS.txt` - Checksums for verification
 
-            ### Running
+            ### Raspberry Pi 4 Artifacts
+
+            | Model | Image |
+            |-------|-------|
+            | Pi 4 (4GB) | `rpi4-sel4-graphics-4gb.img` |
+            | Pi 4 (8GB) | `rpi4-sel4-graphics-8gb.img` |
+
+            ### Running on QEMU
 
             ```bash
             qemu-system-aarch64 \
@@ -145,9 +250,34 @@ jobs:
               -nographic \
               -kernel loader.img
             ```
+
+            ### Flashing Raspberry Pi 4
+
+            **Using Raspberry Pi Imager:**
+            1. Download the `.img` file for your Pi 4 variant
+            2. Open Raspberry Pi Imager
+            3. Choose OS → Use custom → Select the downloaded image
+            4. Choose storage → Select your SD card
+            5. Write
+
+            **Using dd (Linux/macOS):**
+            ```bash
+            sudo dd if=rpi4-sel4-graphics-4gb.img of=/dev/sdX bs=4M status=progress
+            ```
+
+            After booting, the HDMI display shows an architecture diagram of the seL4 stack.
+
+            ### Verification
+
+            Verify downloads with SHA256:
+            ```bash
+            sha256sum -c rpi4-sel4-graphics-4gb.img.sha256
+            ```
           files: |
             formal-verification-experiments-${{ steps.version.outputs.VERSION }}.tar.gz
             artifacts/microkit-aarch64/*
+            artifacts/rpi4-graphics-4gb/*
+            artifacts/rpi4-graphics-8gb/*
           draft: false
           prerelease: false
 
@@ -155,7 +285,7 @@ jobs:
   release-tip:
     name: Update Tip Release
     if: github.ref == 'refs/heads/main'
-    needs: [build-verus, build-verified, build-microkit]
+    needs: [build-verus, build-verified, build-microkit, build-rpi4-graphics]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -177,14 +307,19 @@ jobs:
 
       - name: Create release archive
         run: |
-          mkdir -p release
+          mkdir -p release/qemu
+          mkdir -p release/rpi4
 
-          # Copy microkit artifacts
-          cp -r artifacts/microkit-aarch64/* release/ || true
+          # Copy QEMU microkit artifacts
+          cp -r artifacts/microkit-aarch64/* release/qemu/ || true
+
+          # Copy RPi4 artifacts
+          cp -r artifacts/rpi4-graphics-4gb/* release/rpi4/ || true
+          cp -r artifacts/rpi4-graphics-8gb/* release/rpi4/ || true
 
           # Generate checksums
           cd release
-          sha256sum * > SHA256SUMS.txt 2>/dev/null || echo "No files to checksum"
+          find . -type f ! -name "SHA256SUMS.txt" -exec sha256sum {} \; > SHA256SUMS.txt 2>/dev/null || echo "No files to checksum"
 
           # Create tarball with commit hash
           cd ..
@@ -220,15 +355,22 @@ jobs:
             - **Verus Demo**: Verified Rust data structures and algorithms
             - **seL4 Verified Components**: Formally verified seL4 microkernel components
             - **Microkit Hello World**: AArch64 system image for QEMU
+            - **RPi4 Graphics Demo**: Bootable SD card images for Raspberry Pi 4
 
-            ### Artifacts
+            ### QEMU Artifacts
 
             - `loader.img` - Bootable system image for QEMU AArch64
             - `hello.elf` - Protection domain ELF binary
             - `report.txt` - Build report with memory layout
-            - `SHA256SUMS.txt` - Checksums for verification
 
-            ### Running
+            ### Raspberry Pi 4 Artifacts
+
+            | Model | Image |
+            |-------|-------|
+            | Pi 4 (4GB) | `rpi4-sel4-graphics-4gb.img` |
+            | Pi 4 (8GB) | `rpi4-sel4-graphics-8gb.img` |
+
+            ### Running on QEMU
 
             ```bash
             qemu-system-aarch64 \
@@ -238,8 +380,33 @@ jobs:
               -nographic \
               -kernel loader.img
             ```
+
+            ### Flashing Raspberry Pi 4
+
+            **Using Raspberry Pi Imager:**
+            1. Download the `.img` file for your Pi 4 variant
+            2. Open Raspberry Pi Imager
+            3. Choose OS → Use custom → Select the downloaded image
+            4. Choose storage → Select your SD card
+            5. Write
+
+            **Using dd (Linux/macOS):**
+            ```bash
+            sudo dd if=rpi4-sel4-graphics-4gb.img of=/dev/sdX bs=4M status=progress
+            ```
+
+            After booting, the HDMI display shows an architecture diagram of the seL4 stack.
+
+            ### Verification
+
+            Verify downloads with SHA256:
+            ```bash
+            sha256sum -c rpi4-sel4-graphics-4gb.img.sha256
+            ```
           files: |
             formal-verification-experiments-tip-${{ steps.commit.outputs.SHA_SHORT }}.tar.gz
             artifacts/microkit-aarch64/*
+            artifacts/rpi4-graphics-4gb/*
+            artifacts/rpi4-graphics-8gb/*
           draft: false
           prerelease: true
