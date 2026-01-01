@@ -1,11 +1,18 @@
 [package]
-name = "hello"
+name = "rpi4-spi-display"
 version = "0.1.0"
 edition = "2021"
 authors = ["Formal Verification Experiments"]
+description = "Verified SPI LCD + touchscreen driver for seL4 Microkit on Raspberry Pi 4"
+license = "MIT"
+
+[lib]
+name = "rpi4_spi_display"
+path = "src/lib.rs"
+crate-type = ["staticlib"]
 
 [[bin]]
-name = "hello"
+name = "display_pd"
 path = "src/main.rs"
 
 [dependencies]
@@ -13,15 +20,16 @@ path = "src/main.rs"
 # Pinned to specific commit for reproducible builds (rust-sel4 v3.0.0-dev, 2025-11-26)
 sel4-microkit = { git = "https://github.com/seL4/rust-sel4", rev = "3059c2d236bf56b066936dd48d8966255e172c3b" }
 
-# Verus verification support (specs stripped in normal builds)
+# Verus verification support
 verus_builtin_macros = "=0.0.0-2025-12-07-0054"
 verus_builtin = "=0.0.0-2025-12-07-0054"
 
 [profile.release]
-lto = true
 opt-level = "z"
-panic = "abort"
+lto = true
 codegen-units = 1
+debug = false
+panic = "abort"
 
 [profile.dev]
 panic = "abort"
