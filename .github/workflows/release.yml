@@ -1,0 +1,287 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+    branches:
+      - main
+
+env:
+  CARGO_TERM_COLOR: always
+  MICROKIT_SDK_VERSION: "2.1.0"
+
+jobs:
+  # Build the Verus demo library
+  build-verus:
+    name: Build Verus Demo
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build verus library
+        working-directory: verus
+        run: cargo build --release --verbose
+
+      - name: Run tests
+        working-directory: verus
+        run: cargo test --release --verbose
+
+  # Build verified components library
+  build-verified:
+    name: Build Verified Components
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build verified library
+        working-directory: sel4-microkernel/verified
+        run: cargo build --release --verbose
+
+      - name: Run tests
+        working-directory: sel4-microkernel/verified
+        run: cargo test --release --verbose
+
+  # Build Microkit system for AArch64
+  build-microkit:
+    name: Build Microkit (AArch64)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            gcc-aarch64-linux-gnu \
+            libclang-dev \
+            qemu-system-arm
+
+      - name: Install Rust nightly
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rust-src
+
+      - name: Cache Microkit SDK
+        id: cache-sdk
+        uses: actions/cache@v4
+        with:
+          path: /opt/microkit-sdk
+          key: microkit-sdk-${{ env.MICROKIT_SDK_VERSION }}-linux
+
+      - name: Download Microkit SDK
+        if: steps.cache-sdk.outputs.cache-hit != 'true'
+        run: |
+          sudo mkdir -p /opt/microkit-sdk
+          curl -L "https://github.com/seL4/microkit/releases/download/${MICROKIT_SDK_VERSION}/microkit-sdk-${MICROKIT_SDK_VERSION}-linux-x86-64.tar.gz" | \
+            sudo tar -xzf - -C /opt/microkit-sdk --strip-components=1
+
+      - name: Build Microkit system
+        working-directory: sel4-microkernel/microkit-hello
+        env:
+          MICROKIT_SDK: /opt/microkit-sdk
+          SEL4_INCLUDE_DIRS: /opt/microkit-sdk/board/qemu_virt_aarch64/debug/include
+        run: |
+          # Build the Rust protection domain
+          cargo +nightly build \
+            --release \
+            --target aarch64-sel4-microkit \
+            -Z build-std=core,alloc \
+            -Z build-std-features=compiler-builtins-mem
+
+          # Create output directory and copy ELF
+          mkdir -p build/aarch64
+          cp target/aarch64-sel4-microkit/release/hello.elf build/aarch64/
+
+          # Build system image with Microkit tool
+          /opt/microkit-sdk/bin/microkit \
+            hello.system \
+            --search-path build/aarch64 \
+            --board qemu_virt_aarch64 \
+            --config debug \
+            -o build/aarch64/loader.img \
+            -r build/aarch64/report.txt
+
+      - name: Upload microkit artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: microkit-aarch64
+          path: |
+            sel4-microkernel/microkit-hello/build/aarch64/loader.img
+            sel4-microkernel/microkit-hello/build/aarch64/hello.elf
+            sel4-microkernel/microkit-hello/build/aarch64/report.txt
+
+  # Create versioned release (only on tag push)
+  release-versioned:
+    name: Create Versioned Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [build-verus, build-verified, build-microkit]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Get version from tag
+        id: version
+        run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+
+      - name: Create release archive
+        run: |
+          mkdir -p release
+
+          # Copy microkit artifacts
+          cp -r artifacts/microkit-aarch64/* release/ || true
+
+          # Generate checksums
+          cd release
+          sha256sum * > SHA256SUMS.txt 2>/dev/null || echo "No files to checksum"
+
+          # Create tarball
+          cd ..
+          tar -czvf formal-verification-experiments-${{ steps.version.outputs.VERSION }}.tar.gz release/
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.VERSION }}
+          name: ${{ steps.version.outputs.VERSION }}
+          body: |
+            ## Formal Verification Experiments ${{ steps.version.outputs.VERSION }}
+
+            This release contains experiments with formally verified systems programming:
+
+            ### Components
+
+            - **Verus Demo**: Verified Rust data structures and algorithms
+            - **seL4 Verified Components**: Formally verified seL4 microkernel components
+            - **Microkit Hello World**: AArch64 system image for QEMU
+
+            ### Artifacts
+
+            - `loader.img` - Bootable system image for QEMU AArch64
+            - `hello.elf` - Protection domain ELF binary
+            - `report.txt` - Build report with memory layout
+            - `SHA256SUMS.txt` - Checksums for verification
+
+            ### Running
+
+            ```bash
+            qemu-system-aarch64 \
+              -machine virt,virtualization=on \
+              -cpu cortex-a53 \
+              -m 2G \
+              -nographic \
+              -kernel loader.img
+            ```
+          files: |
+            formal-verification-experiments-${{ steps.version.outputs.VERSION }}.tar.gz
+            artifacts/microkit-aarch64/*
+          draft: false
+          prerelease: false
+
+  # Create/update rolling tip release (only on main branch push)
+  release-tip:
+    name: Update Tip Release
+    if: github.ref == 'refs/heads/main'
+    needs: [build-verus, build-verified, build-microkit]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Get commit info
+        id: commit
+        run: |
+          echo "SHA_SHORT=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+          echo "SHA_FULL=$(git rev-parse HEAD)" >> $GITHUB_OUTPUT
+          echo "DATE=$(date -u +'%Y-%m-%d %H:%M:%S UTC')" >> $GITHUB_OUTPUT
+
+      - name: Create release archive
+        run: |
+          mkdir -p release
+
+          # Copy microkit artifacts
+          cp -r artifacts/microkit-aarch64/* release/ || true
+
+          # Generate checksums
+          cd release
+          sha256sum * > SHA256SUMS.txt 2>/dev/null || echo "No files to checksum"
+
+          # Create tarball with commit hash
+          cd ..
+          tar -czvf formal-verification-experiments-tip-${{ steps.commit.outputs.SHA_SHORT }}.tar.gz release/
+
+      - name: Delete existing tip release
+        run: |
+          gh release delete tip --yes || true
+          git push origin :refs/tags/tip || true
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: Create tip release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: tip
+          name: "Development Build (tip)"
+          body: |
+            ## Latest Development Build
+
+            ⚠️ **This is an automated rolling release from the `main` branch.**
+
+            This release is updated automatically with every push to main. For stable releases, please use a versioned release (e.g., v0.0.1).
+
+            ### Build Info
+
+            - **Commit**: ${{ steps.commit.outputs.SHA_FULL }}
+            - **Short SHA**: ${{ steps.commit.outputs.SHA_SHORT }}
+            - **Built**: ${{ steps.commit.outputs.DATE }}
+
+            ### Components
+
+            - **Verus Demo**: Verified Rust data structures and algorithms
+            - **seL4 Verified Components**: Formally verified seL4 microkernel components
+            - **Microkit Hello World**: AArch64 system image for QEMU
+
+            ### Artifacts
+
+            - `loader.img` - Bootable system image for QEMU AArch64
+            - `hello.elf` - Protection domain ELF binary
+            - `report.txt` - Build report with memory layout
+            - `SHA256SUMS.txt` - Checksums for verification
+
+            ### Running
+
+            ```bash
+            qemu-system-aarch64 \
+              -machine virt,virtualization=on \
+              -cpu cortex-a53 \
+              -m 2G \
+              -nographic \
+              -kernel loader.img
+            ```
+          files: |
+            formal-verification-experiments-tip-${{ steps.commit.outputs.SHA_SHORT }}.tar.gz
+            artifacts/microkit-aarch64/*
+          draft: false
+          prerelease: true
