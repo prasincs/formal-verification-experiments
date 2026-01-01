@@ -20,6 +20,11 @@ RPI4_MEMORY ?= 4gb
 MICROKIT_BOARD := rpi4b_$(RPI4_MEMORY)
 MICROKIT_CONFIG := debug
 
+# Pinned versions for reproducible builds
+MICROKIT_VERSION := 2.1.0
+MICROKIT_SDK_SHA256 := faff1b6d6b546cbb0bfea134588499533130d406ae2a5e533e791ddf23ac7599
+RPI_FIRMWARE_TAG := 1.20250915
+
 # Detect OS for cross-compiler
 UNAME_S := $(shell uname -s)
 ifeq ($(UNAME_S),Darwin)
@@ -81,19 +86,19 @@ $(SYSTEM_IMAGE): $(PD_ELF) graphics.system | check
 	@echo "  System image: $@"
 	@echo "  Report: $(REPORT)"
 
-# Download Raspberry Pi firmware files
+# Download Raspberry Pi firmware files (pinned to specific tag)
 FIRMWARE_DIR := $(BUILD_DIR)/firmware
+FIRMWARE_BASE_URL := https://github.com/raspberrypi/firmware/raw/$(RPI_FIRMWARE_TAG)/boot
+
 $(FIRMWARE_DIR):
-	@echo "=== Downloading Raspberry Pi 4 Firmware ==="
+	@echo "=== Downloading Raspberry Pi 4 Firmware ($(RPI_FIRMWARE_TAG)) ==="
 	mkdir -p $@
-	# Download from official Raspberry Pi firmware repository
-	curl -L -o $@/start4.elf \
-		https://github.com/raspberrypi/firmware/raw/master/boot/start4.elf
-	curl -L -o $@/fixup4.dat \
-		https://github.com/raspberrypi/firmware/raw/master/boot/fixup4.dat
-	curl -L -o $@/bcm2711-rpi-4-b.dtb \
-		https://github.com/raspberrypi/firmware/raw/master/boot/bcm2711-rpi-4-b.dtb
+	# Download from official Raspberry Pi firmware repository (pinned tag)
+	curl -L -o $@/start4.elf $(FIRMWARE_BASE_URL)/start4.elf
+	curl -L -o $@/fixup4.dat $(FIRMWARE_BASE_URL)/fixup4.dat
+	curl -L -o $@/bcm2711-rpi-4-b.dtb $(FIRMWARE_BASE_URL)/bcm2711-rpi-4-b.dtb
 	@echo "Firmware downloaded to $@"
+	@echo "Note: Run 'sha256sum $@/*' to verify checksums"
 
 firmware: $(FIRMWARE_DIR)
 
@@ -198,13 +203,14 @@ check:
 	@echo "SDK: $(MICROKIT_SDK)"
 	@echo "Board: $(MICROKIT_BOARD)"
 
-# Download and set up Microkit SDK
+# Download and set up Microkit SDK with checksum verification
 setup:
-	@echo "=== Setting up Microkit SDK ==="
-	@echo "Downloading Microkit SDK 2.1.0..."
+	@echo "=== Setting up Microkit SDK $(MICROKIT_VERSION) ==="
 	mkdir -p $(MICROKIT_SDK)
 	curl -L -o /tmp/microkit-sdk.tar.gz \
-		https://github.com/seL4/microkit/releases/download/2.1.0/microkit-sdk-2.1.0-linux-x86-64.tar.gz
+		https://github.com/seL4/microkit/releases/download/$(MICROKIT_VERSION)/microkit-sdk-$(MICROKIT_VERSION)-linux-x86-64.tar.gz
+	@echo "Verifying SHA256 checksum..."
+	@echo "$(MICROKIT_SDK_SHA256)  /tmp/microkit-sdk.tar.gz" | sha256sum -c -
 	tar -xzf /tmp/microkit-sdk.tar.gz -C $(MICROKIT_SDK) --strip-components=1
 	rm /tmp/microkit-sdk.tar.gz
 	@echo "SDK installed at: $(MICROKIT_SDK)"

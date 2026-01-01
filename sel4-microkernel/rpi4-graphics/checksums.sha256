@@ -1,0 +1,14 @@
+# SHA256 checksums for pinned dependencies
+# These are verified during CI builds for reproducibility
+#
+# To update: download the file and run `sha256sum <file>`
+
+# Microkit SDK 2.1.0 (linux-x86-64)
+# Source: https://github.com/seL4/microkit/releases/download/2.1.0/microkit-sdk-2.1.0-linux-x86-64.tar.gz
+faff1b6d6b546cbb0bfea134588499533130d406ae2a5e533e791ddf23ac7599  microkit-sdk-2.1.0-linux-x86-64.tar.gz
+
+# Raspberry Pi Firmware (tag 1.20250915)
+# Source: https://github.com/raspberrypi/firmware/raw/1.20250915/boot/<file>
+# Note: These checksums need to be populated after first download
+#       Run: sha256sum start4.elf fixup4.dat bcm2711-rpi-4-b.dtb
+# FIRMWARE_TAG=1.20250915

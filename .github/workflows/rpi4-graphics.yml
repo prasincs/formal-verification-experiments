@@ -26,7 +26,10 @@ on:
         type: boolean
 
 env:
+  # Pinned versions for reproducible builds
   MICROKIT_VERSION: "2.1.0"
+  MICROKIT_SDK_SHA256: "faff1b6d6b546cbb0bfea134588499533130d406ae2a5e533e791ddf23ac7599"
+  RPI_FIRMWARE_TAG: "1.20250915"
   RPI4_MEMORY: ${{ github.event.inputs.rpi4_memory || '4gb' }}
 
 jobs:
@@ -65,6 +68,10 @@ jobs:
         run: |
           curl -L -o microkit-sdk.tar.gz \
             "https://github.com/seL4/microkit/releases/download/${{ env.MICROKIT_VERSION }}/microkit-sdk-${{ env.MICROKIT_VERSION }}-linux-x86-64.tar.gz"
+
+          # Verify SHA256 checksum
+          echo "${{ env.MICROKIT_SDK_SHA256 }}  microkit-sdk.tar.gz" | sha256sum -c -
+
           mkdir -p microkit-sdk
           tar -xzf microkit-sdk.tar.gz -C microkit-sdk --strip-components=1
           rm microkit-sdk.tar.gz
@@ -74,7 +81,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: sel4-microkernel/rpi4-graphics/build/firmware
-          key: rpi-firmware-v1
+          key: rpi-firmware-${{ env.RPI_FIRMWARE_TAG }}
 
       - name: Download Raspberry Pi firmware
         if: steps.cache-firmware.outputs.cache-hit != 'true'
@@ -174,6 +181,10 @@ jobs:
         run: |
           curl -L -o microkit-sdk.tar.gz \
             "https://github.com/seL4/microkit/releases/download/${{ env.MICROKIT_VERSION }}/microkit-sdk-${{ env.MICROKIT_VERSION }}-linux-x86-64.tar.gz"
+
+          # Verify SHA256 checksum
+          echo "${{ env.MICROKIT_SDK_SHA256 }}  microkit-sdk.tar.gz" | sha256sum -c -
+
           mkdir -p microkit-sdk
           tar -xzf microkit-sdk.tar.gz -C microkit-sdk --strip-components=1
           rm microkit-sdk.tar.gz
@@ -183,7 +194,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: sel4-microkernel/rpi4-graphics/build/firmware
-          key: rpi-firmware-v1
+          key: rpi-firmware-${{ env.RPI_FIRMWARE_TAG }}
 
       - name: Download Raspberry Pi firmware
         if: steps.cache-firmware.outputs.cache-hit != 'true'
