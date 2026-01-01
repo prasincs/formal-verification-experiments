@@ -2,7 +2,7 @@ name: Build RPi4 Graphics SD Card Image
 
 on:
   push:
-    branches: [main, 'claude/**']
+    branches: [main]
     paths:
       - 'sel4-microkernel/rpi4-graphics/**'
       - '.github/workflows/rpi4-graphics.yml'
