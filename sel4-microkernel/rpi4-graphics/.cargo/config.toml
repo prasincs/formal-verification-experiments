@@ -1,6 +1,9 @@
 [build]
 target = "aarch64-sel4-microkit"
 
+[env]
+RUST_TARGET_PATH = { value = "support/targets", relative = true }
+
 [target.aarch64-sel4-microkit]
 rustflags = [
     "-Cforce-frame-pointers=yes",
@@ -9,5 +12,6 @@ rustflags = [
 ]
 
 [unstable]
+unstable-options = true
 build-std = ["core", "alloc", "compiler_builtins"]
 build-std-features = ["compiler-builtins-mem"]

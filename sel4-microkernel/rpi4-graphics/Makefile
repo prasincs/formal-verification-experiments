@@ -44,7 +44,6 @@ SDCARD_IMG := $(BUILD_DIR)/rpi4-sel4-graphics.img
 
 # Environment
 export SEL4_INCLUDE_DIRS := $(SDK_BOARD)/include
-export RUST_TARGET_PATH := $(PWD)/support/targets
 
 .PHONY: all clean sdcard firmware check help
 
