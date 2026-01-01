@@ -10,7 +10,7 @@ cd "$SCRIPT_DIR"
 
 # Microkit SDK version and download URL
 # Check https://github.com/seL4/microkit/releases for latest
-MICROKIT_VERSION="1.4.1"
+MICROKIT_VERSION="2.1.0"
 MICROKIT_SDK_DIR="microkit-sdk"
 
 echo "==================================="
@@ -20,12 +20,34 @@ echo ""
 
 # Function to download Microkit SDK
 download_microkit_sdk() {
-    local os=$(uname -s | tr '[:upper:]' '[:lower:]')
+    local os_name=$(uname -s)
+    local arch=$(uname -m)
 
     echo "Downloading Microkit SDK v${MICROKIT_VERSION}..."
+    echo "Detected: $os_name / $arch"
 
-    # The SDK is distributed as a tarball from GitHub releases
-    local sdk_url="https://github.com/seL4/microkit/releases/download/${MICROKIT_VERSION}/microkit-sdk-${MICROKIT_VERSION}-${os}-x86_64.tar.gz"
+    # Determine the correct SDK URL based on OS and architecture
+    local sdk_url=""
+    case "$os_name" in
+        Darwin)
+            if [ "$arch" = "arm64" ]; then
+                sdk_url="https://github.com/seL4/microkit/releases/download/${MICROKIT_VERSION}/microkit-sdk-${MICROKIT_VERSION}-macos-aarch64.tar.gz"
+            else
+                sdk_url="https://github.com/seL4/microkit/releases/download/${MICROKIT_VERSION}/microkit-sdk-${MICROKIT_VERSION}-macos-x86-64.tar.gz"
+            fi
+            ;;
+        Linux)
+            sdk_url="https://github.com/seL4/microkit/releases/download/${MICROKIT_VERSION}/microkit-sdk-${MICROKIT_VERSION}-linux-x86-64.tar.gz"
+            ;;
+        *)
+            echo "Unsupported OS: $os_name"
+            echo "Trying to build from source..."
+            download_microkit_from_source
+            return
+            ;;
+    esac
+
+    echo "SDK URL: $sdk_url"
 
     if command -v wget &> /dev/null; then
         wget -q --show-progress -O microkit-sdk.tar.gz "$sdk_url" || {
@@ -108,9 +130,16 @@ check_prerequisites() {
         missing+=("qemu-system-aarch64")
     fi
 
-    # Check for cross-compilers
-    if ! command -v aarch64-linux-gnu-ld &> /dev/null; then
-        missing+=("aarch64-linux-gnu-gcc (cross compiler)")
+    # Check for cross-compilers (different names on macOS vs Linux)
+    local os_name=$(uname -s)
+    if [ "$os_name" = "Darwin" ]; then
+        if ! command -v aarch64-elf-ld &> /dev/null; then
+            missing+=("aarch64-elf-gcc (cross compiler)")
+        fi
+    else
+        if ! command -v aarch64-linux-gnu-ld &> /dev/null; then
+            missing+=("aarch64-linux-gnu-gcc (cross compiler)")
+        fi
     fi
 
     if [ ${#missing[@]} -gt 0 ]; then
@@ -120,9 +149,15 @@ check_prerequisites() {
             echo "  - $pkg"
         done
         echo ""
-        echo "Install with:"
-        echo "  sudo apt install qemu-system-arm qemu-system-misc gcc-aarch64-linux-gnu gcc-riscv64-linux-gnu"
-        echo "  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh"
+        if [ "$os_name" = "Darwin" ]; then
+            echo "Install with:"
+            echo "  brew install qemu aarch64-elf-gcc riscv64-elf-gcc"
+            echo "  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh"
+        else
+            echo "Install with:"
+            echo "  sudo apt install qemu-system-arm qemu-system-misc gcc-aarch64-linux-gnu gcc-riscv64-linux-gnu"
+            echo "  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh"
+        fi
         echo ""
     else
         echo "All prerequisites satisfied!"

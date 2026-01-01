@@ -20,7 +20,7 @@
         a single protection domain that prints "Hello" and demonstrates
         the seL4 formally verified kernel is running.
     -->
-    <protection_domain name="hello" priority="254" pp="true">
+    <protection_domain name="hello" priority="254">
         <program_image path="hello.elf" />
     </protection_domain>
 

@@ -13,20 +13,31 @@ ARCH ?= aarch64
 # Microkit SDK location (set by setup.sh)
 MICROKIT_SDK ?= $(PWD)/microkit-sdk
 
+# Detect OS for cross-compiler prefix
+# macOS (Darwin) uses aarch64-elf-, Linux uses aarch64-linux-gnu-
+UNAME_S := $(shell uname -s)
+ifeq ($(UNAME_S),Darwin)
+    AARCH64_PREFIX := aarch64-elf-
+    RISCV64_PREFIX := riscv64-elf-
+else
+    AARCH64_PREFIX := aarch64-linux-gnu-
+    RISCV64_PREFIX := riscv64-linux-gnu-
+endif
+
 # Board configuration
 ifeq ($(ARCH),aarch64)
     MICROKIT_BOARD := qemu_virt_aarch64
     MICROKIT_CONFIG := debug
-    RUST_TARGET := aarch64-unknown-none
-    CROSS_COMPILE := aarch64-linux-gnu-
+    TARGET_SPEC := support/targets/aarch64-sel4-microkit.json
+    CROSS_COMPILE := $(AARCH64_PREFIX)
     QEMU := qemu-system-aarch64
     QEMU_MACHINE := virt,virtualization=on
     QEMU_CPU := cortex-a53
 else ifeq ($(ARCH),riscv64)
     MICROKIT_BOARD := qemu_virt_riscv64
     MICROKIT_CONFIG := debug
-    RUST_TARGET := riscv64gc-unknown-none-elf
-    CROSS_COMPILE := riscv64-linux-gnu-
+    TARGET_SPEC := support/targets/riscv64gc-sel4-microkit.json
+    CROSS_COMPILE := $(RISCV64_PREFIX)
     QEMU := qemu-system-riscv64
     QEMU_MACHINE := virt
     QEMU_CPU := rv64
@@ -37,44 +48,42 @@ endif
 # Microkit tool
 MICROKIT_TOOL := $(MICROKIT_SDK)/bin/microkit
 
-# Output directories
+# Directories
 BUILD_DIR := build/$(ARCH)
-RUST_BUILD := target/$(RUST_TARGET)/release
-
-# Protection domain sources
-PD_NAME := hello
-PD_SRC := src/lib.rs
+SDK_LIB := $(MICROKIT_SDK)/board/$(MICROKIT_BOARD)/$(MICROKIT_CONFIG)/lib
+SDK_INCLUDE := $(MICROKIT_SDK)/board/$(MICROKIT_BOARD)/$(MICROKIT_CONFIG)/include
 
 # Output files
-PD_ELF := $(BUILD_DIR)/$(PD_NAME).elf
+PD_ELF := $(BUILD_DIR)/hello.elf
 SYSTEM_IMAGE := $(BUILD_DIR)/loader.img
 REPORT := $(BUILD_DIR)/report.txt
 
-# Compiler flags for Rust
-export RUSTFLAGS := -C link-arg=-T$(MICROKIT_SDK)/board/$(MICROKIT_BOARD)/$(MICROKIT_CONFIG)/pd.ld
+# Environment for cargo
+export SEL4_INCLUDE_DIRS := $(SDK_INCLUDE)
+
+# Note: sel4-microkit handles linking internally, no external linker script needed
 
 .PHONY: all clean run check
 
 all: $(SYSTEM_IMAGE)
 
+# Target name for cargo
+ifeq ($(ARCH),aarch64)
+    CARGO_TARGET := aarch64-sel4-microkit
+else ifeq ($(ARCH),riscv64)
+    CARGO_TARGET := riscv64gc-sel4-microkit
+endif
+
 # Build the Rust protection domain
-$(BUILD_DIR)/lib$(PD_NAME).a: $(PD_SRC) Cargo.toml
-	@mkdir -p $(BUILD_DIR)
+$(PD_ELF): src/main.rs Cargo.toml $(TARGET_SPEC) | $(BUILD_DIR)
 	@echo "Building Rust protection domain for $(ARCH)..."
 	cargo +nightly build \
 		--release \
-		--target $(RUST_TARGET) \
-		-Z build-std=core,alloc \
-		-Z build-std-features=compiler-builtins-mem
-	cp $(RUST_BUILD)/lib$(PD_NAME).a $@
+		--target $(CARGO_TARGET)
+	cp target/$(CARGO_TARGET)/release/hello.elf $@
 
-# Link the protection domain ELF
-$(PD_ELF): $(BUILD_DIR)/lib$(PD_NAME).a
-	@echo "Linking protection domain..."
-	$(CROSS_COMPILE)ld \
-		-T$(MICROKIT_SDK)/board/$(MICROKIT_BOARD)/$(MICROKIT_CONFIG)/pd.ld \
-		$(BUILD_DIR)/lib$(PD_NAME).a \
-		-o $@
+$(BUILD_DIR):
+	mkdir -p $@
 
 # Build the system image using Microkit tool
 $(SYSTEM_IMAGE): $(PD_ELF) hello.system

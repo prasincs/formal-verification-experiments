@@ -13,9 +13,7 @@
 #![no_std]
 #![no_main]
 
-use sel4_microkit::{
-    debug_print, debug_println, protection_domain, Channel, Handler, Infallible, MessageInfo,
-};
+use sel4_microkit::{debug_println, protection_domain, Handler, Infallible};
 
 use verus_builtin_macros::verus;
 
@@ -130,84 +128,57 @@ impl HelloPd {
 
 impl Handler for HelloPd {
     type Error = Infallible;
-
-    /// Called once when the protection domain starts
-    fn init(&mut self) -> Result<(), Self::Error> {
-        debug_println!("========================================");
-        debug_println!("  seL4 Microkit - Formally Verified OS  ");
-        debug_println!("========================================");
-        debug_println!();
-        debug_println!("Protection Domain 'hello' initialized!");
-        debug_println!();
-        debug_println!("This system is running on seL4, the world's");
-        debug_println!("most secure operating system kernel.");
-        debug_println!();
-        debug_println!("Verification guarantees:");
-        debug_println!("  - Functional correctness (C matches spec)");
-        debug_println!("  - Binary verification (ARM: binary matches C)");
-        debug_println!("  - Security: integrity, confidentiality");
-        debug_println!("  - Availability: kernel cannot crash");
-        debug_println!();
-
-        // Demonstrate verified capability system
-        debug_println!("Demonstrating verified capability derivation:");
-        let parent = Capability {
-            rights: RIGHT_READ | RIGHT_WRITE | RIGHT_GRANT,
-        };
-        debug_println!("  Parent capability: read, write, grant");
-
-        let child = parent.derive(RIGHT_READ | RIGHT_WRITE);
-        debug_println!("  Child capability (derived): read, write");
-        debug_println!(
-            "  Child can read: {}",
-            child.check_right(RIGHT_READ)
-        );
-        debug_println!(
-            "  Child can grant: {}",
-            child.check_right(RIGHT_GRANT)
-        );
-        debug_println!();
-
-        // Demonstrate verified counter
-        debug_println!("Demonstrating verified counter (overflow-safe):");
-        for _ in 0..5 {
-            self.counter.increment();
-        }
-        debug_println!("  Counter value after 5 increments: {}", self.counter.get());
-        debug_println!();
-
-        debug_println!("System ready. Waiting for notifications...");
-        debug_println!();
-
-        Ok(())
-    }
-
-    /// Called when a notification is received on a channel
-    fn notified(&mut self, channel: Channel) -> Result<(), Self::Error> {
-        debug_println!("Received notification on channel: {}", channel.index());
-        self.counter.increment();
-        debug_println!("Counter: {}", self.counter.get());
-        Ok(())
-    }
-
-    /// Called when a protected procedure call is received
-    fn protected(
-        &mut self,
-        channel: Channel,
-        msg_info: MessageInfo,
-    ) -> Result<MessageInfo, Self::Error> {
-        debug_println!(
-            "Protected call on channel {} with {} words",
-            channel.index(),
-            msg_info.count()
-        );
-        // Echo back the same message info
-        Ok(msg_info)
-    }
 }
 
 // Declare this as a Microkit protection domain
 #[protection_domain]
-fn init() -> impl Handler {
-    HelloPd::new()
+fn init() -> HelloPd {
+    debug_println!("========================================");
+    debug_println!("  seL4 Microkit - Formally Verified OS  ");
+    debug_println!("========================================");
+    debug_println!();
+    debug_println!("Protection Domain 'hello' initialized!");
+    debug_println!();
+    debug_println!("This system is running on seL4, the world's");
+    debug_println!("most secure operating system kernel.");
+    debug_println!();
+    debug_println!("Verification guarantees:");
+    debug_println!("  - Functional correctness (C matches spec)");
+    debug_println!("  - Binary verification (ARM: binary matches C)");
+    debug_println!("  - Security: integrity, confidentiality");
+    debug_println!("  - Availability: kernel cannot crash");
+    debug_println!();
+
+    // Demonstrate verified capability system
+    debug_println!("Demonstrating verified capability derivation:");
+    let parent = Capability {
+        rights: RIGHT_READ | RIGHT_WRITE | RIGHT_GRANT,
+    };
+    debug_println!("  Parent capability: read, write, grant");
+
+    let child = parent.derive(RIGHT_READ | RIGHT_WRITE);
+    debug_println!("  Child capability (derived): read, write");
+    debug_println!(
+        "  Child can read: {}",
+        child.check_right(RIGHT_READ)
+    );
+    debug_println!(
+        "  Child can grant: {}",
+        child.check_right(RIGHT_GRANT)
+    );
+    debug_println!();
+
+    // Demonstrate verified counter
+    let mut pd = HelloPd::new();
+    debug_println!("Demonstrating verified counter (overflow-safe):");
+    for _ in 0..5 {
+        pd.counter.increment();
+    }
+    debug_println!("  Counter value after 5 increments: {}", pd.counter.get());
+    debug_println!();
+
+    debug_println!("System ready.");
+    debug_println!();
+
+    pd
 }

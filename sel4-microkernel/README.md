@@ -22,9 +22,11 @@ A bootable, formally verified operating system using seL4 and Microkit.
 ```
 sel4-microkernel/
 ├── microkit-hello/           # Microkit system (AArch64 + RISC-V)
-│   ├── src/                  # Rust protection domain code
-│   ├── hello.system          # System XML configuration
-│   └── Makefile
+│   ├── src/main.rs           # Rust protection domain with Verus specs
+│   ├── hello.system          # System description
+│   ├── Makefile              # Build system (macOS/Linux)
+│   ├── setup.sh              # SDK download script
+│   └── support/targets/      # Rust target specifications
 ├── sel4-x86_64/              # seL4 for x86_64 (no Microkit support)
 │   ├── src/                  # Rust rootserver
 │   └── scripts/
@@ -37,46 +39,37 @@ sel4-microkernel/
 
 ### Prerequisites
 
+**macOS:**
 ```bash
-# 1. Install Rust nightly with required components
+brew install qemu aarch64-elf-gcc riscv64-elf-gcc
 rustup install nightly
-rustup target add aarch64-unknown-none --toolchain nightly
-rustup target add riscv64gc-unknown-none-elf --toolchain nightly
 rustup component add rust-src --toolchain nightly
-
-# 2. Install build dependencies
-sudo apt update
-sudo apt install -y \
-    build-essential \
-    python3-pip \
-    qemu-system-arm \
-    qemu-system-misc \
-    qemu-system-x86 \
-    gcc-aarch64-linux-gnu \
-    gcc-riscv64-linux-gnu
-
-# 3. Install Microkit SDK (see setup.sh for automated download)
 ```
 
-### Build and Boot (AArch64)
+**Linux:**
+```bash
+sudo apt install qemu-system-arm qemu-system-misc \
+    gcc-aarch64-linux-gnu gcc-riscv64-linux-gnu
+rustup install nightly
+rustup component add rust-src --toolchain nightly
+```
+
+### Microkit (AArch64 / RISC-V)
 
 ```bash
 cd microkit-hello
-./setup.sh                    # Download Microkit SDK
-make ARCH=aarch64            # Build system
-./run-qemu.sh aarch64        # Boot in QEMU
+./setup.sh                   # Download Microkit SDK 2.1.0
+
+make ARCH=aarch64            # Build for ARM64
+make run ARCH=aarch64        # Boot in QEMU
+
+make ARCH=riscv64            # Build for RISC-V
+make run ARCH=riscv64        # Boot in QEMU
 ```
 
-### Build and Boot (RISC-V)
+Press `Ctrl-A X` to exit QEMU.
 
-```bash
-cd microkit-hello
-./setup.sh
-make ARCH=riscv64
-./run-qemu.sh riscv64
-```
-
-### Build and Boot (x86_64)
+### seL4 Direct (x86_64)
 
 ```bash
 cd sel4-x86_64
