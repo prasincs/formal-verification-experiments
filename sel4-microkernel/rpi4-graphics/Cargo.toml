@@ -1,0 +1,32 @@
+[package]
+name = "rpi4-graphics"
+version = "0.1.0"
+edition = "2021"
+authors = ["Prasanna Gautam"]
+description = "seL4 Microkit graphics demo for Raspberry Pi 4"
+license = "MIT"
+
+[lib]
+name = "rpi4_graphics"
+path = "src/lib.rs"
+crate-type = ["staticlib"]
+
+[[bin]]
+name = "graphics_pd"
+path = "src/main.rs"
+
+[dependencies]
+sel4-microkit = "0.1"
+
+[build-dependencies]
+sel4-microkit-build = "0.1"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+debug = false
+panic = "abort"
+
+[profile.dev]
+panic = "abort"

@@ -613,7 +613,7 @@ rpi-eeprom-digest --sign kernel8.img private.pem
 vcmailbox 0x00038044  # Enable secure boot in OTP
 ```
 
-### Limitations
+### Limitations (Without TPM)
 
 | Limitation | Impact | Mitigation |
 |------------|--------|------------|
@@ -622,11 +622,212 @@ vcmailbox 0x00038044  # Enable secure boot in OTP
 | No measured boot | Cannot detect runtime tampering | Rely on seL4 isolation |
 | OTP is permanent | Cannot recover if keys lost | Test thoroughly before programming |
 
+## TPM 2.0 Integration (ST33KTPM2I3WBZA9)
+
+Adding an ST33K TPM 2.0 chip enables **measured boot** and **remote attestation**.
+
+### Hardware Connection
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         TPM 2.0 HARDWARE SETUP                               │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│   Raspberry Pi 4 GPIO Header              ST33KTPM2I3WBZA9                  │
+│   ┌─────────────────────────┐            ┌─────────────────┐               │
+│   │  Pin 19 (GPIO 10) MOSI  │───────────→│ MOSI            │               │
+│   │  Pin 21 (GPIO 9)  MISO  │←───────────│ MISO            │               │
+│   │  Pin 23 (GPIO 11) SCLK  │───────────→│ SCLK            │               │
+│   │  Pin 24 (GPIO 8)  CE0   │───────────→│ CS              │               │
+│   │  Pin 18 (GPIO 24) RST   │───────────→│ RST (optional)  │               │
+│   │  Pin 1          3.3V    │───────────→│ VCC (3.3V)      │               │
+│   │  Pin 6          GND     │───────────→│ GND             │               │
+│   └─────────────────────────┘            └─────────────────┘               │
+│                                                                             │
+│   SPI Configuration:                                                        │
+│   - Mode: 0 (CPOL=0, CPHA=0)                                               │
+│   - Speed: 10 MHz max                                                       │
+│   - Chip Select: Active Low                                                 │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Measured Boot Flow
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         MEASURED BOOT WITH TPM                               │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│   BOOT STAGE              MEASUREMENT                    PCR                │
+│   ──────────              ───────────                    ───                │
+│                                                                             │
+│   ┌────────────────┐                                                        │
+│   │  Boot ROM      │─────→ (not measured - root of trust)                  │
+│   └───────┬────────┘                                                        │
+│           ▼                                                                 │
+│   ┌────────────────┐      SHA256(bootcode.bin)                             │
+│   │  bootcode.bin  │─────→ TPM2_PCR_Extend ─────→ PCR[0] (Firmware)        │
+│   └───────┬────────┘                                                        │
+│           ▼                                                                 │
+│   ┌────────────────┐      SHA256(start4.elf)                               │
+│   │  start4.elf    │─────→ TPM2_PCR_Extend ─────→ PCR[0] (Firmware)        │
+│   └───────┬────────┘                                                        │
+│           ▼                                                                 │
+│   ┌────────────────┐      SHA256(kernel8.img)                              │
+│   │  seL4 Kernel   │─────→ TPM2_PCR_Extend ─────→ PCR[1] (Kernel)          │
+│   └───────┬────────┘                                                        │
+│           ▼                                                                 │
+│   ┌────────────────┐      SHA256(system config)                            │
+│   │  Microkit      │─────→ TPM2_PCR_Extend ─────→ PCR[2] (System)          │
+│   └───────┬────────┘                                                        │
+│           ▼                                                                 │
+│   ┌────────────────┐      SHA256(PD images)                                │
+│   │  Protection    │─────→ TPM2_PCR_Extend ─────→ PCR[3] (PDs)             │
+│   │  Domains       │                                                        │
+│   └────────────────┘                                                        │
+│                                                                             │
+│   Final PCR State = Hash chain of all boot components                      │
+│   Any modification → Different PCR values → Attestation fails              │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Remote Attestation Protocol
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                       REMOTE ATTESTATION FLOW                                │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│   DEVICE (seL4 + TPM)                    VERIFIER (Attestation Server)     │
+│   ───────────────────                    ─────────────────────────────     │
+│                                                                             │
+│   1. Boot with measured chain                                               │
+│      PCR[0..7] contain measurements                                         │
+│                                                                             │
+│                              ←────────── 2. Challenge (nonce)               │
+│                                             Random value to prevent replay │
+│                                                                             │
+│   3. Generate Quote                                                         │
+│      TPM2_Quote(                                                            │
+│        AK,              // Attestation Key (TPM-bound)                     │
+│        PCR_Selection,   // Which PCRs to include                           │
+│        nonce            // Verifier's challenge                            │
+│      )                                                                      │
+│                                                                             │
+│   4. Quote Response ─────────────────→                                      │
+│      {                                                                      │
+│        pcr_values: [...],                                                  │
+│        signature: Sign_AK(pcr_values || nonce),                            │
+│        ak_cert: TPM_Certificate                                            │
+│      }                                                                      │
+│                                                                             │
+│                                          5. Verify Quote                    │
+│                                             a. Verify AK cert chain        │
+│                                             b. Verify signature            │
+│                                             c. Check nonce matches         │
+│                                             d. Compare PCRs to policy      │
+│                                                                             │
+│                              ←────────── 6. Attestation Result              │
+│                                             PASS: Device is trusted        │
+│                                             FAIL: Device compromised       │
+│                                                                             │
+│                                          7. (Optional) Provision secrets   │
+│                                             Only if attestation passed     │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### TPM Driver Integration
+
+```rust
+/// PCR indices for measured boot
+pub mod pcr {
+    pub const FIRMWARE: usize = 0;    // bootcode.bin, start4.elf
+    pub const KERNEL: usize = 1;      // seL4 kernel
+    pub const SYSTEM: usize = 2;      // Microkit config
+    pub const PD: usize = 3;          // Protection Domain images
+    pub const RUNTIME: usize = 4;     // Runtime measurements
+}
+
+/// Measured boot sequence
+pub fn measured_boot(tpm: &mut Tpm) -> Result<(), TpmError> {
+    // Each component extends its measurement into the appropriate PCR
+    tpm.pcr_extend(pcr::KERNEL, &sha256(kernel_image))?;
+    tpm.pcr_extend(pcr::SYSTEM, &sha256(system_config))?;
+    tpm.pcr_extend(pcr::PD, &sha256(graphics_pd))?;
+    Ok(())
+}
+
+/// Generate attestation quote for remote verifier
+pub fn generate_quote(
+    tpm: &mut Tpm,
+    nonce: &[u8; 32],
+    pcr_selection: &[usize],
+) -> Result<Quote, TpmError> {
+    // TPM signs PCR values with Attestation Key
+    tpm.quote(nonce, pcr_selection)
+}
+```
+
+### Verification Boundaries with TPM
+
+| Component | Verification | TPM Measurement |
+|-----------|--------------|-----------------|
+| seL4 kernel | ✅ Isabelle/HOL | ✅ PCR[1] |
+| Microkit | ✅ Design verified | ✅ PCR[2] |
+| Graphics PD | 🔄 Verus (planned) | ✅ PCR[3] |
+| TPM driver | ⚠️ Trusted | N/A (measures others) |
+| VideoCore firmware | ❌ Closed | ✅ PCR[0] |
+| Boot ROM | ❌ Closed | Root of trust |
+
+### What TPM 2.0 Enables
+
+| Capability | Without TPM | With ST33K TPM |
+|------------|-------------|----------------|
+| Measured boot | ❌ | ✅ All boot stages hashed |
+| Remote attestation | ❌ | ✅ Cryptographic proof of state |
+| Sealed secrets | ❌ | ✅ Keys bound to PCR state |
+| Anti-rollback | ❌ | ✅ Monotonic counters |
+| Random numbers | Pseudo-random | ✅ Hardware RNG |
+| Device identity | Board serial only | ✅ Unique EK certificate |
+
+### Device Tree Overlay for TPM
+
+```dts
+// tpm-st33.dtso - Device tree overlay for ST33K TPM
+/dts-v1/;
+/plugin/;
+
+/ {
+    compatible = "brcm,bcm2711";
+
+    fragment@0 {
+        target = <&spi0>;
+        __overlay__ {
+            status = "okay";
+            #address-cells = <1>;
+            #size-cells = <0>;
+
+            tpm: tpm@0 {
+                compatible = "st,st33htpm-spi", "tcg,tpm_tis-spi";
+                reg = <0>;
+                spi-max-frequency = <10000000>;
+                status = "okay";
+            };
+        };
+    };
+};
+```
+
 ## References
 
 - [seL4 Raspberry Pi 4 Docs](https://docs.sel4.systems/Hardware/Rpi4.html)
 - [Raspberry Pi Mailbox Interface](https://github.com/raspberrypi/firmware/wiki/Mailbox-property-interface)
 - [Raspberry Pi Secure Boot](https://github.com/raspberrypi/usbboot/blob/master/secure-boot-recovery/README.md)
+- [ST33K TPM Application Note](https://www.st.com/resource/en/application_note/an5714-integrating-the-st33tphf2xspi-and-st33tphf2xi2c-trusted-platform-modules-with-linux-stmicroelectronics.pdf)
+- [STPM4RasPI Extension Board](https://www.st.com/resource/en/data_brief/stpm4raspi.pdf)
 - [BCM2711 Peripherals](https://datasheets.raspberrypi.com/bcm2711/bcm2711-peripherals.pdf)
 - [RPi4 Bare Metal Framebuffer](https://www.rpi4os.com/part5-framebuffer/)
 - [Verus Lang](https://github.com/verus-lang/verus)

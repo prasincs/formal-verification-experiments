@@ -1,0 +1,13 @@
+[build]
+target = "aarch64-sel4-microkit"
+
+[target.aarch64-sel4-microkit]
+rustflags = [
+    "-Cforce-frame-pointers=yes",
+    "-Cembed-bitcode=yes",
+    "-Clto=fat",
+]
+
+[unstable]
+build-std = ["core", "alloc", "compiler_builtins"]
+build-std-features = ["compiler-builtins-mem"]
