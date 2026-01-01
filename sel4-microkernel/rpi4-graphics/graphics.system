@@ -17,7 +17,7 @@
 
         The mailbox is at physical address 0xFE00B880 (BCM2711).
     -->
-    <protection_domain name="graphics" priority="254" pp="true">
+    <protection_domain name="graphics" priority="254">
         <program_image path="graphics_pd.elf" />
 
         <!--
