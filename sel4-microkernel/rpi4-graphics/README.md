@@ -172,6 +172,8 @@ make RPI4_MEMORY=8gb   # For 8GB model
 |-----------|--------------|
 | seL4 kernel | ✅ Isabelle/HOL (binary proof for ARM) |
 | Microkit framework | ✅ Designed for verified systems |
+| SHA-256 | ✅ RustCrypto sha2 (audited) |
+| Constant-time compare | ✅ Verus-verified (timing-safe) |
 | Framebuffer driver | ⚠️ Trusted (hardware interface) |
 | Graphics primitives | 🔄 Verus specs planned |
 | TPM driver | ⚠️ Trusted (hardware interface) |
