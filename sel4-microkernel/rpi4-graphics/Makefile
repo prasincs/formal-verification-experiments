@@ -24,6 +24,7 @@ MICROKIT_CONFIG := debug
 MICROKIT_VERSION := 2.1.0
 MICROKIT_SDK_SHA256 := faff1b6d6b546cbb0bfea134588499533130d406ae2a5e533e791ddf23ac7599
 RPI_FIRMWARE_TAG := 1.20250915
+UBOOT_VERSION := v2025.10
 
 # Detect OS for cross-compiler
 UNAME_S := $(shell uname -s)
@@ -41,6 +42,10 @@ CARGO := cargo +nightly
 BUILD_DIR := build
 SDK_BOARD := $(MICROKIT_SDK)/board/$(MICROKIT_BOARD)/$(MICROKIT_CONFIG)
 
+# U-Boot submodule directory (must be after BUILD_DIR)
+UBOOT_DIR := vendor/u-boot
+UBOOT_BIN := $(BUILD_DIR)/u-boot.bin
+
 # Output files
 PD_ELF := $(BUILD_DIR)/graphics_pd.elf
 SYSTEM_IMAGE := $(BUILD_DIR)/loader.img
@@ -50,7 +55,7 @@ SDCARD_IMG := $(BUILD_DIR)/rpi4-sel4-graphics.img
 # Environment
 export SEL4_INCLUDE_DIRS := $(SDK_BOARD)/include
 
-.PHONY: all clean sdcard firmware check help
+.PHONY: all clean sdcard firmware check help uboot
 
 all: $(SYSTEM_IMAGE)
 
@@ -103,6 +108,21 @@ $(FIRMWARE_DIR):
 	@echo "Note: Run 'sha256sum $@/*' to verify checksums"
 
 firmware: $(FIRMWARE_DIR)
+
+# Build U-Boot from submodule (pinned to $(UBOOT_VERSION))
+$(UBOOT_BIN): | $(BUILD_DIR)
+	@echo "=== Building U-Boot $(UBOOT_VERSION) for Raspberry Pi 4 ==="
+	@if [ ! -d "$(UBOOT_DIR)/.git" ]; then \
+		echo "Initializing U-Boot submodule..."; \
+		git submodule update --init $(UBOOT_DIR); \
+	fi
+	cd $(UBOOT_DIR) && git checkout $(UBOOT_VERSION)
+	$(MAKE) -C $(UBOOT_DIR) CROSS_COMPILE=$(CROSS_COMPILE) rpi_4_defconfig
+	$(MAKE) -C $(UBOOT_DIR) CROSS_COMPILE=$(CROSS_COMPILE) -j$$(nproc)
+	cp $(UBOOT_DIR)/u-boot.bin $@
+	@echo "U-Boot built: $@"
+
+uboot: $(UBOOT_BIN)
 
 # Create config.txt for Raspberry Pi
 $(BUILD_DIR)/config.txt:
@@ -214,6 +234,7 @@ help:
 	@echo "  make sdcard         Create bootable SD card image"
 	@echo "  make bootfiles      Create boot files directory (no root required)"
 	@echo "  make firmware       Download Raspberry Pi firmware"
+	@echo "  make uboot          Build U-Boot bootloader from submodule"
 	@echo "  make setup          Download Microkit SDK"
 	@echo "  make check          Verify prerequisites"
 	@echo "  make clean          Clean build artifacts"

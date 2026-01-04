@@ -103,14 +103,13 @@ if [[ ! -f "$BUILD_DIR/loader.img" ]]; then
 fi
 
 if [[ "$USE_UBOOT" == true && ! -f "$BUILD_DIR/u-boot.bin" ]]; then
-    echo "Error: $BUILD_DIR/u-boot.bin not found."
-    echo "Build U-Boot with:"
-    echo "  git clone --depth 1 https://github.com/u-boot/u-boot.git /tmp/u-boot"
-    echo "  cd /tmp/u-boot"
-    echo "  make CROSS_COMPILE=aarch64-linux-gnu- rpi_4_defconfig"
-    echo "  make CROSS_COMPILE=aarch64-linux-gnu- -j\$(nproc)"
-    echo "  cp u-boot.bin $BUILD_DIR/"
-    exit 1
+    echo "U-Boot not found. Building from submodule..."
+    make -C "$PROJECT_DIR" uboot
+    if [[ ! -f "$BUILD_DIR/u-boot.bin" ]]; then
+        echo "Error: Failed to build U-Boot."
+        echo "You can also build manually with: make uboot"
+        exit 1
+    fi
 fi
 
 # Download firmware files

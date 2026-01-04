@@ -1,0 +1,3 @@
+[submodule "sel4-microkernel/rpi4-graphics/vendor/u-boot"]
+	path = sel4-microkernel/rpi4-graphics/vendor/u-boot
+	url = https://github.com/u-boot/u-boot.git
