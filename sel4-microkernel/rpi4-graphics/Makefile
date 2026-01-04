@@ -4,7 +4,9 @@
 #
 # Usage:
 #   make                  # Build everything
-#   make sdcard           # Create bootable SD card image
+#   make sdcard           # Create bootable SD card image (direct boot)
+#   make sdcard-uboot     # Build + create SD card with U-Boot & bootelf
+#   make elf              # Build loader.elf for bootelf command
 #   make clean            # Clean build artifacts
 #
 # Prerequisites:
@@ -55,7 +57,7 @@ SDCARD_IMG := $(BUILD_DIR)/rpi4-sel4-graphics.img
 # Environment
 export SEL4_INCLUDE_DIRS := $(SDK_BOARD)/include
 
-.PHONY: all clean sdcard firmware check help uboot
+.PHONY: all clean sdcard sdcard-uboot firmware check help uboot elf
 
 all: $(SYSTEM_IMAGE)
 
@@ -188,6 +190,11 @@ $(SDCARD_IMG): $(SYSTEM_IMAGE) $(FIRMWARE_DIR) $(BUILD_DIR)/config.txt
 	@echo "  - Select 'Use custom' and choose: $@"
 
 sdcard: $(SDCARD_IMG)
+
+# Build everything and create SD card with U-Boot + bootelf support
+sdcard-uboot: $(SYSTEM_IMAGE) $(LOADER_ELF) uboot
+	@echo "=== Creating SD Card Image with U-Boot ==="
+	./scripts/create-sdcard-full.sh --uboot
 
 # Alternative: Create a directory with all boot files (no root required)
 bootfiles: $(SYSTEM_IMAGE) $(FIRMWARE_DIR) $(BUILD_DIR)/config.txt
