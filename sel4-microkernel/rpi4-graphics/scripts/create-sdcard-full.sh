@@ -201,11 +201,16 @@ arm_64bit=1
 kernel=loader.img
 kernel_address=0x10000000
 
-# Display
+# Display - pre-configure framebuffer for seL4
 hdmi_force_hotplug=1
 disable_overscan=1
-dtoverlay=vc4-kms-v3d
-max_framebuffers=2
+hdmi_group=1
+hdmi_mode=4
+
+# Pre-allocate framebuffer at boot (seL4 will use this directly)
+framebuffer_width=1280
+framebuffer_height=720
+framebuffer_depth=32
 
 # GPU memory
 gpu_mem=64

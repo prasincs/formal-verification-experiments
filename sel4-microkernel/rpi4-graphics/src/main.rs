@@ -348,42 +348,207 @@ impl Handler for GraphicsHandler {
 
 #[protection_domain]
 fn init() -> impl Handler {
-    // FIRST THING: Write to framebuffer to prove we're running
-    // Do this before ANY other code that might crash
-    unsafe {
-        let fb = 0x5_0001_0000 as *mut u32;
-        // Fill top-left corner with RED (should be very visible)
-        for i in 0..10000 {
-            fb.add(i).write_volatile(0xFFFF0000); // Red in ARGB
-        }
-    }
-
     debug_println!("");
     debug_println!("=====================================");
     debug_println!("  seL4 Microkit Graphics Demo");
     debug_println!("  Raspberry Pi 4");
     debug_println!("=====================================");
-    debug_println!("");
 
-    // More drawing after basic proof
-    draw_prasincs_ascii();
+    // First, blink the activity LED to prove we're running
+    // RPi4 activity LED is directly controllable via GPIO 42
+    blink_activity_led();
 
-    let mut handler = GraphicsHandler::new();
+    // Then try framebuffer
+    draw_to_framebuffer();
 
-    // Skip complex init for now
-    // handler.init_framebuffer();
-    // handler.draw_architecture_diagram();
-    // handler.draw_crypto_verification();
+    debug_println!("Init complete!");
 
-    debug_println!("");
-    debug_println!("Graphics PD initialized. Entering event loop...");
+    // Keep running
+    GraphicsHandler::new()
+}
 
-    // Spin forever to keep display alive
-    loop {
-        core::hint::spin_loop();
+/// Blink the activity LED in morse code to prove seL4 is running
+/// GPIO 42 controls the green activity LED on RPi4
+/// Blinks "SEL4" in morse code:
+///   S: ...    (dit dit dit)
+///   E: .      (dit)
+///   L: .-..   (dit dah dit dit)
+///   4: ....-  (dit dit dit dit dah)
+fn blink_activity_led() {
+    debug_println!("Blinking 'SEL4' in morse code on activity LED...");
+
+    // GPIO virtual address (mapped in graphics.system)
+    const GPIO_BASE: usize = 0x5_0200_0000;
+
+    // GPIO 42 is the activity LED on RPi4
+    const GPFSEL4: usize = GPIO_BASE + 0x10;
+    const GPSET1: usize = GPIO_BASE + 0x20;
+    const GPCLR1: usize = GPIO_BASE + 0x2C;
+
+    // Timing constants (in spin loop iterations)
+    // ~200ms per unit at 1.5GHz
+    const UNIT: u32 = 2_000_000;
+    const DIT: u32 = UNIT;           // 1 unit
+    const DAH: u32 = UNIT * 3;       // 3 units
+    const ELEMENT_GAP: u32 = UNIT;   // 1 unit between elements
+    const LETTER_GAP: u32 = UNIT * 3; // 3 units between letters
+
+    unsafe {
+        core::arch::asm!("dsb sy");
+
+        // Set GPIO 42 as output (function select bits 6-8 in GPFSEL4)
+        let gpfsel4 = GPFSEL4 as *mut u32;
+        let mut val = gpfsel4.read_volatile();
+        val &= !(7 << 6);  // Clear bits 6-8
+        val |= 1 << 6;     // Set as output (001)
+        gpfsel4.write_volatile(val);
+
+        core::arch::asm!("dsb sy");
+
+        let led_on = || {
+            (GPSET1 as *mut u32).write_volatile(1 << 10);
+        };
+
+        let led_off = || {
+            (GPCLR1 as *mut u32).write_volatile(1 << 10);
+        };
+
+        let delay = |count: u32| {
+            for _ in 0..count {
+                core::hint::spin_loop();
+            }
+        };
+
+        let dit = || {
+            led_on();
+            delay(DIT);
+            led_off();
+            delay(ELEMENT_GAP);
+        };
+
+        let dah = || {
+            led_on();
+            delay(DAH);
+            led_off();
+            delay(ELEMENT_GAP);
+        };
+
+        let letter_space = || {
+            delay(LETTER_GAP - ELEMENT_GAP); // Already waited ELEMENT_GAP after last element
+        };
+
+        // Loop "SEL4" twice so it's unmistakable
+        for round in 0..2 {
+            debug_println!("Morse round {} of 2", round + 1);
+
+            // S: dit dit dit
+            debug_println!("  S: ...");
+            dit(); dit(); dit();
+            letter_space();
+
+            // E: dit
+            debug_println!("  E: .");
+            dit();
+            letter_space();
+
+            // L: dit dah dit dit
+            debug_println!("  L: .-..");
+            dit(); dah(); dit(); dit();
+            letter_space();
+
+            // 4: dit dit dit dit dah
+            debug_println!("  4: ....-");
+            dit(); dit(); dit(); dit(); dah();
+
+            // Longer pause between repetitions
+            delay(UNIT * 7);
+        }
+
+        core::arch::asm!("dsb sy");
     }
 
-    handler
+    debug_println!("Morse code complete! SEL4 SEL4");
+}
+
+/// Write directly to the pre-configured framebuffer
+fn draw_to_framebuffer() {
+    debug_println!("Writing to framebuffer at vaddr 0x5_0001_0000...");
+
+    unsafe {
+        // Memory barrier before device access
+        core::arch::asm!("dsb sy");
+
+        let fb = rpi4_graphics::FRAMEBUFFER_VIRT_BASE as *mut u32;
+        let width: usize = 1280;
+        let height: usize = 720;
+
+        // Fill entire screen with seL4 green
+        let sel4_green: u32 = 0xFF00B050;
+        for y in 0..height {
+            for x in 0..width {
+                fb.add(y * width + x).write_volatile(sel4_green);
+            }
+        }
+
+        // Draw a white border
+        let white: u32 = 0xFFFFFFFF;
+        for x in 0..width {
+            fb.add(x).write_volatile(white);                    // Top
+            fb.add((height - 1) * width + x).write_volatile(white); // Bottom
+        }
+        for y in 0..height {
+            fb.add(y * width).write_volatile(white);            // Left
+            fb.add(y * width + width - 1).write_volatile(white); // Right
+        }
+
+        // Draw "SEL4" in big block letters (center of screen)
+        let block_color: u32 = 0xFFFFFFFF;
+        let start_x = 400;
+        let start_y = 250;
+        let block_size = 20;
+
+        // S
+        draw_block(fb, width, start_x, start_y, block_size * 3, block_size, block_color);
+        draw_block(fb, width, start_x, start_y + block_size, block_size, block_size, block_color);
+        draw_block(fb, width, start_x, start_y + block_size * 2, block_size * 3, block_size, block_color);
+        draw_block(fb, width, start_x + block_size * 2, start_y + block_size * 3, block_size, block_size, block_color);
+        draw_block(fb, width, start_x, start_y + block_size * 4, block_size * 3, block_size, block_color);
+
+        // E
+        let e_x = start_x + block_size * 5;
+        draw_block(fb, width, e_x, start_y, block_size * 3, block_size, block_color);
+        draw_block(fb, width, e_x, start_y + block_size, block_size, block_size, block_color);
+        draw_block(fb, width, e_x, start_y + block_size * 2, block_size * 2, block_size, block_color);
+        draw_block(fb, width, e_x, start_y + block_size * 3, block_size, block_size, block_color);
+        draw_block(fb, width, e_x, start_y + block_size * 4, block_size * 3, block_size, block_color);
+
+        // L
+        let l_x = start_x + block_size * 10;
+        draw_block(fb, width, l_x, start_y, block_size, block_size * 4, block_color);
+        draw_block(fb, width, l_x, start_y + block_size * 4, block_size * 3, block_size, block_color);
+
+        // 4
+        let four_x = start_x + block_size * 15;
+        draw_block(fb, width, four_x, start_y, block_size, block_size * 3, block_color);
+        draw_block(fb, width, four_x, start_y + block_size * 2, block_size * 3, block_size, block_color);
+        draw_block(fb, width, four_x + block_size * 2, start_y, block_size, block_size * 5, block_color);
+
+        // Memory barrier after device access
+        core::arch::asm!("dsb sy");
+        core::arch::asm!("isb");
+    }
+
+    debug_println!("Draw complete!");
+}
+
+/// Helper to draw a filled rectangle
+#[inline]
+unsafe fn draw_block(fb: *mut u32, pitch: usize, x: usize, y: usize, w: usize, h: usize, color: u32) {
+    for dy in 0..h {
+        for dx in 0..w {
+            fb.add((y + dy) * pitch + (x + dx)).write_volatile(color);
+        }
+    }
 }
 
 /// Simple test - just write to framebuffer at mapped address
