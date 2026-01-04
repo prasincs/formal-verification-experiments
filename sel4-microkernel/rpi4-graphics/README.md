@@ -50,10 +50,13 @@ When booted, the system:
 
 ### Software
 - Linux or macOS
-- Rust nightly (`rustup install nightly`)
+- Rust nightly (`rustup install nightly && rustup component add rust-src`)
 - Cross compiler:
   - Linux: `sudo apt install gcc-aarch64-linux-gnu`
   - macOS: `brew install aarch64-elf-gcc`
+- mtools (for creating SD card images without root):
+  - Linux: `sudo apt install mtools` or `sudo pacman -S mtools`
+  - macOS: `brew install mtools`
 - Microkit SDK with RPi4 support
 
 ## Quick Start
@@ -68,31 +71,37 @@ tar -xzf microkit-sdk-*.tar.gz -C microkit-sdk --strip-components=1
 export MICROKIT_SDK=$PWD/microkit-sdk
 ```
 
-### 2. Build the System
+### 2. Build the System and Create SD Card Image
 
 ```bash
 cd rpi4-graphics
 
-# Build for 4GB Pi 4 (adjust as needed)
-make RPI4_MEMORY=4gb
-
-# Download firmware and create boot files
-make firmware
-make bootfiles
+# Build everything and create bootable SD card image (single command)
+make sdcard RPI4_MEMORY=4gb
 ```
+
+This will:
+1. Build the seL4/Microkit system for Raspberry Pi 4
+2. Download Raspberry Pi firmware
+3. Create a bootable FAT32 SD card image
 
 ### 3. Flash to SD Card
 
-**Option A: Using Raspberry Pi Imager**
+**Option A: Using dd (Linux/macOS)**
+```bash
+# Find your SD card device (e.g., /dev/sdb or /dev/mmcblk0)
+lsblk
+
+# Flash the image
+sudo dd if=build/rpi4-sel4-graphics.img of=/dev/sdX bs=4M status=progress conv=fsync
+sync
+```
+
+**Option B: Using Raspberry Pi Imager**
 1. Open Raspberry Pi Imager
 2. Choose OS → Use custom → Select `build/rpi4-sel4-graphics.img`
 3. Choose storage → Select your SD card
 4. Write
-
-**Option B: Manual copy**
-1. Format SD card as FAT32
-2. Copy all files from `build/boot/` to SD card root
-3. Eject safely
 
 ### 4. Boot
 

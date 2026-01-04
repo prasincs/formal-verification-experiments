@@ -124,10 +124,16 @@ impl Framebuffer {
         }
 
         // Convert GPU address to ARM physical address
-        let fb_addr = crate::gpu_to_arm(fb_gpu_addr);
+        let fb_phys_addr = crate::gpu_to_arm(fb_gpu_addr);
+
+        // Calculate virtual address using Microkit's mapping
+        // The framebuffer region starting at FRAMEBUFFER_PHYS_BASE is mapped
+        // to FRAMEBUFFER_VIRT_BASE. Calculate the offset and apply it.
+        let fb_offset = fb_phys_addr.saturating_sub(crate::FRAMEBUFFER_PHYS_BASE);
+        let fb_virt_addr = crate::FRAMEBUFFER_VIRT_BASE + fb_offset;
 
         let info = FramebufferInfo {
-            base: fb_addr,
+            base: fb_phys_addr,
             width,
             height,
             pitch,
@@ -137,7 +143,7 @@ impl Framebuffer {
 
         Ok(Self {
             info,
-            buffer: fb_addr as *mut u32,
+            buffer: fb_virt_addr as *mut u32,
         })
     }
 

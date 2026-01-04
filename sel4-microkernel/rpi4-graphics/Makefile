@@ -111,6 +111,7 @@ $(BUILD_DIR)/config.txt:
 	@echo "# seL4 Microkit on Raspberry Pi 4" > $@
 	@echo "arm_64bit=1" >> $@
 	@echo "kernel=loader.img" >> $@
+	@echo "kernel_address=0x10000000" >> $@
 	@echo "" >> $@
 	@echo "# Display settings" >> $@
 	@echo "hdmi_force_hotplug=1" >> $@
@@ -126,41 +127,25 @@ $(BUILD_DIR)/config.txt:
 	@echo "uart_2ndstage=1" >> $@
 	@echo "Created: $@"
 
-# Create bootable SD card image
-# The image is a FAT32 partition with boot files
+# Create bootable SD card image using mtools (no root required)
+# Works on both local machines and CI
 $(SDCARD_IMG): $(SYSTEM_IMAGE) $(FIRMWARE_DIR) $(BUILD_DIR)/config.txt
 	@echo "=== Creating SD Card Image ==="
 	@echo "Creating 64MB FAT32 image..."
-	# Create empty image file (64MB)
 	dd if=/dev/zero of=$@ bs=1M count=64 2>/dev/null
-	# Create FAT32 filesystem
 	mkfs.vfat -F 32 -n SEL4BOOT $@
-	# Create mount point and copy files
-	@echo "Copying boot files..."
-	mkdir -p $(BUILD_DIR)/mnt
-	# Note: On Linux, use sudo mount. On macOS, use hdiutil.
-	# This creates a script for the user to run with appropriate permissions.
-	@echo "#!/bin/bash" > $(BUILD_DIR)/copy_to_image.sh
-	@echo "set -e" >> $(BUILD_DIR)/copy_to_image.sh
-	@echo "MOUNT_DIR=\$$(mktemp -d)" >> $(BUILD_DIR)/copy_to_image.sh
-	@echo "sudo mount -o loop $@ \$$MOUNT_DIR" >> $(BUILD_DIR)/copy_to_image.sh
-	@echo "sudo cp $(FIRMWARE_DIR)/start4.elf \$$MOUNT_DIR/" >> $(BUILD_DIR)/copy_to_image.sh
-	@echo "sudo cp $(FIRMWARE_DIR)/fixup4.dat \$$MOUNT_DIR/" >> $(BUILD_DIR)/copy_to_image.sh
-	@echo "sudo cp $(FIRMWARE_DIR)/bcm2711-rpi-4-b.dtb \$$MOUNT_DIR/" >> $(BUILD_DIR)/copy_to_image.sh
-	@echo "sudo cp $(BUILD_DIR)/config.txt \$$MOUNT_DIR/" >> $(BUILD_DIR)/copy_to_image.sh
-	@echo "sudo cp $(SYSTEM_IMAGE) \$$MOUNT_DIR/loader.img" >> $(BUILD_DIR)/copy_to_image.sh
-	@echo "sudo umount \$$MOUNT_DIR" >> $(BUILD_DIR)/copy_to_image.sh
-	@echo "rmdir \$$MOUNT_DIR" >> $(BUILD_DIR)/copy_to_image.sh
-	@echo "echo 'SD card image ready: $@'" >> $(BUILD_DIR)/copy_to_image.sh
-	chmod +x $(BUILD_DIR)/copy_to_image.sh
+	@echo "Copying boot files with mtools..."
+	mcopy -i $@ $(FIRMWARE_DIR)/start4.elf ::
+	mcopy -i $@ $(FIRMWARE_DIR)/fixup4.dat ::
+	mcopy -i $@ $(FIRMWARE_DIR)/bcm2711-rpi-4-b.dtb ::
+	mcopy -i $@ $(BUILD_DIR)/config.txt ::
+	mcopy -i $@ $(SYSTEM_IMAGE) ::loader.img
 	@echo ""
-	@echo "=== MANUAL STEP REQUIRED ==="
-	@echo "Run the following command to complete the image:"
+	@echo "=== SD Card Image Ready ==="
+	@echo "Image: $@"
 	@echo ""
-	@echo "  sudo $(BUILD_DIR)/copy_to_image.sh"
-	@echo ""
-	@echo "Then flash to SD card with:"
-	@echo "  sudo dd if=$@ of=/dev/sdX bs=4M status=progress"
+	@echo "Flash to SD card with:"
+	@echo "  sudo dd if=$@ of=/dev/sdX bs=4M status=progress conv=fsync"
 	@echo ""
 	@echo "Or use Raspberry Pi Imager:"
 	@echo "  - Select 'Use custom' and choose: $@"
