@@ -62,8 +62,8 @@ const MAILBOX_OFFSET: usize = 0xB880;
 /// So mailbox registers at 0xFE00B880 are at vaddr 0x5_0000_0880
 pub const MAILBOX_BASE: usize = 0x5_0000_0000 + 0x880;
 
-/// Framebuffer physical base address (as declared in graphics.system)
-pub const FRAMEBUFFER_PHYS_BASE: usize = 0x3C00_0000;
+/// Framebuffer physical base address (from U-Boot bdinfo: FB base = 0x3e876000)
+pub const FRAMEBUFFER_PHYS_BASE: usize = 0x3e87_6000;
 
 /// Framebuffer virtual address as mapped by Microkit (graphics.system)
 pub const FRAMEBUFFER_VIRT_BASE: usize = 0x5_0001_0000;

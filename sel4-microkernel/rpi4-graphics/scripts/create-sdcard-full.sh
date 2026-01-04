@@ -144,10 +144,21 @@ create_boot_script() {
     local boot_scr="$2"
 
     cat > "$boot_cmd" << 'EOF'
-echo "=== seL4 Microkit Boot ==="
-echo "Loading seL4 image..."
+echo ""
+echo " ____  ____      _    ____ ___ _   _  ____ ____  "
+echo "|  _ \|  _ \    / \  / ___|_ _| \ | |/ ___/ ___| "
+echo "| |_) | |_) |  / _ \ \___ \| ||  \| | |   \___ \ "
+echo "|  __/|  _ <  / ___ \ ___) | || |\  | |___ ___) |"
+echo "|_|   |_| \_\/_/   \_\____/___|_| \_|\____|____/ "
+echo ""
+echo "        seL4 Microkit on Raspberry Pi 4"
+echo ""
+echo "=== Video/Framebuffer Info ==="
+bdinfo
+echo ""
+echo "=== Loading seL4 image... ==="
 fatload mmc 0 0x10000000 sel4.img
-echo "Starting seL4 at 0x10000000..."
+echo "=== Starting seL4 ==="
 go 0x10000000
 EOF
 

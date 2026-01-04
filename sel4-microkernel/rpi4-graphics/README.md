@@ -3,6 +3,10 @@
 A bootable SD card image demonstrating seL4 Microkit on Raspberry Pi 4 with
 framebuffer graphics output.
 
+> **⚠️ Work in Progress**: Framebuffer graphics output is not yet working.
+> U-Boot boots successfully and displays output, but seL4 framebuffer access
+> is still being debugged. See [Known Issues](#known-issues) below.
+
 ## What It Does
 
 When booted, the system:
@@ -239,12 +243,62 @@ GND        → GND     (Pin 6)
 
 See [ARCHITECTURE.md](../rpi-graphics/ARCHITECTURE.md) for detailed TPM integration docs.
 
+## U-Boot Debug Boot
+
+For debugging, you can boot via U-Boot which provides HDMI console output:
+
+```bash
+# Create image with U-Boot bootloader
+./scripts/create-sdcard-full.sh --uboot
+
+# Flash to SD card
+sudo dd if=build/rpi4-sel4-full.img of=/dev/sdX bs=4M status=progress conv=fsync
+```
+
+U-Boot will display ASCII art and system info before loading seL4. Use `bdinfo`
+at the U-Boot prompt to find the framebuffer address.
+
+## Known Issues
+
+### Framebuffer Graphics Not Working
+
+**Status**: seL4 loads and runs, but framebuffer writes don't appear on screen.
+
+**What works**:
+- U-Boot boots and displays on HDMI ✅
+- seL4 kernel starts (via U-Boot `go` command) ✅
+- Protection Domain init function runs ✅
+
+**What doesn't work**:
+- Writing to mapped framebuffer memory doesn't produce visible output ❌
+
+**Investigation notes**:
+- Framebuffer physical address from U-Boot `bdinfo`: `0x3e876000`
+- This address is mapped into the Protection Domain at virtual address `0x5_0001_0000`
+- Memory region mapping appears correct in Microkit report
+- May require serial adapter for proper debugging
+
+**Possible causes**:
+1. GPU framebuffer is invalidated when seL4 takes over from U-Boot
+2. Cache coherency issues with device memory
+3. seL4/Microkit memory protection preventing writes
+4. Need to re-initialize framebuffer via VideoCore mailbox
+
+**No official documentation exists** for framebuffer graphics on seL4 Microkit + RPi4.
+The [seL4 RPi4 docs](https://docs.sel4.systems/Hardware/Rpi4.html) only cover serial console.
+
+### Serial Adapter Required for Full Debugging
+
+Without a USB-serial adapter, debug output from seL4 is not visible. The
+`debug_println!` macro outputs to UART, not HDMI.
+
 ## Troubleshooting
 
 ### No display output
 - Check HDMI connection
 - Verify `config.txt` has `hdmi_force_hotplug=1`
 - Try a different HDMI cable/port
+- Use U-Boot boot (`--uboot` flag) to verify HDMI works
 
 ### Build fails: "Board not found"
 - Ensure MICROKIT_SDK points to correct location

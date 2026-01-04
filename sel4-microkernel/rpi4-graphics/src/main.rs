@@ -348,6 +348,16 @@ impl Handler for GraphicsHandler {
 
 #[protection_domain]
 fn init() -> impl Handler {
+    // FIRST THING: Write to framebuffer to prove we're running
+    // Do this before ANY other code that might crash
+    unsafe {
+        let fb = 0x5_0001_0000 as *mut u32;
+        // Fill top-left corner with RED (should be very visible)
+        for i in 0..10000 {
+            fb.add(i).write_volatile(0xFFFF0000); // Red in ARGB
+        }
+    }
+
     debug_println!("");
     debug_println!("=====================================");
     debug_println!("  seL4 Microkit Graphics Demo");
@@ -355,13 +365,49 @@ fn init() -> impl Handler {
     debug_println!("=====================================");
     debug_println!("");
 
+    // More drawing after basic proof
+    draw_prasincs_ascii();
+
     let mut handler = GraphicsHandler::new();
-    handler.init_framebuffer();
-    handler.draw_architecture_diagram();
-    handler.draw_crypto_verification();
+
+    // Skip complex init for now
+    // handler.init_framebuffer();
+    // handler.draw_architecture_diagram();
+    // handler.draw_crypto_verification();
 
     debug_println!("");
     debug_println!("Graphics PD initialized. Entering event loop...");
 
+    // Spin forever to keep display alive
+    loop {
+        core::hint::spin_loop();
+    }
+
     handler
+}
+
+/// Simple test - just write to framebuffer at mapped address
+/// U-Boot's bdinfo will show us the actual framebuffer address
+fn draw_prasincs_ascii() {
+    debug_println!("seL4 is running! Attempting framebuffer write...");
+
+    // Just try writing to our mapped framebuffer region
+    // If this doesn't show anything, we need to check bdinfo output
+    // and update FRAMEBUFFER_PHYS_BASE in graphics.system
+
+    let fb_base = rpi4_graphics::FRAMEBUFFER_VIRT_BASE as *mut u32;
+
+    // Fill with bright magenta - very visible if it works
+    let magenta: u32 = 0xFFFF00FF;
+
+    // Just write a small test pattern (avoid crash if address is wrong)
+    debug_println!("Writing test pattern to 0x{:x}...", fb_base as usize);
+
+    for i in 0..1000usize {
+        unsafe {
+            fb_base.add(i).write_volatile(magenta);
+        }
+    }
+
+    debug_println!("Test write complete - check if any pixels changed!");
 }
