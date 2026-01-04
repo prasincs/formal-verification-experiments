@@ -139,6 +139,9 @@ download_firmware() {
 }
 
 # Create U-Boot boot script
+# Uses bootelf command as recommended by seL4 ELF Loader docs:
+# https://docs.sel4.systems/projects/elfloader/
+# "The elfloader supports being executed as an ELF image (via bootelf in U-Boot or similar)"
 create_boot_script() {
     local boot_cmd="$1"
     local boot_scr="$2"
@@ -156,9 +159,12 @@ echo ""
 echo "=== Video/Framebuffer Info ==="
 bdinfo
 echo ""
-echo "=== Loading seL4 image... ==="
+echo "=== Trying bootelf with ELF loader ==="
+fatload mmc 0 0x20000000 loader.elf
+bootelf 0x20000000
+echo ""
+echo "=== bootelf failed, trying go with binary ==="
 fatload mmc 0 0x10000000 sel4.img
-echo "=== Starting seL4 ==="
 go 0x10000000
 EOF
 
@@ -290,6 +296,14 @@ if [[ "$USE_UBOOT" == true ]]; then
     echo "Copying seL4 loader as sel4.img..."
     mcopy -i "$OUTPUT_IMG@@$PART_OFFSET" "$BUILD_DIR/loader.img" ::sel4.img
 
+    # Copy loader.elf for bootelf command
+    if [[ -f "$BUILD_DIR/loader.elf" ]]; then
+        echo "Copying loader.elf for bootelf..."
+        mcopy -i "$OUTPUT_IMG@@$PART_OFFSET" "$BUILD_DIR/loader.elf" ::loader.elf
+    else
+        echo "Warning: $BUILD_DIR/loader.elf not found. Run 'make elf' to build it."
+    fi
+
     # Create and copy boot script for auto-boot
     echo "Creating boot script..."
     TMP_BOOT_CMD=$(mktemp)
@@ -317,7 +331,12 @@ echo "  sudo dd if=$OUTPUT_IMG of=/dev/sdX bs=4M status=progress conv=fsync"
 echo ""
 
 if [[ "$USE_UBOOT" == true ]]; then
-    echo "At U-Boot prompt, run:"
-    echo "  fatload mmc 0 0x10000000 sel4.img"
-    echo "  go 0x10000000"
+    echo "Boot script will auto-boot with bootelf first, then fallback to go."
+    echo ""
+    echo "Or manually at U-Boot prompt:"
+    echo "  # Option 1: bootelf (recommended per seL4 ELF Loader docs)"
+    echo "  fatload mmc 0 0x20000000 loader.elf && bootelf 0x20000000"
+    echo ""
+    echo "  # Option 2: go (raw binary)"
+    echo "  fatload mmc 0 0x10000000 sel4.img && go 0x10000000"
 fi

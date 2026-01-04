@@ -78,7 +78,7 @@ $(PD_ELF): src/main.rs src/lib.rs Cargo.toml | $(BUILD_DIR)
 $(BUILD_DIR):
 	mkdir -p $@
 
-# Build system image with Microkit tool
+# Build system image with Microkit tool (binary format for go command)
 $(SYSTEM_IMAGE): $(PD_ELF) graphics.system | check
 	@echo "=== Building Microkit System Image ==="
 	$(MICROKIT_TOOL) \
@@ -92,6 +92,23 @@ $(SYSTEM_IMAGE): $(PD_ELF) graphics.system | check
 	@echo "Build complete!"
 	@echo "  System image: $@"
 	@echo "  Report: $(REPORT)"
+
+# Also build ELF format for bootelf command
+LOADER_ELF := $(BUILD_DIR)/loader.elf
+
+$(LOADER_ELF): $(PD_ELF) graphics.system | check
+	@echo "=== Building Microkit Loader ELF ==="
+	$(MICROKIT_TOOL) \
+		graphics.system \
+		--search-path $(BUILD_DIR) \
+		--board $(MICROKIT_BOARD) \
+		--config $(MICROKIT_CONFIG) \
+		--image-type elf \
+		-o $@
+	@echo "Built: $@"
+
+.PHONY: elf
+elf: $(LOADER_ELF)
 
 # Download Raspberry Pi firmware files (pinned to specific tag)
 FIRMWARE_DIR := $(BUILD_DIR)/firmware
