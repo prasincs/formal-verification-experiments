@@ -1,15 +1,16 @@
 //! BCM2711 GPIO Driver with Verus Verification
 //!
-//! Controls GPIO pins for display DC, RST, backlight, and touch IRQ.
+//! Controls GPIO pins for display DC, RST, backlight, touch IRQ, and IR receiver.
 //!
 //! # Pin Assignments
 //!
-//! | GPIO | Function      | Direction |
-//! |------|---------------|-----------|
-//! | 25   | DC (Data/Cmd) | Output    |
-//! | 24   | RST (Reset)   | Output    |
-//! | 18   | BL (Backlight)| Output    |
-//! | 17   | T_IRQ (Touch) | Input     |
+//! | GPIO | Function       | Direction |
+//! |------|----------------|-----------|
+//! | 25   | DC (Data/Cmd)  | Output    |
+//! | 24   | RST (Reset)    | Output    |
+//! | 18   | BL (Backlight) | Output    |
+//! | 17   | T_IRQ (Touch)  | Input     |
+//! | 4    | IR_IN (Remote) | Input     |
 
 use verus_builtin::*;
 use verus_builtin_macros::*;
@@ -31,7 +32,7 @@ mod regs {
     pub const GPFEN0: usize = 0x58;    // Falling Edge Detect Enable 0
 }
 
-/// Pin numbers used by the display
+/// Pin numbers used by the display and input devices
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Pin {
     /// Data/Command select (GPIO25)
@@ -42,6 +43,8 @@ pub enum Pin {
     Backlight = 18,
     /// Touch interrupt (GPIO17)
     TouchIrq = 17,
+    /// IR receiver input (GPIO4)
+    IrReceiver = 4,
 }
 
 /// Pin mode
@@ -164,5 +167,27 @@ impl Gpio {
     #[inline]
     pub fn touch_irq_active(&self) -> bool {
         !self.read(Pin::TouchIrq)
+    }
+}
+
+/// IR receiver helper functions
+impl Gpio {
+    /// Read IR receiver state
+    /// Returns true when IR signal is present (active low from receiver)
+    #[inline]
+    pub fn ir_signal_active(&self) -> bool {
+        !self.read(Pin::IrReceiver)
+    }
+
+    /// Enable both edge detection on IR pin (for timing IR signals)
+    pub fn enable_ir_edge_detect(&mut self) {
+        self.enable_falling_edge_detect(Pin::IrReceiver);
+        // Also need rising edge for complete pulse timing
+        // TODO: Configure GPREN0 for rising edge
+    }
+
+    /// Check and clear IR edge detect status
+    pub fn check_ir_edge_detect(&mut self) -> bool {
+        self.check_edge_detect(Pin::IrReceiver)
     }
 }
