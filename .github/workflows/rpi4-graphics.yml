@@ -34,8 +34,95 @@ env:
   RPI_FIRMWARE_TAG: "1.20250915"
 
 jobs:
-  # Build 8GB variant (primary target)
+  # Build Microkit SDK from source with RPi4B boot fix
+  build-sdk:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        memory: [8gb]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Cache Microkit SDK build
+        id: cache-sdk
+        uses: actions/cache@v4
+        with:
+          path: microkit-sdk-${{ matrix.memory }}
+          key: microkit-sdk-patched-${{ matrix.memory }}-v4
+
+      - name: Download pre-built SDK 2.1.0 (for tool binary)
+        if: steps.cache-sdk.outputs.cache-hit != 'true'
+        run: |
+          echo "=== Downloading pre-built SDK 2.1.0 ==="
+          curl -L -o microkit-sdk.tar.gz \
+            "https://github.com/seL4/microkit/releases/download/${{ env.MICROKIT_VERSION }}/microkit-sdk-${{ env.MICROKIT_VERSION }}-linux-x86-64.tar.gz"
+          echo "${{ env.MICROKIT_SDK_SHA256 }}  microkit-sdk.tar.gz" | sha256sum -c -
+          mkdir -p prebuilt-sdk
+          tar -xzf microkit-sdk.tar.gz -C prebuilt-sdk --strip-components=1
+          rm microkit-sdk.tar.gz
+
+      - name: Clone Microkit (with RPi4B fix)
+        if: steps.cache-sdk.outputs.cache-hit != 'true'
+        run: |
+          git clone --depth 1 https://github.com/seL4/microkit.git vendor-microkit
+          cd vendor-microkit
+          echo "=== Microkit version ==="
+          git log --oneline -1
+
+      - name: Clone seL4 kernel source
+        if: steps.cache-sdk.outputs.cache-hit != 'true'
+        run: |
+          git clone --depth 1 --branch 13.0.0 https://github.com/seL4/seL4.git sel4-kernel
+          cd sel4-kernel && git log --oneline -1
+
+      - name: Build Microkit SDK for RPi4B ${{ matrix.memory }}
+        if: steps.cache-sdk.outputs.cache-hit != 'true'
+        run: |
+          echo "=== Building Microkit SDK for rpi4b_${{ matrix.memory }} ==="
+
+          docker pull trustworthysystems/camkes:latest
+
+          # Build SDK - use 'aarch64-linux-gnu' (no trailing dash, script adds it)
+          docker run --rm \
+            -u $(id -u):$(id -g) \
+            -e CCACHE_DISABLE=1 \
+            -v $PWD/vendor-microkit:/microkit \
+            -v $PWD/sel4-kernel:/sel4 \
+            -w /microkit \
+            trustworthysystems/camkes:latest \
+            python3 build_sdk.py \
+              --sel4 /sel4 \
+              --boards rpi4b_${{ matrix.memory }} \
+              --configs debug \
+              --skip-tool \
+              --skip-initialiser \
+              --skip-docs \
+              --gcc-toolchain-prefix-aarch64 aarch64-linux-gnu
+
+          # Assemble final SDK
+          mkdir -p microkit-sdk-${{ matrix.memory }}
+          cp -r vendor-microkit/release/microkit-sdk-*/. microkit-sdk-${{ matrix.memory }}/
+
+          # Copy pre-built tool binary
+          cp prebuilt-sdk/bin/microkit microkit-sdk-${{ matrix.memory }}/bin/
+          chmod +x microkit-sdk-${{ matrix.memory }}/bin/microkit
+
+          echo "=== SDK contents ==="
+          ls -la microkit-sdk-${{ matrix.memory }}/bin/
+          ls -la microkit-sdk-${{ matrix.memory }}/board/
+
+      - name: Upload SDK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: microkit-sdk-${{ matrix.memory }}
+          path: microkit-sdk-${{ matrix.memory }}/
+          retention-days: 7
+
+  # Build 8GB variant
   build-8gb:
+    needs: build-sdk
     runs-on: ubuntu-latest
     outputs:
       sha_short: ${{ steps.commit.outputs.SHA_SHORT }}
@@ -46,34 +133,16 @@ jobs:
 
       - name: Get commit info
         id: commit
-        run: |
-          echo "SHA_SHORT=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
-
-      - name: Cache Microkit SDK
-        id: cache-microkit
-        uses: actions/cache@v4
-        with:
-          path: sel4-microkernel/rpi4-graphics/microkit-sdk
-          key: microkit-sdk-${{ env.MICROKIT_VERSION }}-linux-x86-64
+        run: echo "SHA_SHORT=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
 
       - name: Download Microkit SDK
-        if: steps.cache-microkit.outputs.cache-hit != 'true'
-        working-directory: sel4-microkernel/rpi4-graphics
-        run: |
-          curl -L -o microkit-sdk.tar.gz \
-            "https://github.com/seL4/microkit/releases/download/${{ env.MICROKIT_VERSION }}/microkit-sdk-${{ env.MICROKIT_VERSION }}-linux-x86-64.tar.gz"
+        uses: actions/download-artifact@v4
+        with:
+          name: microkit-sdk-8gb
+          path: sel4-microkernel/rpi4-graphics/microkit-sdk
 
-          # Verify SHA256 checksum
-          echo "${{ env.MICROKIT_SDK_SHA256 }}  microkit-sdk.tar.gz" | sha256sum -c -
-
-          mkdir -p microkit-sdk
-          tar -xzf microkit-sdk.tar.gz -C microkit-sdk --strip-components=1
-          rm microkit-sdk.tar.gz
-
-      - name: Verify SDK
-        run: |
-          ls -la sel4-microkernel/rpi4-graphics/microkit-sdk/bin/
-          ls -la sel4-microkernel/rpi4-graphics/microkit-sdk/board/
+      - name: Fix SDK permissions
+        run: chmod +x sel4-microkernel/rpi4-graphics/microkit-sdk/bin/microkit
 
       - name: Install dependencies
         run: |
@@ -110,34 +179,18 @@ jobs:
           echo "=== Environment ==="
           echo "MICROKIT_SDK=$MICROKIT_SDK"
           echo "SEL4_INCLUDE_DIRS=$SEL4_INCLUDE_DIRS"
-          echo "=== SDK contents ==="
           ls -la $MICROKIT_SDK/board/
-          echo "=== Rust version ==="
-          rustc --version
-          cargo --version
           echo "=== Build ==="
           make sdcard RPI4_MEMORY=8gb
-          # Rename to include memory variant
           mv build/rpi4-sel4-graphics.img build/rpi4-sel4-graphics-8gb.img
 
       - name: Generate checksums
         working-directory: sel4-microkernel/rpi4-graphics/build
         run: |
           sha256sum rpi4-sel4-graphics-8gb.img > rpi4-sel4-graphics-8gb.img.sha256
-          sha256sum boot/loader.img > loader.img.sha256
-          echo "=== Checksums ==="
           cat rpi4-sel4-graphics-8gb.img.sha256
-          cat loader.img.sha256
 
-      - name: Upload boot files artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: rpi4-sel4-graphics-bootfiles-8gb
-          path: |
-            sel4-microkernel/rpi4-graphics/build/boot/
-          retention-days: 30
-
-      - name: Upload SD card image artifact
+      - name: Upload SD card image
         uses: actions/upload-artifact@v4
         with:
           name: rpi4-sel4-graphics-sdcard-8gb
@@ -153,7 +206,7 @@ jobs:
           path: sel4-microkernel/rpi4-graphics/build/report.txt
           retention-days: 30
 
-  # Create GitHub release on main push or manual trigger
+  # Create GitHub release
   release:
     if: github.ref == 'refs/heads/main' || github.event.inputs.create_release == 'true'
     needs: [build-8gb]
@@ -165,7 +218,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Download all artifacts
+      - name: Download artifacts
         uses: actions/download-artifact@v4
         with:
           path: release-artifacts
@@ -178,82 +231,43 @@ jobs:
           echo "SHA_SHORT=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
           echo "DATE=$(date -u +'%Y-%m-%d')" >> $GITHUB_OUTPUT
 
-      - name: List artifacts
-        run: |
-          echo "=== Downloaded artifacts ==="
-          find release-artifacts -type f | head -20
-          echo "=== Checksums ==="
-          cat release-artifacts/*.sha256 || true
-
       - name: Create release notes
         run: |
           cat > release-notes.md << 'EOF'
           # seL4 Microkit Graphics Demo for Raspberry Pi 4
 
-          Bootable SD card images demonstrating seL4 Microkit with framebuffer graphics on Raspberry Pi 4.
+          Bootable SD card image for Raspberry Pi 4 (8GB) running seL4 Microkit.
 
           ## Quick Start
 
-          1. **Download** the image for your Pi 4 (8GB)
-          2. **Flash** to SD card using Raspberry Pi Imager or `dd`
-          3. **Boot** your Pi 4 with HDMI connected
-          4. **See** the seL4 architecture diagram on screen!
+          1. Download `rpi4-sel4-graphics-8gb.img`
+          2. Flash to SD card using Raspberry Pi Imager or `dd`
+          3. Boot your Pi 4 with HDMI connected
 
-          ## Downloads
-
-          | Model | Image | Notes |
-          |-------|-------|-------|
-          | **Pi 4 (8GB)** | `rpi4-sel4-graphics-8gb.img` | Primary target |
-
-          ## Flashing Instructions
-
-          ### Using Raspberry Pi Imager (Easiest)
-
-          1. Download the `.img` file
-          2. Open [Raspberry Pi Imager](https://www.raspberrypi.com/software/)
-          3. Choose OS → **Use custom** → Select the downloaded image
-          4. Choose storage → Select your SD card
-          5. Click **Write**
-
-          ### Using dd (Linux/macOS)
+          ## Flashing
 
           ```bash
-          # For 8GB Pi 4:
           sudo dd if=rpi4-sel4-graphics-8gb.img of=/dev/sdX bs=4M status=progress conv=fsync
-
-          # Replace /dev/sdX with your SD card device (e.g., /dev/sdb or /dev/mmcblk0)
           ```
 
-          ## What You'll See
+          Or use Raspberry Pi Imager → Use custom → Select the image.
 
-          After booting (~5 seconds), the HDMI display shows an architecture diagram of the seL4 Microkit stack with formally verified components highlighted.
-
-          ## Hardware Requirements
+          ## Requirements
 
           - Raspberry Pi 4 Model B (8GB)
           - MicroSD card (8GB+)
           - HDMI display
-          - USB-C power supply (5V 3A)
 
-          ## Optional: Debug Output
+          ## Verify Download
 
-          Connect a USB-to-serial adapter to GPIO pins 14/15 for UART debug output at 115200 baud.
-
-          ## Verification
-
-          Verify your download:
           ```bash
           sha256sum -c rpi4-sel4-graphics-8gb.img.sha256
           ```
 
-          ## More Information
-
-          - [Project README](https://github.com/prasincs/formal-verification-experiments/tree/main/sel4-microkernel/rpi4-graphics)
-          - [seL4 Microkit](https://github.com/seL4/microkit)
-          - [Microkit PR #402](https://github.com/seL4/microkit/pull/402) - RPi4B boot fix
+          Built with Microkit SDK from source (includes RPi4B boot fix PR #402).
           EOF
 
-      - name: Delete existing rpi4-graphics release
+      - name: Delete existing release
         run: |
           gh release delete rpi4-graphics --yes || true
           git push origin :refs/tags/rpi4-graphics || true
