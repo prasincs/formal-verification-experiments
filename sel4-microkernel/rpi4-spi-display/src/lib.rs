@@ -7,7 +7,7 @@
 //! # Architecture
 //!
 //! ```text
-//! Application
+//! Application (TV Demo)
 //!     │
 //!     ▼
 //! ┌─────────────┐  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐
@@ -38,6 +38,13 @@
 //! - **Touch**: XPT2046 resistive touchscreen
 //! - **Keyboard**: USB HID keyboard for navigation/media control
 //! - **IR Remote**: Infrared remote (NEC, RC5, RC6 protocols)
+//!
+//! # TV Demo
+//!
+//! Includes a demo application with:
+//! - Navigable menu system
+//! - Multiple animations (bouncing ball, color cycle, spinner)
+//! - Support for keyboard, IR remote, and touch input
 
 #![no_std]
 #![allow(dead_code)]
@@ -47,6 +54,7 @@ pub mod hal;
 pub mod display;
 pub mod touch;
 pub mod input;
+pub mod demo;
 
 // Re-export main types
 pub use display::{Display, Framebuffer, Rgb565};
@@ -56,3 +64,4 @@ pub use input::{
     KeyCode, KeyEvent, KeyState, Keyboard,
     IrButton, IrEvent, IrProtocol, IrRemote,
 };
+pub use demo::{TvDemo, DemoState, Screen, Animation, AnimationPlayer};
