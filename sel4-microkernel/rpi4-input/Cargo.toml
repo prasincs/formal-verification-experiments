@@ -1,0 +1,18 @@
+[package]
+name = "rpi4-input"
+version = "0.1.0"
+edition = "2021"
+authors = ["Formal Verification Experiments"]
+description = "Input device drivers for Raspberry Pi 4 (keyboard, IR remote, touch)"
+license = "MIT OR Apache-2.0"
+
+[lib]
+name = "rpi4_input"
+path = "src/lib.rs"
+
+[dependencies]
+
+[features]
+default = []
+# Enable Verus verification attributes
+verus = []
