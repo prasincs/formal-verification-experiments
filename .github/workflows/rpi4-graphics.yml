@@ -88,7 +88,7 @@ jobs:
         working-directory: sel4-microkernel/rpi4-graphics
         run: make firmware
 
-      - name: Build system image
+      - name: Build and create SD card image
         working-directory: sel4-microkernel/rpi4-graphics
         run: |
           export MICROKIT_SDK=$PWD/microkit-sdk
@@ -96,31 +96,13 @@ jobs:
           echo "=== Environment ==="
           echo "MICROKIT_SDK=$MICROKIT_SDK"
           echo "SEL4_INCLUDE_DIRS=$SEL4_INCLUDE_DIRS"
-          ls -la $MICROKIT_SDK/board/ || true
-          ls -la $SEL4_INCLUDE_DIRS/ || echo "Include dir not found!"
           echo "=== Rust version ==="
           rustc --version
           cargo --version
           echo "=== Build ==="
-          make RPI4_MEMORY=${{ env.RPI4_MEMORY }} CARGO="cargo -v"
-
-      - name: Create boot files
-        working-directory: sel4-microkernel/rpi4-graphics
-        run: |
-          export MICROKIT_SDK=$PWD/microkit-sdk
-          make RPI4_MEMORY=${{ env.RPI4_MEMORY }} bootfiles
-
-      - name: Create SD card image
-        working-directory: sel4-microkernel/rpi4-graphics
-        run: |
-          # Create 64MB FAT32 image
-          dd if=/dev/zero of=build/rpi4-sel4-graphics-${{ env.RPI4_MEMORY }}.img bs=1M count=64
-
-          # Create FAT32 filesystem
-          mkfs.vfat -F 32 -n SEL4BOOT build/rpi4-sel4-graphics-${{ env.RPI4_MEMORY }}.img
-
-          # Copy boot files using mtools (no root required)
-          mcopy -i build/rpi4-sel4-graphics-${{ env.RPI4_MEMORY }}.img build/boot/* ::
+          make sdcard RPI4_MEMORY=${{ env.RPI4_MEMORY }}
+          # Rename to include memory variant
+          mv build/rpi4-sel4-graphics.img build/rpi4-sel4-graphics-${{ env.RPI4_MEMORY }}.img
 
       - name: Generate checksums
         working-directory: sel4-microkernel/rpi4-graphics/build
@@ -216,13 +198,9 @@ jobs:
         run: |
           export MICROKIT_SDK=$PWD/microkit-sdk
           export SEL4_INCLUDE_DIRS=$MICROKIT_SDK/board/rpi4b_${{ matrix.memory }}/debug/include
-          make RPI4_MEMORY=${{ matrix.memory }} bootfiles
-
-          # Create SD card image
-          dd if=/dev/zero of=build/rpi4-sel4-graphics-${{ matrix.memory }}.img bs=1M count=64
-          mkfs.vfat -F 32 -n SEL4BOOT build/rpi4-sel4-graphics-${{ matrix.memory }}.img
-          mcopy -i build/rpi4-sel4-graphics-${{ matrix.memory }}.img build/boot/* ::
-
+          make sdcard RPI4_MEMORY=${{ matrix.memory }}
+          # Rename to include memory variant
+          mv build/rpi4-sel4-graphics.img build/rpi4-sel4-graphics-${{ matrix.memory }}.img
           # Checksums
           cd build
           sha256sum rpi4-sel4-graphics-${{ matrix.memory }}.img > rpi4-sel4-graphics-${{ matrix.memory }}.img.sha256

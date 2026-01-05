@@ -27,10 +27,15 @@
         <map mr="mailbox_regs" vaddr="0x5_0000_0000" perms="rw" cached="false" />
 
         <!--
+            Map GPIO registers for LED control (to prove seL4 is running)
+            Physical: 0xFE200000 (GPIO base on BCM2711)
+            Note: Placed after framebuffer (16MB ends at 0x5_0101_0000)
+        -->
+        <map mr="gpio_regs" vaddr="0x5_0200_0000" perms="rw" cached="false" />
+
+        <!--
             Map the framebuffer region.
-            The actual address is determined at runtime by the GPU,
-            but we reserve a region for it.
-            Typical location: around 0x3C000000 (below GPU memory split)
+            Address from U-Boot bdinfo: FB base = 0x3e876000
             We map a generous 16MB for up to 4K resolution.
         -->
         <map mr="framebuffer" vaddr="0x5_0001_0000" perms="rw" cached="false" />
@@ -47,7 +52,10 @@
     <!-- Mailbox registers (4KB) -->
     <memory_region name="mailbox_regs" size="0x1000" phys_addr="0xFE00B000" />
 
-    <!-- Framebuffer memory (16MB should cover up to 4K@32bpp) -->
-    <memory_region name="framebuffer" size="0x1000000" phys_addr="0x3C000000" />
+    <!-- GPIO registers (4KB) for LED control -->
+    <memory_region name="gpio_regs" size="0x1000" phys_addr="0xFE200000" />
+
+    <!-- Framebuffer memory at address from U-Boot bdinfo (FB base = 0x3e876000) -->
+    <memory_region name="framebuffer" size="0x1000000" phys_addr="0x3e876000" />
 
 </system>

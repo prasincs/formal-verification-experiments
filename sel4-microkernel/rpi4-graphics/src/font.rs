@@ -143,6 +143,29 @@ pub static FONT_8X8: [u8; 512] = [
 pub const CHAR_WIDTH: u32 = 8;
 pub const CHAR_HEIGHT: u32 = 8;
 
+/// Get the 8-byte bitmap for a character
+/// Returns array of 8 bytes, one per row, MSB is leftmost pixel
+pub fn get_char_bitmap(c: u8) -> [u8; 8] {
+    let ascii = c as usize;
+
+    // Only support ASCII 32-95 (space to underscore) and some extras
+    // Map lowercase to uppercase for simplicity
+    let mapped = if ascii >= 97 && ascii <= 122 {
+        ascii - 32  // lowercase to uppercase
+    } else if ascii >= 32 && ascii <= 95 {
+        ascii
+    } else {
+        32  // default to space
+    };
+
+    let index = (mapped - 32) * 8;
+    let mut result = [0u8; 8];
+    for i in 0..8 {
+        result[i] = FONT_8X8[index + i];
+    }
+    result
+}
+
 /// Draw a single character
 pub fn draw_char(fb: &mut Framebuffer, x: u32, y: u32, c: char, color: Color) {
     let ascii = c as u32;
