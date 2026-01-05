@@ -50,7 +50,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: microkit-sdk-${{ matrix.memory }}
-          key: microkit-sdk-patched-${{ matrix.memory }}-sel4-14.0.0-v1
+          key: microkit-sdk-patched-${{ matrix.memory }}-sel4-14.0.0-v2
 
       - name: Download pre-built SDK 2.1.0 (for tool binary)
         if: steps.cache-sdk.outputs.cache-hit != 'true'
@@ -106,13 +106,18 @@ jobs:
           mkdir -p microkit-sdk-${{ matrix.memory }}
           cp -r vendor-microkit/release/microkit-sdk-*/. microkit-sdk-${{ matrix.memory }}/
 
-          # Copy pre-built tool binary
+          # Copy pre-built tool binary (since we skipped building it)
           cp prebuilt-sdk/bin/microkit microkit-sdk-${{ matrix.memory }}/bin/
           chmod +x microkit-sdk-${{ matrix.memory }}/bin/microkit
 
+          # Copy pre-built initialiser.elf (since we skipped building it)
+          # The initialiser is board-specific
+          cp prebuilt-sdk/board/rpi4b_${{ matrix.memory }}/debug/elf/initialiser.elf \
+             microkit-sdk-${{ matrix.memory }}/board/rpi4b_${{ matrix.memory }}/debug/elf/
+
           echo "=== SDK contents ==="
           ls -la microkit-sdk-${{ matrix.memory }}/bin/
-          ls -la microkit-sdk-${{ matrix.memory }}/board/
+          ls -la microkit-sdk-${{ matrix.memory }}/board/rpi4b_${{ matrix.memory }}/debug/elf/
 
       - name: Upload SDK artifact
         uses: actions/upload-artifact@v4
