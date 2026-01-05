@@ -29,109 +29,13 @@ on:
 
 env:
   # Pinned versions for reproducible builds
-  # NOTE: SDK 2.1.0 has a boot bug on RPi4B, we build from source with fix
   MICROKIT_VERSION: "2.1.0"
-  MICROKIT_GIT_REF: "main"  # Contains PR #402 fix for RPi4B
+  MICROKIT_SDK_SHA256: "faff1b6d6b546cbb0bfea134588499533130d406ae2a5e533e791ddf23ac7599"
   RPI_FIRMWARE_TAG: "1.20250915"
 
 jobs:
-  # Build Microkit SDK from source with RPi4B fix
-  build-sdk:
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        memory: [8gb]  # Focus on 8GB first
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          submodules: recursive
-
-      - name: Cache Microkit SDK build
-        id: cache-sdk
-        uses: actions/cache@v4
-        with:
-          path: microkit-sdk-${{ matrix.memory }}
-          key: microkit-sdk-source-${{ matrix.memory }}-${{ env.MICROKIT_GIT_REF }}-v3
-
-      - name: Download pre-built SDK 2.1.0 (for tool binary)
-        if: steps.cache-sdk.outputs.cache-hit != 'true'
-        run: |
-          echo "=== Downloading pre-built SDK 2.1.0 ==="
-          curl -L -o microkit-sdk.tar.gz \
-            "https://github.com/seL4/microkit/releases/download/${{ env.MICROKIT_VERSION }}/microkit-sdk-${{ env.MICROKIT_VERSION }}-linux-x86-64.tar.gz"
-          mkdir -p prebuilt-sdk
-          tar -xzf microkit-sdk.tar.gz -C prebuilt-sdk --strip-components=1
-          rm microkit-sdk.tar.gz
-          echo "Pre-built SDK extracted to prebuilt-sdk/"
-
-      - name: Clone Microkit (with RPi4B fix)
-        if: steps.cache-sdk.outputs.cache-hit != 'true'
-        run: |
-          git clone --depth 1 https://github.com/seL4/microkit.git vendor-microkit
-          cd vendor-microkit
-          echo "=== Microkit version ==="
-          git log --oneline -1
-
-      - name: Clone seL4 kernel source
-        if: steps.cache-sdk.outputs.cache-hit != 'true'
-        run: |
-          # Clone seL4 kernel directly (faster than full sel4test)
-          git clone --depth 1 --branch 13.0.0 https://github.com/seL4/seL4.git sel4-kernel
-          echo "=== seL4 kernel version ==="
-          cd sel4-kernel && git log --oneline -1
-
-      - name: Build Microkit SDK for RPi4B ${{ matrix.memory }}
-        if: steps.cache-sdk.outputs.cache-hit != 'true'
-        run: |
-          echo "=== Building Microkit SDK for rpi4b_${{ matrix.memory }} ==="
-
-          # Pull Docker image
-          docker pull trustworthysystems/camkes:latest
-
-          # Build SDK using Docker - skip tool and initialiser (use pre-built)
-          # This only rebuilds the loader with the RPi4B boot fix
-          docker run --rm \
-            -u $(id -u):$(id -g) \
-            -e CCACHE_DISABLE=1 \
-            -v $PWD/vendor-microkit:/microkit \
-            -v $PWD/sel4-kernel:/sel4 \
-            -w /microkit \
-            trustworthysystems/camkes:latest \
-            python3 build_sdk.py \
-              --sel4 /sel4 \
-              --boards rpi4b_${{ matrix.memory }} \
-              --configs debug \
-              --skip-tool \
-              --skip-initialiser \
-              --skip-docs \
-              --gcc-toolchain-prefix-aarch64 aarch64-linux-gnu-
-
-          # Copy built SDK to output location
-          mkdir -p microkit-sdk-${{ matrix.memory }}
-          cp -r vendor-microkit/release/microkit-sdk-*/. microkit-sdk-${{ matrix.memory }}/
-
-          # Copy the pre-built tool binary (since we skipped building it)
-          echo "=== Copying pre-built tool binary ==="
-          cp prebuilt-sdk/bin/microkit microkit-sdk-${{ matrix.memory }}/bin/
-          chmod +x microkit-sdk-${{ matrix.memory }}/bin/microkit
-
-          echo "=== SDK built successfully ==="
-          ls -la microkit-sdk-${{ matrix.memory }}/
-          ls -la microkit-sdk-${{ matrix.memory }}/bin/
-          ls -la microkit-sdk-${{ matrix.memory }}/board/
-
-      - name: Upload SDK artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: microkit-sdk-${{ matrix.memory }}
-          path: microkit-sdk-${{ matrix.memory }}/
-          retention-days: 7
-
   # Build 8GB variant (primary target)
   build-8gb:
-    needs: build-sdk
     runs-on: ubuntu-latest
     outputs:
       sha_short: ${{ steps.commit.outputs.SHA_SHORT }}
@@ -145,16 +49,31 @@ jobs:
         run: |
           echo "SHA_SHORT=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
 
-      - name: Download Microkit SDK
-        uses: actions/download-artifact@v4
+      - name: Cache Microkit SDK
+        id: cache-microkit
+        uses: actions/cache@v4
         with:
-          name: microkit-sdk-8gb
           path: sel4-microkernel/rpi4-graphics/microkit-sdk
+          key: microkit-sdk-${{ env.MICROKIT_VERSION }}-linux-x86-64
 
-      - name: Fix SDK permissions
+      - name: Download Microkit SDK
+        if: steps.cache-microkit.outputs.cache-hit != 'true'
+        working-directory: sel4-microkernel/rpi4-graphics
         run: |
-          chmod +x sel4-microkernel/rpi4-graphics/microkit-sdk/bin/microkit || true
+          curl -L -o microkit-sdk.tar.gz \
+            "https://github.com/seL4/microkit/releases/download/${{ env.MICROKIT_VERSION }}/microkit-sdk-${{ env.MICROKIT_VERSION }}-linux-x86-64.tar.gz"
+
+          # Verify SHA256 checksum
+          echo "${{ env.MICROKIT_SDK_SHA256 }}  microkit-sdk.tar.gz" | sha256sum -c -
+
+          mkdir -p microkit-sdk
+          tar -xzf microkit-sdk.tar.gz -C microkit-sdk --strip-components=1
+          rm microkit-sdk.tar.gz
+
+      - name: Verify SDK
+        run: |
           ls -la sel4-microkernel/rpi4-graphics/microkit-sdk/bin/
+          ls -la sel4-microkernel/rpi4-graphics/microkit-sdk/board/
 
       - name: Install dependencies
         run: |
@@ -285,8 +204,6 @@ jobs:
           | Model | Image | Notes |
           |-------|-------|-------|
           | **Pi 4 (8GB)** | `rpi4-sel4-graphics-8gb.img` | Primary target |
-
-          > Note: This build uses a custom Microkit SDK built from source with the RPi4B boot fix (PR #402).
 
           ## Flashing Instructions
 
