@@ -50,7 +50,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: microkit-sdk-${{ matrix.memory }}
-          key: microkit-sdk-patched-${{ matrix.memory }}-v4
+          key: microkit-sdk-patched-${{ matrix.memory }}-sel4-14.0.0-v1
 
       - name: Download pre-built SDK 2.1.0 (for tool binary)
         if: steps.cache-sdk.outputs.cache-hit != 'true'
@@ -74,7 +74,8 @@ jobs:
       - name: Clone seL4 kernel source
         if: steps.cache-sdk.outputs.cache-hit != 'true'
         run: |
-          git clone --depth 1 --branch 13.0.0 https://github.com/seL4/seL4.git sel4-kernel
+          # Use seL4 14.0.0 which is compatible with Microkit main
+          git clone --depth 1 --branch 14.0.0 https://github.com/seL4/seL4.git sel4-kernel
           cd sel4-kernel && git log --oneline -1
 
       - name: Build Microkit SDK for RPi4B ${{ matrix.memory }}
