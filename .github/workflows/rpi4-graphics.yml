@@ -53,7 +53,18 @@ jobs:
         uses: actions/cache@v4
         with:
           path: microkit-sdk-${{ matrix.memory }}
-          key: microkit-sdk-source-${{ matrix.memory }}-${{ env.MICROKIT_GIT_REF }}-v2
+          key: microkit-sdk-source-${{ matrix.memory }}-${{ env.MICROKIT_GIT_REF }}-v3
+
+      - name: Download pre-built SDK 2.1.0 (for tool binary)
+        if: steps.cache-sdk.outputs.cache-hit != 'true'
+        run: |
+          echo "=== Downloading pre-built SDK 2.1.0 ==="
+          curl -L -o microkit-sdk.tar.gz \
+            "https://github.com/seL4/microkit/releases/download/${{ env.MICROKIT_VERSION }}/microkit-sdk-${{ env.MICROKIT_VERSION }}-linux-x86-64.tar.gz"
+          mkdir -p prebuilt-sdk
+          tar -xzf microkit-sdk.tar.gz -C prebuilt-sdk --strip-components=1
+          rm microkit-sdk.tar.gz
+          echo "Pre-built SDK extracted to prebuilt-sdk/"
 
       - name: Clone Microkit (with RPi4B fix)
         if: steps.cache-sdk.outputs.cache-hit != 'true'
@@ -79,7 +90,8 @@ jobs:
           # Pull Docker image
           docker pull trustworthysystems/camkes:latest
 
-          # Build SDK using Docker
+          # Build SDK using Docker - skip tool and initialiser (use pre-built)
+          # This only rebuilds the loader with the RPi4B boot fix
           docker run --rm \
             -u $(id -u):$(id -g) \
             -e CCACHE_DISABLE=1 \
@@ -91,14 +103,23 @@ jobs:
               --sel4 /sel4 \
               --boards rpi4b_${{ matrix.memory }} \
               --configs debug \
+              --skip-tool \
+              --skip-initialiser \
+              --skip-docs \
               --gcc-toolchain-prefix-aarch64 aarch64-linux-gnu-
 
-          # Copy SDK to output location
+          # Copy built SDK to output location
           mkdir -p microkit-sdk-${{ matrix.memory }}
           cp -r vendor-microkit/release/microkit-sdk-*/. microkit-sdk-${{ matrix.memory }}/
 
+          # Copy the pre-built tool binary (since we skipped building it)
+          echo "=== Copying pre-built tool binary ==="
+          cp prebuilt-sdk/bin/microkit microkit-sdk-${{ matrix.memory }}/bin/
+          chmod +x microkit-sdk-${{ matrix.memory }}/bin/microkit
+
           echo "=== SDK built successfully ==="
           ls -la microkit-sdk-${{ matrix.memory }}/
+          ls -la microkit-sdk-${{ matrix.memory }}/bin/
           ls -la microkit-sdk-${{ matrix.memory }}/board/
 
       - name: Upload SDK artifact
