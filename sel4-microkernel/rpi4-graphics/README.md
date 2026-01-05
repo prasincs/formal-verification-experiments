@@ -3,9 +3,11 @@
 A bootable SD card image demonstrating seL4 Microkit on Raspberry Pi 4 with
 framebuffer graphics output.
 
-> **⚠️ Work in Progress**: Framebuffer graphics output is not yet working.
-> U-Boot boots successfully and displays output, but seL4 framebuffer access
-> is still being debugged. See [Known Issues](#known-issues) below.
+> **⚠️ Important**: Microkit SDK 2.1.0 has a boot issue on RPi4B. You must either:
+> 1. Build the SDK from source with the fix (see [Building Microkit SDK from Source](#building-microkit-sdk-from-source)), or
+> 2. Wait for SDK 2.2.0+ which will include the fix
+>
+> The framebuffer graphics demo itself is still work in progress.
 
 ## What It Does
 
@@ -67,13 +69,21 @@ When booted, the system:
 
 ### 1. Set up Microkit SDK
 
+**Option A: Download pre-built SDK (requires patching for RPi4B)**
+
 ```bash
-# Download SDK 2.1.0 (latest stable)
+# Download SDK 2.1.0
 curl -LO https://github.com/seL4/microkit/releases/download/2.1.0/microkit-sdk-2.1.0-linux-x86-64.tar.gz
 mkdir -p microkit-sdk
 tar -xzf microkit-sdk-*.tar.gz -C microkit-sdk --strip-components=1
 export MICROKIT_SDK=$PWD/microkit-sdk
+
+# IMPORTANT: SDK 2.1.0 has a boot bug on RPi4B - see "Building Microkit SDK from Source" below
 ```
+
+**Option B: Build SDK from source with RPi4B fix (recommended)**
+
+See [Building Microkit SDK from Source](#building-microkit-sdk-from-source) section below.
 
 ### 2. Build the System and Create SD Card Image
 
@@ -260,6 +270,28 @@ at the U-Boot prompt to find the framebuffer address.
 
 ## Known Issues
 
+### Microkit SDK 2.1.0 Boot Failure on RPi4B (FIXED)
+
+**Status**: ✅ Fixed by building SDK from source
+
+**Symptom**: After U-Boot's `go 0x10000000` command, the loader crashes immediately:
+```
+LDR|INFO: disabling MMU (if it was enabled)
+LDR|ERROR: loader trapped exception: Synchronous (Current Exception level with SP_ELx)
+esr_el2: 0x0000000002000000
+ec: 0x00000000 (Unknown reason)
+```
+
+**Root Cause**: The Microkit loader makes a PSCI (Power State Coordination Interface)
+SMC call during boot to check PSCI version. The Raspberry Pi 4's firmware doesn't
+properly handle this call, causing an exception.
+
+**Fix**: [PR #402](https://github.com/seL4/microkit/pull/402) (merged Nov 28, 2025)
+skips the PSCI check on BCM2711 platforms. This fix was merged 2 days AFTER SDK 2.1.0
+was released (Nov 26, 2025).
+
+**Solution**: Build the SDK from source - see [Building Microkit SDK from Source](#building-microkit-sdk-from-source).
+
 ### Framebuffer Graphics Not Working
 
 **Status**: seL4 loads and runs, but framebuffer writes don't appear on screen.
@@ -309,10 +341,125 @@ Without a USB-serial adapter, debug output from seL4 is not visible. The
 - Verify baud rate is 115200
 - Ensure `enable_uart=1` in config.txt
 
+## Building Microkit SDK from Source
+
+The Microkit SDK 2.1.0 release has a boot bug on Raspberry Pi 4B (see [Known Issues](#microkit-sdk-210-boot-failure-on-rpi4b-fixed)).
+Until SDK 2.2.0 is released, you must build the SDK from source to get the fix.
+
+### Prerequisites
+
+- Docker (for reproducible builds)
+- seL4 kernel source (from sel4test or standalone)
+- Git
+
+### Quick Build (Docker)
+
+```bash
+# Clone Microkit with the fix
+git submodule add https://github.com/seL4/microkit.git vendor/microkit
+cd vendor/microkit
+git checkout main  # or specific commit with fix: 23f1f6d
+
+# Get seL4 kernel source (if you don't have it)
+cd ../..
+mkdir -p sel4test && cd sel4test
+repo init -u https://github.com/seL4/sel4test-manifest.git
+repo sync
+cd ..
+
+# Build SDK using Docker (this takes ~5 minutes)
+docker pull trustworthysystems/camkes
+docker run --rm -u $(id -u):$(id -g) -e CCACHE_DISABLE=1 \
+  -v $(pwd):/workspace \
+  -w /workspace/rpi4-graphics/vendor/microkit \
+  trustworthysystems/camkes python3 build_sdk.py \
+    --sel4 /workspace/sel4test/kernel \
+    --boards rpi4b_8gb \
+    --configs debug \
+    --skip-tool \
+    --skip-initialiser \
+    --skip-docs \
+    --skip-tar \
+    --gcc-toolchain-prefix-aarch64 aarch64-linux-gnu
+```
+
+### Build Options Explained
+
+| Option | Description |
+|--------|-------------|
+| `--boards rpi4b_8gb` | Build for 8GB Pi 4 (also: `rpi4b_4gb`, `rpi4b_2gb`, `rpi4b_1gb`) |
+| `--configs debug` | Debug build with symbols (also: `release`) |
+| `--skip-tool` | Don't build the Microkit tool (use existing from SDK 2.1.0) |
+| `--skip-initialiser` | Skip Rust initialiser build (use existing) |
+| `--gcc-toolchain-prefix-aarch64` | Use `aarch64-linux-gnu-` prefix for GCC |
+
+### Install the Fixed Loader
+
+After building, copy the fixed loader to your SDK:
+
+```bash
+# The fixed loader is at:
+# vendor/microkit/release/microkit-sdk-2.1.0-dev/board/rpi4b_8gb/debug/elf/loader.elf
+
+# Copy to your SDK (assuming MICROKIT_SDK is set)
+cp vendor/microkit/release/microkit-sdk-2.1.0-dev/board/rpi4b_8gb/debug/elf/loader.elf \
+   $MICROKIT_SDK/board/rpi4b_8gb/debug/elf/loader.elf
+```
+
+### Understanding the Fix
+
+The fix is in `loader/src/aarch64/init.c`:
+
+```c
+// Before (SDK 2.1.0):
+uint32_t ret = arm_smc32_call(PSCI_FUNCTION_VERSION, ...);
+// This crashes on RPi4B because firmware doesn't handle PSCI SMC properly
+
+// After (PR #402):
+#if !defined(CONFIG_PLAT_BCM2711)
+    uint32_t ret = arm_smc32_call(PSCI_FUNCTION_VERSION, ...);
+    // ... PSCI check code ...
+#endif
+// BCM2711 (RPi4) skips the problematic PSCI call entirely
+```
+
+### Verifying the Fix
+
+After building, confirm the fix is present:
+
+```bash
+# Check the commit includes the BCM2711 fix
+cd vendor/microkit
+git log --oneline -1
+# Should show: 23f1f6d loader: hot-fix for RPi4B
+
+# Verify loader.elf was built
+ls -la release/microkit-sdk-2.1.0-dev/board/rpi4b_8gb/debug/elf/loader.elf
+```
+
+### Troubleshooting SDK Build
+
+**Permission denied errors**:
+```bash
+# Clean up root-owned files from previous Docker runs
+docker run --rm -v $(pwd)/vendor/microkit:/workspace trustworthysystems/camkes \
+  rm -rf /workspace/build /workspace/release
+```
+
+**Missing pyfdt module** (when building outside Docker):
+```bash
+pip install pyfdt
+```
+
+**Clang too old** (`-mno-outline-atomics` error):
+Use `--gcc-toolchain-prefix-aarch64 aarch64-linux-gnu` instead of `--llvm`
+
 ## References
 
 - [seL4 Raspberry Pi 4 Docs](https://docs.sel4.systems/Hardware/Rpi4.html)
 - [Microkit Manual](https://github.com/seL4/microkit/blob/main/docs/manual.md)
+- [Microkit PR #402: RPi4B hot-fix](https://github.com/seL4/microkit/pull/402) - Fix for PSCI boot crash
+- [Microkit Issue #401: RPi4B boot failure](https://github.com/seL4/microkit/issues/401) - Original bug report
 - [Raspberry Pi Mailbox Interface](https://github.com/raspberrypi/firmware/wiki/Mailbox-property-interface)
 - [BCM2711 Peripherals](https://datasheets.raspberrypi.com/bcm2711/bcm2711-peripherals.pdf)
 - [STPM4RasPI Data Brief](https://www.st.com/resource/en/data_brief/stpm4raspi.pdf)

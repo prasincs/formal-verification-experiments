@@ -18,8 +18,8 @@ OUTPUT_IMG="$BUILD_DIR/rpi4-sel4test.img"
 IMG_SIZE_MB=64
 PART_OFFSET=$((2048 * 512))
 
-# Default to 2GB (for testing)
-MEMORY_SIZE="2gb"
+# Default to 8GB
+MEMORY_SIZE="8gb"
 
 # Parse arguments
 while [[ $# -gt 0 ]]; do
