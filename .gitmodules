@@ -4,3 +4,6 @@
 [submodule "sel4-microkernel/rpi4-graphics/vendor/microkit"]
 	path = sel4-microkernel/rpi4-graphics/vendor/microkit
 	url = https://github.com/seL4/microkit.git
+[submodule "sel4-microkernel/sel4test/sel4test"]
+	path = sel4-microkernel/sel4test
+	url = https://github.com/seL4/sel4test-manifest.git
