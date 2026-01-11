@@ -257,10 +257,11 @@ unsafe fn draw_static_elements(ptr: *mut u32, pitch: usize, width: usize, height
 
     // e (lowercase - smaller)
     let e_x = sel4_x + block * 4;
-    draw_block(ptr, pitch, e_x, start_y + block, block * 2, block, green);
-    draw_block(ptr, pitch, e_x, start_y + block * 2, block, block, green);
-    draw_block(ptr, pitch, e_x, start_y + block * 3, block * 2, block, green);
-    draw_block(ptr, pitch, e_x, start_y + block * 4, block * 2, block, green);
+    draw_block(ptr, pitch, e_x, start_y + block, block * 2, block, green);      // top bar
+    draw_block(ptr, pitch, e_x, start_y + block * 2, block, block, green);      // left vertical
+    draw_block(ptr, pitch, e_x + block, start_y + block * 2, block, block, green); // right vertical (upper)
+    draw_block(ptr, pitch, e_x, start_y + block * 3, block * 2, block, green);  // middle bar
+    draw_block(ptr, pitch, e_x, start_y + block * 4, block * 2, block, green);  // bottom bar
 
     // L
     let l_x = sel4_x + block * 7;
@@ -425,33 +426,180 @@ unsafe fn draw_text_select(ptr: *mut u32, pitch: usize, x: usize, y: usize, colo
     draw_block(ptr, pitch, tx+b, y+b, b, b*4, color);
 }
 
+/// Draw a single block letter
+unsafe fn draw_letter(ptr: *mut u32, pitch: usize, x: usize, y: usize, b: usize, letter: char, color: u32) {
+    match letter {
+        'S' => {
+            draw_block(ptr, pitch, x, y, b*3, b, color);
+            draw_block(ptr, pitch, x, y+b, b, b, color);
+            draw_block(ptr, pitch, x, y+b*2, b*3, b, color);
+            draw_block(ptr, pitch, x+b*2, y+b*3, b, b, color);
+            draw_block(ptr, pitch, x, y+b*4, b*3, b, color);
+        }
+        'N' => {
+            draw_block(ptr, pitch, x, y, b, b*5, color);
+            draw_block(ptr, pitch, x+b, y+b, b, b*2, color);
+            draw_block(ptr, pitch, x+b*2, y, b, b*5, color);
+        }
+        'A' => {
+            draw_block(ptr, pitch, x, y, b*3, b, color);
+            draw_block(ptr, pitch, x, y+b, b, b*4, color);
+            draw_block(ptr, pitch, x+b*2, y+b, b, b*4, color);
+            draw_block(ptr, pitch, x, y+b*2, b*3, b, color);
+        }
+        'K' => {
+            draw_block(ptr, pitch, x, y, b, b*5, color);
+            draw_block(ptr, pitch, x+b, y+b*2, b, b, color);
+            draw_block(ptr, pitch, x+b*2, y, b, b*2, color);
+            draw_block(ptr, pitch, x+b*2, y+b*3, b, b*2, color);
+        }
+        'E' => {
+            draw_block(ptr, pitch, x, y, b*3, b, color);
+            draw_block(ptr, pitch, x, y+b, b, b*3, color);
+            draw_block(ptr, pitch, x, y+b*2, b*2, b, color);
+            draw_block(ptr, pitch, x, y+b*4, b*3, b, color);
+        }
+        'G' => {
+            draw_block(ptr, pitch, x, y, b*3, b, color);
+            draw_block(ptr, pitch, x, y+b, b, b*3, color);
+            draw_block(ptr, pitch, x, y+b*4, b*3, b, color);
+            draw_block(ptr, pitch, x+b*2, y+b*2, b, b*2, color);
+            draw_block(ptr, pitch, x+b, y+b*2, b, b, color);
+        }
+        'M' => {
+            draw_block(ptr, pitch, x, y, b, b*5, color);
+            draw_block(ptr, pitch, x+b, y+b, b, b, color);
+            draw_block(ptr, pitch, x+b*2, y, b, b*5, color);
+        }
+        'C' => {
+            draw_block(ptr, pitch, x, y, b*3, b, color);
+            draw_block(ptr, pitch, x, y+b, b, b*3, color);
+            draw_block(ptr, pitch, x, y+b*4, b*3, b, color);
+        }
+        'R' => {
+            draw_block(ptr, pitch, x, y, b*3, b, color);
+            draw_block(ptr, pitch, x, y+b, b, b*4, color);
+            draw_block(ptr, pitch, x+b*2, y+b, b, b, color);
+            draw_block(ptr, pitch, x, y+b*2, b*3, b, color);
+            draw_block(ptr, pitch, x+b*2, y+b*3, b, b*2, color);
+        }
+        'V' => {
+            draw_block(ptr, pitch, x, y, b, b*3, color);
+            draw_block(ptr, pitch, x+b*2, y, b, b*3, color);
+            draw_block(ptr, pitch, x+b, y+b*3, b, b*2, color);
+        }
+        'B' => {
+            draw_block(ptr, pitch, x, y, b*3, b, color);
+            draw_block(ptr, pitch, x, y+b, b, b*4, color);
+            draw_block(ptr, pitch, x+b*2, y+b, b, b, color);
+            draw_block(ptr, pitch, x, y+b*2, b*3, b, color);
+            draw_block(ptr, pitch, x+b*2, y+b*3, b, b, color);
+            draw_block(ptr, pitch, x, y+b*4, b*3, b, color);
+        }
+        'O' => {
+            draw_block(ptr, pitch, x, y, b*3, b, color);
+            draw_block(ptr, pitch, x, y+b, b, b*3, color);
+            draw_block(ptr, pitch, x+b*2, y+b, b, b*3, color);
+            draw_block(ptr, pitch, x, y+b*4, b*3, b, color);
+        }
+        'U' => {
+            draw_block(ptr, pitch, x, y, b, b*4, color);
+            draw_block(ptr, pitch, x+b*2, y, b, b*4, color);
+            draw_block(ptr, pitch, x, y+b*4, b*3, b, color);
+        }
+        'T' => {
+            draw_block(ptr, pitch, x, y, b*3, b, color);
+            draw_block(ptr, pitch, x+b, y+b, b, b*4, color);
+        }
+        'I' => {
+            draw_block(ptr, pitch, x, y, b*3, b, color);
+            draw_block(ptr, pitch, x+b, y+b, b, b*3, color);
+            draw_block(ptr, pitch, x, y+b*4, b*3, b, color);
+        }
+        'L' => {
+            draw_block(ptr, pitch, x, y, b, b*4, color);
+            draw_block(ptr, pitch, x, y+b*4, b*3, b, color);
+        }
+        'P' => {
+            draw_block(ptr, pitch, x, y, b*3, b, color);
+            draw_block(ptr, pitch, x, y+b, b, b*4, color);
+            draw_block(ptr, pitch, x+b*2, y+b, b, b, color);
+            draw_block(ptr, pitch, x, y+b*2, b*3, b, color);
+        }
+        '4' => {
+            draw_block(ptr, pitch, x, y, b, b*3, color);
+            draw_block(ptr, pitch, x, y+b*2, b*3, b, color);
+            draw_block(ptr, pitch, x+b*2, y, b, b*5, color);
+        }
+        ' ' => {} // space - do nothing
+        _ => {} // unknown letter
+    }
+}
+
 /// Draw "SNAKE GAME" text
 unsafe fn draw_text_snake_game(ptr: *mut u32, pitch: usize, x: usize, y: usize, color: u32) {
     let b = 6usize;
-    // Simplified: just draw rectangles to represent text
-    draw_block(ptr, pitch, x, y+5, 150, 30, color);
+    let spacing = b * 4;
+    // S N A K E   G A M E
+    draw_letter(ptr, pitch, x, y, b, 'S', color);
+    draw_letter(ptr, pitch, x + spacing, y, b, 'N', color);
+    draw_letter(ptr, pitch, x + spacing*2, y, b, 'A', color);
+    draw_letter(ptr, pitch, x + spacing*3, y, b, 'K', color);
+    draw_letter(ptr, pitch, x + spacing*4, y, b, 'E', color);
+    // gap
+    draw_letter(ptr, pitch, x + spacing*6, y, b, 'G', color);
+    draw_letter(ptr, pitch, x + spacing*7, y, b, 'A', color);
+    draw_letter(ptr, pitch, x + spacing*8, y, b, 'M', color);
+    draw_letter(ptr, pitch, x + spacing*9, y, b, 'E', color);
 }
 
 /// Draw "SCREENSAVER" text
 unsafe fn draw_text_screensaver(ptr: *mut u32, pitch: usize, x: usize, y: usize, color: u32) {
-    let b = 6usize;
-    draw_block(ptr, pitch, x, y+5, 180, 30, color);
+    let b = 5usize;
+    let spacing = b * 4;
+    // S C R E E N S A V E R
+    draw_letter(ptr, pitch, x, y, b, 'S', color);
+    draw_letter(ptr, pitch, x + spacing, y, b, 'C', color);
+    draw_letter(ptr, pitch, x + spacing*2, y, b, 'R', color);
+    draw_letter(ptr, pitch, x + spacing*3, y, b, 'E', color);
+    draw_letter(ptr, pitch, x + spacing*4, y, b, 'E', color);
+    draw_letter(ptr, pitch, x + spacing*5, y, b, 'N', color);
+    draw_letter(ptr, pitch, x + spacing*6, y, b, 'S', color);
+    draw_letter(ptr, pitch, x + spacing*7, y, b, 'A', color);
+    draw_letter(ptr, pitch, x + spacing*8, y, b, 'V', color);
+    draw_letter(ptr, pitch, x + spacing*9, y, b, 'E', color);
+    draw_letter(ptr, pitch, x + spacing*10, y, b, 'R', color);
 }
 
 /// Draw "ABOUT" text
 unsafe fn draw_text_about(ptr: *mut u32, pitch: usize, x: usize, y: usize, color: u32) {
     let b = 6usize;
-    draw_block(ptr, pitch, x, y+5, 100, 30, color);
+    let spacing = b * 4;
+    // A B O U T
+    draw_letter(ptr, pitch, x, y, b, 'A', color);
+    draw_letter(ptr, pitch, x + spacing, y, b, 'B', color);
+    draw_letter(ptr, pitch, x + spacing*2, y, b, 'O', color);
+    draw_letter(ptr, pitch, x + spacing*3, y, b, 'U', color);
+    draw_letter(ptr, pitch, x + spacing*4, y, b, 'T', color);
 }
 
-/// Draw navigation hint
+/// Draw navigation hint - simplified arrow indicators
 unsafe fn draw_text_hint(ptr: *mut u32, pitch: usize, x: usize, y: usize, color: u32) {
-    // "W/S or Arrows: Navigate   Enter: Select   Q: Quit"
-    draw_block(ptr, pitch, x, y, 500, 20, color);
+    let b = 4usize;
+    // Up/Down arrows indicator
+    draw_block(ptr, pitch, x, y, b, b, color);
+    draw_block(ptr, pitch, x+b, y+b, b, b, color);
+    draw_block(ptr, pitch, x, y+b*2, b, b, color);
+    // "NAVIGATE" text
+    let spacing = b * 4;
+    let tx = x + 40;
+    draw_letter(ptr, pitch, tx, y, b, 'N', color);
+    draw_letter(ptr, pitch, tx + spacing, y, b, 'A', color);
+    draw_letter(ptr, pitch, tx + spacing*2, y, b, 'V', color);
 }
 
 /// Draw About screen
-unsafe fn draw_about_screen(ptr: *mut u32, pitch: usize, width: usize, height: usize) {
+unsafe fn draw_about_screen(ptr: *mut u32, pitch: usize, _width: usize, _height: usize) {
     let bg_color: u32 = 0xFF101030;
     let white: u32 = 0xFFFFFFFF;
     let green: u32 = 0xFF00B050;
@@ -463,14 +611,54 @@ unsafe fn draw_about_screen(ptr: *mut u32, pitch: usize, width: usize, height: u
         }
     }
 
-    // Title
-    draw_block(ptr, pitch, 500, 180, 200, 40, green);  // "ABOUT"
+    // Title "ABOUT"
+    let b = 10usize;
+    let spacing = b * 4;
+    let title_x = 520usize;
+    let title_y = 180usize;
+    draw_letter(ptr, pitch, title_x, title_y, b, 'A', green);
+    draw_letter(ptr, pitch, title_x + spacing, title_y, b, 'B', green);
+    draw_letter(ptr, pitch, title_x + spacing*2, title_y, b, 'O', green);
+    draw_letter(ptr, pitch, title_x + spacing*3, title_y, b, 'U', green);
+    draw_letter(ptr, pitch, title_x + spacing*4, title_y, b, 'T', green);
 
-    // Info lines (simplified as blocks)
-    draw_block(ptr, pitch, 200, 280, 400, 25, white);  // "seL4 Microkernel Demo"
-    draw_block(ptr, pitch, 200, 320, 350, 25, white);  // "Raspberry Pi 4"
-    draw_block(ptr, pitch, 200, 360, 300, 25, white);  // "1280x720 HDMI"
-    draw_block(ptr, pitch, 200, 420, 450, 25, white);  // "Press Q or ESC to return"
+    // "SEL4" line
+    let b = 6usize;
+    let spacing = b * 4;
+    let line_x = 300usize;
+    draw_letter(ptr, pitch, line_x, 280, b, 'S', white);
+    draw_letter(ptr, pitch, line_x + spacing, 280, b, 'E', white);
+    draw_letter(ptr, pitch, line_x + spacing*2, 280, b, 'L', white);
+    draw_letter(ptr, pitch, line_x + spacing*3, 280, b, '4', white);
+    // "MICROKIT"
+    let mk_x = line_x + spacing*5;
+    draw_letter(ptr, pitch, mk_x, 280, b, 'M', white);
+    draw_letter(ptr, pitch, mk_x + spacing, 280, b, 'I', white);
+    draw_letter(ptr, pitch, mk_x + spacing*2, 280, b, 'C', white);
+    draw_letter(ptr, pitch, mk_x + spacing*3, 280, b, 'R', white);
+    draw_letter(ptr, pitch, mk_x + spacing*4, 280, b, 'O', white);
+    draw_letter(ptr, pitch, mk_x + spacing*5, 280, b, 'K', white);
+    draw_letter(ptr, pitch, mk_x + spacing*6, 280, b, 'I', white);
+    draw_letter(ptr, pitch, mk_x + spacing*7, 280, b, 'T', white);
+
+    // "RPI4" line
+    draw_letter(ptr, pitch, line_x, 340, b, 'R', white);
+    draw_letter(ptr, pitch, line_x + spacing, 340, b, 'P', white);
+    draw_letter(ptr, pitch, line_x + spacing*2, 340, b, 'I', white);
+    draw_letter(ptr, pitch, line_x + spacing*3, 340, b, '4', white);
+
+    // "PRESS ESC" line
+    let esc_x = line_x;
+    draw_letter(ptr, pitch, esc_x, 420, b, 'P', white);
+    draw_letter(ptr, pitch, esc_x + spacing, 420, b, 'R', white);
+    draw_letter(ptr, pitch, esc_x + spacing*2, 420, b, 'E', white);
+    draw_letter(ptr, pitch, esc_x + spacing*3, 420, b, 'S', white);
+    draw_letter(ptr, pitch, esc_x + spacing*4, 420, b, 'S', white);
+    // ESC
+    let esc2_x = esc_x + spacing*6;
+    draw_letter(ptr, pitch, esc2_x, 420, b, 'E', white);
+    draw_letter(ptr, pitch, esc2_x + spacing, 420, b, 'S', white);
+    draw_letter(ptr, pitch, esc2_x + spacing*2, 420, b, 'C', white);
 }
 
 /// Run the main application loop with menu and state machine
