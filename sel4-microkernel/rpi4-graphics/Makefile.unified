@@ -1,0 +1,76 @@
+# Wrapper Makefile for rpi4-graphics
+# Forwards to unified build system at ../build-system/
+#
+# Usage remains the same:
+#   make                  # Build everything
+#   make sdcard           # Create bootable SD card image
+#   make sdcard-uboot     # Build + create SD card with U-Boot
+#   make clean            # Clean build artifacts
+
+# Configuration passthrough
+RPI4_MEMORY ?= 4gb
+MICROKIT_SDK ?= $(PWD)/../microkit-sdk
+
+# Unified build system
+BUILD_SYSTEM := ../build-system
+
+# Forward to unified system with product and platform
+UNIFIED_MAKE := $(MAKE) -C $(BUILD_SYSTEM) \
+	PRODUCT=graphics \
+	PLATFORM=rpi4 \
+	RPI4_MEMORY=$(RPI4_MEMORY) \
+	MICROKIT_SDK=$(MICROKIT_SDK)
+
+.PHONY: all sdcard sdcard-uboot elf firmware uboot bootfiles check setup clean help
+
+all:
+	$(UNIFIED_MAKE) all
+
+sdcard:
+	$(UNIFIED_MAKE) sdcard
+
+sdcard-uboot:
+	$(UNIFIED_MAKE) sdcard-uboot
+
+elf:
+	$(UNIFIED_MAKE) elf
+
+firmware:
+	$(UNIFIED_MAKE) firmware
+
+uboot:
+	$(UNIFIED_MAKE) uboot
+
+bootfiles:
+	$(UNIFIED_MAKE) bootfiles
+
+check:
+	$(UNIFIED_MAKE) check
+
+setup:
+	$(UNIFIED_MAKE) setup-sdk
+
+clean:
+	$(UNIFIED_MAKE) clean
+	cargo clean
+
+help:
+	@echo "rpi4-graphics - seL4 Microkit Graphics Demo"
+	@echo ""
+	@echo "This Makefile forwards to the unified build system."
+	@echo ""
+	@echo "Usage:"
+	@echo "  make                Build system image"
+	@echo "  make sdcard         Create bootable SD card image"
+	@echo "  make sdcard-uboot   SD card with U-Boot for debugging"
+	@echo "  make elf            Build loader.elf for bootelf"
+	@echo "  make firmware       Download Raspberry Pi firmware"
+	@echo "  make uboot          Build U-Boot bootloader"
+	@echo "  make clean          Clean build artifacts"
+	@echo ""
+	@echo "Configuration:"
+	@echo "  RPI4_MEMORY=4gb     Set Pi 4 memory variant (1gb/2gb/4gb/8gb)"
+	@echo "  MICROKIT_SDK=path   Path to Microkit SDK"
+	@echo ""
+	@echo "Or use unified build system directly:"
+	@echo "  make -C ../build-system PRODUCT=graphics PLATFORM=rpi4 sdcard"
