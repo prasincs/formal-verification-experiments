@@ -23,7 +23,8 @@ else
 endif
 
 # Cargo settings
-CARGO := cargo +nightly
+# Use rustup run for better compatibility across different cargo installations
+CARGO := rustup run nightly cargo
 CARGO_BUILD_STD := -Z build-std=core,alloc,compiler_builtins -Z build-std-features=compiler-builtins-mem
 
 # Default Microkit configuration

@@ -13,10 +13,10 @@ PRODUCT_NAME := TV Demo
 PRODUCT_SRC_DIR := $(ROOT_DIR)/rpi4-spi-display
 
 # Protection domain
-PD_NAME := spi_display
+PD_NAME := display_pd
 PD_ELF := $(BUILD_DIR)/$(PD_NAME).elf
 
-# System descriptor (TODO: create this file)
+# System descriptor
 SYSTEM_DESC := $(PRODUCT_SRC_DIR)/spi-display.system
 
 # Source files for dependency tracking
