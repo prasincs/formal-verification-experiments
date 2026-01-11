@@ -530,6 +530,14 @@ unsafe fn draw_letter(ptr: *mut u32, pitch: usize, x: usize, y: usize, b: usize,
             draw_block(ptr, pitch, x, y+b*2, b*3, b, color);
             draw_block(ptr, pitch, x+b*2, y, b, b*5, color);
         }
+        '@' => {
+            // @ symbol - circle with 'a' inside
+            draw_block(ptr, pitch, x, y, b*3, b, color);       // top
+            draw_block(ptr, pitch, x, y+b, b, b*3, color);     // left
+            draw_block(ptr, pitch, x+b*2, y+b, b, b*2, color); // right upper
+            draw_block(ptr, pitch, x+b, y+b*2, b*2, b, color); // inner
+            draw_block(ptr, pitch, x, y+b*4, b*3, b, color);   // bottom
+        }
         ' ' => {} // space - do nothing
         _ => {} // unknown letter
     }
@@ -646,18 +654,31 @@ unsafe fn draw_about_screen(ptr: *mut u32, pitch: usize, _width: usize, _height:
     draw_letter(ptr, pitch, line_x + spacing*2, 340, b, 'I', white);
     draw_letter(ptr, pitch, line_x + spacing*3, 340, b, '4', white);
 
+    // "@PRASINCS" attribution line
+    let attr_x = line_x;
+    let gray: u32 = 0xFF808080;
+    draw_letter(ptr, pitch, attr_x, 400, b, '@', gray);
+    draw_letter(ptr, pitch, attr_x + spacing, 400, b, 'P', gray);
+    draw_letter(ptr, pitch, attr_x + spacing*2, 400, b, 'R', gray);
+    draw_letter(ptr, pitch, attr_x + spacing*3, 400, b, 'A', gray);
+    draw_letter(ptr, pitch, attr_x + spacing*4, 400, b, 'S', gray);
+    draw_letter(ptr, pitch, attr_x + spacing*5, 400, b, 'I', gray);
+    draw_letter(ptr, pitch, attr_x + spacing*6, 400, b, 'N', gray);
+    draw_letter(ptr, pitch, attr_x + spacing*7, 400, b, 'C', gray);
+    draw_letter(ptr, pitch, attr_x + spacing*8, 400, b, 'S', gray);
+
     // "PRESS ESC" line
     let esc_x = line_x;
-    draw_letter(ptr, pitch, esc_x, 420, b, 'P', white);
-    draw_letter(ptr, pitch, esc_x + spacing, 420, b, 'R', white);
-    draw_letter(ptr, pitch, esc_x + spacing*2, 420, b, 'E', white);
-    draw_letter(ptr, pitch, esc_x + spacing*3, 420, b, 'S', white);
-    draw_letter(ptr, pitch, esc_x + spacing*4, 420, b, 'S', white);
+    draw_letter(ptr, pitch, esc_x, 480, b, 'P', white);
+    draw_letter(ptr, pitch, esc_x + spacing, 480, b, 'R', white);
+    draw_letter(ptr, pitch, esc_x + spacing*2, 480, b, 'E', white);
+    draw_letter(ptr, pitch, esc_x + spacing*3, 480, b, 'S', white);
+    draw_letter(ptr, pitch, esc_x + spacing*4, 480, b, 'S', white);
     // ESC
     let esc2_x = esc_x + spacing*6;
-    draw_letter(ptr, pitch, esc2_x, 420, b, 'E', white);
-    draw_letter(ptr, pitch, esc2_x + spacing, 420, b, 'S', white);
-    draw_letter(ptr, pitch, esc2_x + spacing*2, 420, b, 'C', white);
+    draw_letter(ptr, pitch, esc2_x, 480, b, 'E', white);
+    draw_letter(ptr, pitch, esc2_x + spacing, 480, b, 'S', white);
+    draw_letter(ptr, pitch, esc2_x + spacing*2, 480, b, 'C', white);
 }
 
 /// Run the main application loop with menu and state machine
