@@ -1,0 +1,71 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+    seL4 Microkit System Description - Raspberry Pi 4 Graphics Demo
+
+    This defines a single Protection Domain that:
+    - Initializes the VideoCore framebuffer via mailbox
+    - Draws an architecture diagram showing the seL4 stack
+    - Demonstrates formally verified microkernel on real hardware
+-->
+<system>
+    <!--
+        Graphics Protection Domain
+
+        This PD has access to:
+        - VideoCore mailbox registers (for framebuffer allocation)
+        - Framebuffer memory (after allocation)
+
+        The mailbox is at physical address 0xFE00B880 (BCM2711).
+    -->
+    <protection_domain name="tpmtest" priority="254">
+        <program_image path="tpmtest_pd.elf" />
+
+        <!--
+            Map the BCM2711 mailbox registers into this PD's address space.
+            Physical: 0xFE00B000 - 0xFE00C000 (4KB page containing mailbox)
+        -->
+        <map mr="mailbox_regs" vaddr="0x5_0000_0000" perms="rw" cached="false" />
+
+        <!--
+            Map GPIO registers for LED control (to prove seL4 is running)
+            Physical: 0xFE200000 (GPIO base on BCM2711)
+            Note: Placed after framebuffer (16MB ends at 0x5_0101_0000)
+        -->
+        <map mr="gpio_regs" vaddr="0x5_0200_0000" perms="rw" cached="false" />
+
+        <!--
+            Map the framebuffer region.
+            Address from U-Boot bdinfo: FB base = 0x3e876000
+            We map a generous 16MB for up to 4K resolution.
+        -->
+        <map mr="framebuffer" vaddr="0x5_0001_0000" perms="rw" cached="false" />
+
+        <!--
+            DMA buffer for mailbox communication.
+            Must be at a known physical address since GPU needs physical addr.
+            4KB is plenty for mailbox messages (typical message is ~144 bytes).
+        -->
+        <map mr="dma_buffer" vaddr="0x5_0300_0000" perms="rw" cached="false" />
+    </protection_domain>
+
+    <!--
+        Memory Regions
+
+        Note: Microkit needs to know about device memory regions.
+        The exact framebuffer address is allocated by the GPU at runtime,
+        so we declare a region that covers the typical framebuffer area.
+    -->
+
+    <!-- Mailbox registers (4KB) -->
+    <memory_region name="mailbox_regs" size="0x1000" phys_addr="0xFE00B000" />
+
+    <!-- GPIO registers (4KB) for LED control -->
+    <memory_region name="gpio_regs" size="0x1000" phys_addr="0xFE200000" />
+
+    <!-- Framebuffer memory at address from U-Boot bdinfo (FB base = 0x3e876000) -->
+    <memory_region name="framebuffer" size="0x1000000" phys_addr="0x3e876000" />
+
+    <!-- DMA buffer for mailbox communication (4KB, just before framebuffer) -->
+    <memory_region name="dma_buffer" size="0x1000" phys_addr="0x3e875000" />
+
+</system>

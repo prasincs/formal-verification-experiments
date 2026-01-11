@@ -1,0 +1,44 @@
+[package]
+name = "rpi4-tpm-boot"
+version = "0.1.0"
+edition = "2021"
+authors = ["Prasanna Gautam"]
+description = "Verified TPM 2.0 boot measurement and attestation for seL4/Microkit on Raspberry Pi 4"
+license = "MIT"
+
+[lib]
+name = "rpi4_tpm_boot"
+path = "src/lib.rs"
+
+[features]
+default = []
+# Enable Verus verification (requires verus toolchain)
+verus = ["verus_builtin_macros", "verus_builtin"]
+# Enable std for testing
+std = []
+
+[dependencies]
+# Verus verification support (optional)
+verus_builtin_macros = { version = "=0.0.0-2025-12-07-0054", optional = true }
+verus_builtin = { version = "=0.0.0-2025-12-07-0054", optional = true }
+
+# RustCrypto SHA-256 (no_std compatible, well-audited)
+sha2 = { version = "=0.10.8", default-features = false }
+digest = { version = "=0.10.7", default-features = false }
+
+[dev-dependencies]
+# For testing
+hex-literal = "0.4"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+debug = false
+panic = "abort"
+
+[profile.dev]
+panic = "abort"
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(verus_keep_ghost)'] }

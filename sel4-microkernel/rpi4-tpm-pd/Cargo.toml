@@ -1,0 +1,25 @@
+[package]
+name = "rpi4-tpm-pd"
+version = "0.1.0"
+edition = "2021"
+authors = ["Prasanna Gautam"]
+description = "TPM Protection Domain for seL4/Microkit on Raspberry Pi 4"
+license = "MIT"
+
+[[bin]]
+name = "tpm_pd"
+path = "src/main.rs"
+
+[dependencies]
+sel4-microkit = { git = "https://github.com/seL4/rust-sel4", rev = "3059c2d236bf56b066936dd48d8966255e172c3b" }
+rpi4-tpm-boot = { path = "../rpi4-tpm-boot" }
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+debug = false
+panic = "abort"
+
+[profile.dev]
+panic = "abort"

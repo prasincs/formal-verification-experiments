@@ -4,7 +4,8 @@ PLATFORM_ARCH := aarch64
 CROSS_COMPILE := $(AARCH64_PREFIX)
 
 # Memory variant (1gb, 2gb, 4gb, 8gb)
-RPI4_MEMORY ?= 4gb
+# Default to 8gb - use RPI4_MEMORY=4gb for smaller variants
+RPI4_MEMORY ?= 8gb
 MICROKIT_BOARD := rpi4b_$(RPI4_MEMORY)
 
 # Target spec for Rust

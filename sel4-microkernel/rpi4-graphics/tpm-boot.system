@@ -1,0 +1,227 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+    Microkit System Description: TPM Boot Verification Demo
+
+    This system demonstrates TPM 2.0 boot measurement verification
+    on Raspberry Pi 4 with seL4/Microkit.
+
+    Hardware Requirements:
+    - Raspberry Pi 4 Model B
+    - GeeekPi TPM9670 (Infineon SLB 9670 TPM 2.0)
+    - HDMI display (for graphics output)
+    - USB keyboard (optional, for input)
+
+    Protection Domain Layout:
+    - tpm_pd:      TPM hardware access, measurement chain
+    - graphics_pd: Framebuffer, UI, verification status display
+    - input_pd:    UART/keyboard input handling
+-->
+<system>
+    <!-- ================================================================== -->
+    <!-- MEMORY REGIONS (Hardware Peripherals)                              -->
+    <!-- ================================================================== -->
+
+    <!-- SPI0 Controller (for TPM communication) -->
+    <memory_region
+        name="spi_regs"
+        size="0x1000"
+        phys_addr="0xfe204000"
+    />
+
+    <!-- GPIO Controller (for SPI pin configuration) -->
+    <memory_region
+        name="gpio_regs"
+        size="0x1000"
+        phys_addr="0xfe200000"
+    />
+
+    <!-- VideoCore Mailbox (for framebuffer allocation) -->
+    <memory_region
+        name="mailbox_regs"
+        size="0x1000"
+        phys_addr="0xfe00b880"
+    />
+
+    <!-- UART (Mini UART for debug output and input) -->
+    <memory_region
+        name="uart_regs"
+        size="0x1000"
+        phys_addr="0xfe215000"
+    />
+
+    <!-- Framebuffer (allocated by VideoCore, 1280x720x4 = 3.5MB) -->
+    <memory_region
+        name="framebuffer"
+        size="0x400000"
+        page_size="0x200000"
+    />
+
+    <!-- ================================================================== -->
+    <!-- SHARED MEMORY REGIONS (IPC)                                        -->
+    <!-- ================================================================== -->
+
+    <!-- Input event ring buffer (shared between input_pd and graphics_pd) -->
+    <memory_region
+        name="input_ring"
+        size="0x1000"
+    />
+
+    <!-- TPM measurement buffer (shared for component measurement) -->
+    <memory_region
+        name="tpm_buffer"
+        size="0x10000"
+    />
+
+    <!-- Boot event log (shared for attestation) -->
+    <memory_region
+        name="event_log"
+        size="0x4000"
+    />
+
+    <!-- ================================================================== -->
+    <!-- TPM PROTECTION DOMAIN                                              -->
+    <!-- Highest priority - secure TPM access                               -->
+    <!-- ================================================================== -->
+
+    <protection_domain name="tpm" priority="250" pp="true">
+        <!-- SPI registers for TPM communication -->
+        <map
+            mr="spi_regs"
+            vaddr="0x5_0100_0000"
+            perms="rw"
+            cached="false"
+            setvar_vaddr="spi_base"
+        />
+
+        <!-- GPIO for SPI pin configuration -->
+        <map
+            mr="gpio_regs"
+            vaddr="0x5_0200_0000"
+            perms="rw"
+            cached="false"
+            setvar_vaddr="gpio_base"
+        />
+
+        <!-- Measurement buffer (write for other PDs to submit data) -->
+        <map
+            mr="tpm_buffer"
+            vaddr="0x5_0300_0000"
+            perms="rw"
+            cached="true"
+            setvar_vaddr="tpm_buffer"
+        />
+
+        <!-- Event log (write for measurement logging) -->
+        <map
+            mr="event_log"
+            vaddr="0x5_0400_0000"
+            perms="rw"
+            cached="true"
+            setvar_vaddr="event_log"
+        />
+
+        <program_image path="tpm_pd.elf" />
+    </protection_domain>
+
+    <!-- ================================================================== -->
+    <!-- GRAPHICS PROTECTION DOMAIN                                         -->
+    <!-- Displays verification status and system info                       -->
+    <!-- ================================================================== -->
+
+    <protection_domain name="graphics" priority="150">
+        <!-- VideoCore mailbox for framebuffer setup -->
+        <map
+            mr="mailbox_regs"
+            vaddr="0x5_0000_0000"
+            perms="rw"
+            cached="false"
+            setvar_vaddr="mailbox_base"
+        />
+
+        <!-- GPIO for LED status (optional) -->
+        <map
+            mr="gpio_regs"
+            vaddr="0x5_0001_0000"
+            perms="rw"
+            cached="false"
+        />
+
+        <!-- Framebuffer memory -->
+        <map
+            mr="framebuffer"
+            vaddr="0x5_0100_0000"
+            perms="rw"
+            cached="true"
+            setvar_vaddr="framebuffer"
+        />
+
+        <!-- Input ring buffer (read-only for receiving input events) -->
+        <map
+            mr="input_ring"
+            vaddr="0x5_0200_0000"
+            perms="r"
+            cached="true"
+            setvar_vaddr="input_ring"
+        />
+
+        <!-- Event log (read-only for display) -->
+        <map
+            mr="event_log"
+            vaddr="0x5_0300_0000"
+            perms="r"
+            cached="true"
+        />
+
+        <program_image path="graphics_pd.elf" />
+    </protection_domain>
+
+    <!-- ================================================================== -->
+    <!-- INPUT PROTECTION DOMAIN                                            -->
+    <!-- Handles UART input, isolated from other hardware                   -->
+    <!-- ================================================================== -->
+
+    <protection_domain name="input" priority="200">
+        <!-- UART for input -->
+        <map
+            mr="uart_regs"
+            vaddr="0x5_0000_0000"
+            perms="rw"
+            cached="false"
+            setvar_vaddr="uart_base"
+        />
+
+        <!-- Input ring buffer (write for sending events) -->
+        <map
+            mr="input_ring"
+            vaddr="0x5_0100_0000"
+            perms="rw"
+            cached="true"
+            setvar_vaddr="input_ring"
+        />
+
+        <program_image path="input_pd.elf" />
+    </protection_domain>
+
+    <!-- ================================================================== -->
+    <!-- IPC CHANNELS                                                       -->
+    <!-- ================================================================== -->
+
+    <!-- TPM <-> Graphics: Attestation requests and status updates -->
+    <channel>
+        <end pd="tpm" id="0" />
+        <end pd="graphics" id="0" />
+    </channel>
+
+    <!-- Input -> Graphics: Input event notifications -->
+    <channel>
+        <end pd="input" id="0" />
+        <end pd="graphics" id="1" />
+    </channel>
+
+    <!-- TPM <-> Input: Measure input PD (optional) -->
+    <channel>
+        <end pd="tpm" id="1" />
+        <end pd="input" id="1" />
+    </channel>
+
+</system>

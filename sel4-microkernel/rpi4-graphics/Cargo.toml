@@ -22,6 +22,10 @@ path = "src/tvdemo_main.rs"
 name = "graphics_input_pd"
 path = "src/graphics_input_pd.rs"
 
+[[bin]]
+name = "tpmtest_pd"
+path = "src/tpmtest_main.rs"
+
 [dependencies]
 # sel4-microkit provides the Microkit runtime and API
 # Pinned to specific commit for reproducible builds (rust-sel4 v3.0.0-dev, 2025-11-26)
