@@ -1,0 +1,41 @@
+[package]
+name = "rpi4-photoframe"
+version = "0.1.0"
+edition = "2021"
+authors = ["Prasanna Gautam"]
+description = "Secure photo frame demo for seL4 Microkit on Raspberry Pi 4"
+license = "MIT"
+
+[[bin]]
+name = "photoframe_pd"
+path = "src/main.rs"
+
+[dependencies]
+# sel4-microkit provides the Microkit runtime and API
+sel4-microkit = { git = "https://github.com/seL4/rust-sel4", rev = "3059c2d236bf56b066936dd48d8966255e172c3b" }
+
+# Graphics library (framebuffer, mailbox)
+rpi4-graphics = { path = "../rpi4-graphics" }
+
+# Input handling
+rpi4-input = { path = "../rpi4-input" }
+rpi4-input-protocol = { path = "../rpi4-input-protocol" }
+
+# Photo protocol (verified)
+rpi4-photo-protocol = { path = "../rpi4-photo-protocol" }
+
+# BMP decoding (no_std, no alloc - perfect for embedded)
+tinybmp = "0.6"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+debug = false
+panic = "abort"
+
+[profile.dev]
+panic = "abort"
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(verus_keep_ghost)'] }
