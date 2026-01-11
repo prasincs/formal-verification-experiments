@@ -255,13 +255,13 @@ unsafe fn draw_static_elements(ptr: *mut u32, pitch: usize, width: usize, height
     draw_block(ptr, pitch, sel4_x + block * 2, start_y + block * 3, block, block, green);
     draw_block(ptr, pitch, sel4_x, start_y + block * 4, block * 3, block, green);
 
-    // e (lowercase - smaller)
+    // e (lowercase - 3 blocks wide for proper shape with gap)
     let e_x = sel4_x + block * 4;
-    draw_block(ptr, pitch, e_x, start_y + block, block * 2, block, green);      // top bar
-    draw_block(ptr, pitch, e_x, start_y + block * 2, block, block, green);      // left vertical
-    draw_block(ptr, pitch, e_x + block, start_y + block * 2, block, block, green); // right vertical (upper)
-    draw_block(ptr, pitch, e_x, start_y + block * 3, block * 2, block, green);  // middle bar
-    draw_block(ptr, pitch, e_x, start_y + block * 4, block * 2, block, green);  // bottom bar
+    draw_block(ptr, pitch, e_x, start_y + block, block * 3, block, green);           // top bar (3 wide)
+    draw_block(ptr, pitch, e_x, start_y + block * 2, block, block, green);           // left side
+    draw_block(ptr, pitch, e_x + block * 2, start_y + block * 2, block, block, green); // right side (gap in middle)
+    draw_block(ptr, pitch, e_x, start_y + block * 3, block * 3, block, green);       // middle bar (3 wide)
+    draw_block(ptr, pitch, e_x, start_y + block * 4, block * 2, block, green);       // bottom (open right for 'e')
 
     // L
     let l_x = sel4_x + block * 7;
