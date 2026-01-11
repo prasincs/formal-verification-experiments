@@ -40,6 +40,9 @@ const HEIGHT: u32 = 720;
 const GPIO_BASE: usize = 0x5_0200_0000;
 const SPI_BASE: usize = 0x5_0300_0000;
 
+/// UART5 (PL011) for debug output - page base + 0xa00 offset
+const UART5_BASE: usize = 0x5_0500_0000 + 0xa00;
+
 /// Colors
 const COLOR_BG: u32 = 0xFF101020;
 const COLOR_WHITE: u32 = 0xFFFFFFFF;
@@ -47,6 +50,126 @@ const COLOR_GREEN: u32 = 0xFF00B050;
 const COLOR_RED: u32 = 0xFFE04040;
 const COLOR_YELLOW: u32 = 0xFFE0E040;
 const COLOR_GRAY: u32 = 0xFF808080;
+
+// ============================================================================
+// UART5 Debug Output (PL011)
+// ============================================================================
+
+/// Initialize UART5 for 115200 baud debug output
+/// GPIO 12 = TX, GPIO 13 = RX (pins 32, 33)
+fn uart5_init() {
+    unsafe {
+        // First, configure GPIO 12/13 for UART5 (ALT4)
+        let gpfsel1 = (GPIO_BASE + 0x04) as *mut u32;
+        core::arch::asm!("dsb sy");
+
+        let mut fsel = gpfsel1.read_volatile();
+        // GPIO 12: bits 6-8, GPIO 13: bits 9-11
+        // ALT4 = 0b011
+        fsel &= !(0b111 << 6);  // Clear GPIO 12
+        fsel &= !(0b111 << 9);  // Clear GPIO 13
+        fsel |= 0b011 << 6;     // GPIO 12 = ALT4 (UART5 TX)
+        fsel |= 0b011 << 9;     // GPIO 13 = ALT4 (UART5 RX)
+        gpfsel1.write_volatile(fsel);
+
+        core::arch::asm!("dsb sy");
+
+        // Now initialize UART5 (PL011)
+        let cr = (UART5_BASE + 0x30) as *mut u32;     // Control register
+        let ibrd = (UART5_BASE + 0x24) as *mut u32;   // Integer baud
+        let fbrd = (UART5_BASE + 0x28) as *mut u32;   // Fractional baud
+        let lcr_h = (UART5_BASE + 0x2C) as *mut u32;  // Line control
+        let icr = (UART5_BASE + 0x44) as *mut u32;    // Interrupt clear
+
+        // Disable UART
+        cr.write_volatile(0);
+        core::arch::asm!("dsb sy");
+
+        // Clear pending interrupts
+        icr.write_volatile(0x7FF);
+
+        // Set baud rate for 115200 with 48MHz clock
+        // Divisor = 48000000 / (16 * 115200) = 26.0416...
+        ibrd.write_volatile(26);
+        fbrd.write_volatile(3);  // 0.0416 * 64 ≈ 3
+
+        // 8N1, enable FIFOs
+        lcr_h.write_volatile(0x70);  // 8 bits, FIFO enable
+
+        // Enable UART, TX, RX
+        cr.write_volatile(0x301);  // UARTEN | TXE | RXE
+
+        core::arch::asm!("dsb sy");
+    }
+}
+
+/// Write a single character to UART5
+fn uart5_putc(c: u8) {
+    unsafe {
+        let fr = (UART5_BASE + 0x18) as *mut u32;   // Flag register
+        let dr = (UART5_BASE + 0x00) as *mut u32;   // Data register
+
+        // Wait for TX FIFO not full (TXFF = bit 5)
+        while (fr.read_volatile() & (1 << 5)) != 0 {
+            core::hint::spin_loop();
+        }
+
+        dr.write_volatile(c as u32);
+    }
+}
+
+/// Write a string to UART5
+fn uart5_puts(s: &str) {
+    for c in s.bytes() {
+        if c == b'\n' {
+            uart5_putc(b'\r');
+        }
+        uart5_putc(c);
+    }
+}
+
+/// Write a hex byte to UART5
+fn uart5_hex8(val: u8) {
+    const HEX: &[u8] = b"0123456789ABCDEF";
+    uart5_putc(HEX[(val >> 4) as usize]);
+    uart5_putc(HEX[(val & 0xF) as usize]);
+}
+
+/// Write a hex u32 to UART5
+fn uart5_hex32(val: u32) {
+    uart5_hex8((val >> 24) as u8);
+    uart5_hex8((val >> 16) as u8);
+    uart5_hex8((val >> 8) as u8);
+    uart5_hex8(val as u8);
+}
+
+/// Blink LED quickly N times (for visual debug)
+fn blink_led_n(n: usize) {
+    unsafe {
+        let gpfsel4 = (GPIO_BASE + 0x10) as *mut u32;
+        let gpset = (GPIO_BASE + 0x20) as *mut u32;
+        let gpclr = (GPIO_BASE + 0x2C) as *mut u32;
+
+        // Configure GPIO 42 (activity LED) as output
+        core::arch::asm!("dsb sy");
+        let mut fsel = gpfsel4.read_volatile();
+        fsel &= !(0b111 << 6);  // Clear bits 6-8 (GPIO 42)
+        fsel |= 0b001 << 6;     // Set as output
+        gpfsel4.write_volatile(fsel);
+        core::arch::asm!("dsb sy");
+
+        for _ in 0..n {
+            gpset.write_volatile(1 << 10);  // GPIO 42 = bit 10 in SET1
+            for _ in 0..200_000 { core::hint::spin_loop(); }
+            gpclr.write_volatile(1 << 10);
+            for _ in 0..200_000 { core::hint::spin_loop(); }
+        }
+    }
+}
+
+// ============================================================================
+// Text Renderer
+// ============================================================================
 
 /// Simple text renderer using 8x8 blocks for characters
 struct TextRenderer {
@@ -530,18 +653,46 @@ fn idle_loop() -> ! {
 
 #[protection_domain]
 fn init() -> TpmTestHandler {
+    // Blink LED once to show we're running
+    blink_led_n(1);
+
+    // Initialize UART5 for debug output
+    uart5_init();
+    uart5_puts("\n\n=== TPM TEST STARTING ===\n");
+
+    // Blink LED twice to show UART init done
+    blink_led_n(2);
+    uart5_puts("UART5 initialized\n");
+
     // Initialize framebuffer
+    uart5_puts("Initializing framebuffer...\n");
     let fb = match init_framebuffer() {
-        Some(fb) => fb,
-        None => blink_error_led(),
+        Some(fb) => {
+            uart5_puts("Framebuffer OK: ");
+            uart5_hex32(fb.buffer_ptr() as u32);
+            uart5_puts(" pitch=");
+            uart5_hex32(fb.pitch_pixels() as u32);
+            uart5_puts("\n");
+            fb
+        }
+        None => {
+            uart5_puts("ERROR: Framebuffer init failed!\n");
+            blink_error_led()
+        }
     };
+
+    // Blink LED 3 times to show framebuffer OK
+    blink_led_n(3);
 
     let ptr = fb.buffer_ptr();
     let pitch = fb.pitch_pixels();
 
     // Run TPM tests with HDMI output
+    uart5_puts("Running TPM tests...\n");
     let mut test = TpmTest::new(ptr, pitch);
     test.run_tests();
+
+    uart5_puts("Tests complete, entering idle loop\n");
 
     // Keep screen displayed (never returns)
     idle_loop()

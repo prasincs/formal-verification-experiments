@@ -46,6 +46,14 @@
         phys_addr="0xfe215000"
     />
 
+    <!-- UART5 (PL011) for debug output - pins 32/33 not covered by TPM HAT -->
+    <!-- Note: UART5 is at 0xfe201a00, we map page 0xfe201000, access at offset 0xa00 -->
+    <memory_region
+        name="uart5"
+        size="0x1000"
+        phys_addr="0xfe201000"
+    />
+
     <!-- Framebuffer (16MB, allocated by VideoCore) -->
     <memory_region
         name="framebuffer"
@@ -69,6 +77,9 @@
 
         <!-- Aux (mini UART for debug output if available) -->
         <map mr="aux" vaddr="0x5_0400_0000" perms="rw" cached="false" />
+
+        <!-- UART5 for debug (pins 32/33) -->
+        <map mr="uart5" vaddr="0x5_0500_0000" perms="rw" cached="false" />
 
         <program_image path="tpmtest_pd.elf" />
     </protection_domain>
