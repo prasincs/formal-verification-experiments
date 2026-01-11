@@ -1,0 +1,31 @@
+[package]
+name = "rpi4-input-pd"
+version = "0.1.0"
+edition = "2021"
+authors = ["Prasanna Gautam"]
+description = "seL4 Microkit Input Protection Domain for Raspberry Pi 4"
+license = "MIT"
+
+[[bin]]
+name = "input_pd"
+path = "src/main.rs"
+
+[dependencies]
+# sel4-microkit provides the Microkit runtime and API
+sel4-microkit = { git = "https://github.com/seL4/rust-sel4", rev = "3059c2d236bf56b066936dd48d8966255e172c3b" }
+
+# Input drivers
+rpi4-input = { path = "../rpi4-input" }
+
+# IPC protocol
+rpi4-input-protocol = { path = "../rpi4-input-protocol" }
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+debug = false
+panic = "abort"
+
+[profile.dev]
+panic = "abort"

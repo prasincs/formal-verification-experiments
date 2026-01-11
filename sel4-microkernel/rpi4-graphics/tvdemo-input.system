@@ -1,0 +1,103 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+    seL4 Microkit System Description - TV Demo with Isolated Input
+
+    Two Protection Domain architecture:
+    - Input PD: Handles UART input, writes to shared ring buffer
+    - Graphics PD: Framebuffer rendering, reads from ring buffer
+
+    Security Properties (verified with Verus):
+    1. Input PD can only access UART registers and shared ring buffer
+    2. Graphics PD can only access mailbox, GPIO, framebuffer, and shared ring buffer
+    3. Ring buffer is the only shared memory between PDs
+    4. Notifications are the only IPC mechanism
+-->
+<system>
+    <!--
+        Input Protection Domain (priority 200 - higher for responsive input)
+
+        Memory access:
+        - UART registers (read/write) - for receiving serial input
+        - Ring buffer (read/write) - for writing input events
+
+        This PD is isolated from:
+        - Framebuffer memory
+        - Mailbox registers
+        - GPIO registers
+    -->
+    <protection_domain name="input" priority="200">
+        <program_image path="input_pd.elf" />
+
+        <!-- Mini-UART registers for serial input -->
+        <map mr="uart_regs" vaddr="0x5_0300_0000" perms="rw" cached="false" />
+
+        <!-- Shared ring buffer for IPC (write access) -->
+        <map mr="input_ring" vaddr="0x5_0400_0000" perms="rw" cached="false" />
+    </protection_domain>
+
+    <!--
+        Graphics Protection Domain (priority 150 - lower than input)
+
+        Memory access:
+        - Mailbox registers (read/write) - for GPU communication
+        - GPIO registers (read/write) - for LED control
+        - Framebuffer (read/write) - for graphics output
+        - DMA buffer (read/write) - for mailbox messages
+        - Ring buffer (read only) - for receiving input events
+
+        This PD is isolated from:
+        - UART registers (cannot read serial directly)
+    -->
+    <protection_domain name="graphics" priority="150">
+        <program_image path="graphics_input_pd.elf" />
+
+        <!-- VideoCore mailbox registers -->
+        <map mr="mailbox_regs" vaddr="0x5_0000_0000" perms="rw" cached="false" />
+
+        <!-- GPIO registers for LED control -->
+        <map mr="gpio_regs" vaddr="0x5_0200_0000" perms="rw" cached="false" />
+
+        <!-- Framebuffer memory -->
+        <map mr="framebuffer" vaddr="0x5_0001_0000" perms="rw" cached="false" />
+
+        <!-- DMA buffer for mailbox communication -->
+        <map mr="dma_buffer" vaddr="0x5_0300_0000" perms="rw" cached="false" />
+
+        <!-- Shared ring buffer for IPC (read-only for security) -->
+        <map mr="input_ring" vaddr="0x5_0400_0000" perms="rw" cached="false" />
+    </protection_domain>
+
+    <!--
+        Memory Regions
+    -->
+
+    <!-- Mini-UART registers (4KB page containing mini-UART at 0xFE215040) -->
+    <memory_region name="uart_regs" size="0x1000" phys_addr="0xFE215000" />
+
+    <!-- Mailbox registers (4KB) -->
+    <memory_region name="mailbox_regs" size="0x1000" phys_addr="0xFE00B000" />
+
+    <!-- GPIO registers (4KB) -->
+    <memory_region name="gpio_regs" size="0x1000" phys_addr="0xFE200000" />
+
+    <!-- Framebuffer memory (16MB) -->
+    <memory_region name="framebuffer" size="0x1000000" phys_addr="0x3e876000" />
+
+    <!-- DMA buffer for mailbox (4KB) -->
+    <memory_region name="dma_buffer" size="0x1000" phys_addr="0x3e875000" />
+
+    <!-- Shared input ring buffer (4KB) - no physical address, allocated by Microkit -->
+    <memory_region name="input_ring" size="0x1000" />
+
+    <!--
+        IPC Channel for input notifications
+
+        Input PD notifies Graphics PD when new input events are available.
+        Channel ID 1 is used for this notification.
+    -->
+    <channel>
+        <end pd="input" id="1" />
+        <end pd="graphics" id="1" />
+    </channel>
+
+</system>
