@@ -40,6 +40,10 @@ rpi4-tvdemo = { path = "../rpi4-tvdemo" }
 rpi4-input = { path = "../rpi4-input" }
 rpi4-input-protocol = { path = "../rpi4-input-protocol" }
 
+# Font rendering (no_std compatible)
+fontdue = { version = "0.9", default-features = false }
+libm = "0.2"
+
 [profile.release]
 opt-level = "z"
 lto = true
