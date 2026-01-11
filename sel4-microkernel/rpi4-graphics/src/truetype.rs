@@ -10,19 +10,13 @@ use fontdue::{Font, FontSettings};
 /// Embedded DejaVu Sans Mono font (343KB) - Latin/ASCII
 pub static DEJAVU_MONO: &[u8] = include_bytes!("../fonts/DejaVuSansMono.ttf");
 
-// Nepali/Devanagari font placeholders
-// To add Nepali support:
-// 1. Download a Unicode Devanagari font (Noto Sans Devanagari, Lohit Devanagari, etc.)
-// 2. Place the .ttf file in the fonts/ directory
-// 3. Uncomment the appropriate line below
-//
-// For legacy Preeti/Kantipur fonts (non-Unicode), you'll need special keyboard mapping.
-// Unicode fonts are recommended for proper text handling.
+/// Embedded Noto Sans Devanagari font (224KB) - Nepali/Hindi/Sanskrit
+pub static NOTO_DEVANAGARI: &[u8] = include_bytes!("../fonts/NotoSansDevanagari-Regular.ttf");
 
-// pub static NOTO_DEVANAGARI: &[u8] = include_bytes!("../fonts/NotoSansDevanagari-Regular.ttf");
+// Additional font placeholders (add .ttf files to fonts/ directory to enable)
 // pub static LOHIT_DEVANAGARI: &[u8] = include_bytes!("../fonts/Lohit-Devanagari.ttf");
-// pub static PREETI: &[u8] = include_bytes!("../fonts/Preeti.ttf");
-// pub static KANTIPUR: &[u8] = include_bytes!("../fonts/Kantipur.ttf");
+// pub static PREETI: &[u8] = include_bytes!("../fonts/Preeti.ttf");  // Legacy non-Unicode
+// pub static KANTIPUR: &[u8] = include_bytes!("../fonts/Kantipur.ttf");  // Legacy non-Unicode
 
 /// Font renderer for TrueType fonts
 pub struct FontRenderer {
@@ -50,6 +44,11 @@ impl FontRenderer {
     /// Create a renderer using the built-in DejaVu Sans Mono
     pub fn default_mono(size: f32) -> Option<Self> {
         Self::new(DEJAVU_MONO, size)
+    }
+
+    /// Create a renderer using Noto Sans Devanagari for Nepali/Hindi text
+    pub fn devanagari(size: f32) -> Option<Self> {
+        Self::new(NOTO_DEVANAGARI, size)
     }
 
     /// Get the current font size

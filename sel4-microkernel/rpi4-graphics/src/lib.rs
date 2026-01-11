@@ -53,7 +53,7 @@ pub use mailbox::{Mailbox, MailboxError};
 pub use framebuffer::{Framebuffer, FramebufferInfo};
 pub use graphics::{Color, Point, Rect};
 pub use terminal::{Terminal, TtTerminal};
-pub use truetype::{FontRenderer, GlyphMetrics, DEJAVU_MONO};
+pub use truetype::{FontRenderer, GlyphMetrics, DEJAVU_MONO, NOTO_DEVANAGARI};
 pub use tpm::{Tpm, TpmError};
 pub use crypto::{Sha256, Sha256Digest, VerifyResult, constant_time_compare, verify_sha256};
 pub use hdmi_backend::HdmiBackend;
