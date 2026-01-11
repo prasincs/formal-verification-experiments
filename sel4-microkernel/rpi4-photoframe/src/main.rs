@@ -23,6 +23,8 @@
 #![no_main]
 
 mod decoder;
+mod bounded_alloc;
+mod validate;
 
 use sel4_microkit::{debug_println, protection_domain, Handler, ChannelSet, Channel};
 use core::fmt;
