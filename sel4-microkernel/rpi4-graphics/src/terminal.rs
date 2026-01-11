@@ -11,6 +11,7 @@ use crate::font::{draw_char, CHAR_HEIGHT, CHAR_WIDTH};
 use crate::framebuffer::Framebuffer;
 use crate::graphics::Color;
 use crate::truetype::FontRenderer;
+use libm::ceilf;
 
 /// Maximum terminal dimensions (160x90 fits 1280x720 with 8x8 font)
 pub const MAX_COLS: usize = 160;
@@ -249,8 +250,8 @@ impl TtTerminal {
 
         // Get character metrics for 'M' (representative monospace width)
         let metrics = font.char_metrics('M');
-        let char_width = metrics.advance_width.ceil() as u32;
-        let line_height = font.line_height().ceil() as u32;
+        let char_width = ceilf(metrics.advance_width) as u32;
+        let line_height = ceilf(font.line_height()) as u32;
 
         let cols = (width / char_width) as usize;
         let rows = (height / line_height) as usize;
