@@ -44,12 +44,16 @@ pub mod graphics;
 pub mod font;
 pub mod tpm;
 pub mod crypto;
+pub mod hdmi_backend;
+pub mod direct_hdmi_backend;
 
 pub use mailbox::{Mailbox, MailboxError};
 pub use framebuffer::{Framebuffer, FramebufferInfo};
 pub use graphics::{Color, Point, Rect};
 pub use tpm::{Tpm, TpmError};
 pub use crypto::{Sha256, Sha256Digest, VerifyResult, constant_time_compare, verify_sha256};
+pub use hdmi_backend::HdmiBackend;
+pub use direct_hdmi_backend::DirectHdmiBackend;
 
 /// BCM2711 peripheral base address (Raspberry Pi 4) - physical
 pub const BCM2711_PERIPH_BASE: usize = 0xFE00_0000;
@@ -67,6 +71,13 @@ pub const FRAMEBUFFER_PHYS_BASE: usize = 0x3e87_6000;
 
 /// Framebuffer virtual address as mapped by Microkit (graphics.system)
 pub const FRAMEBUFFER_VIRT_BASE: usize = 0x5_0001_0000;
+
+/// DMA buffer physical address (just before framebuffer)
+/// Used for mailbox communication - GPU needs physical addresses
+pub const DMA_BUFFER_PHYS: usize = 0x3e87_5000;
+
+/// DMA buffer virtual address as mapped by Microkit
+pub const DMA_BUFFER_VIRT: usize = 0x5_0300_0000;
 
 /// GPU bus address to ARM physical address translation
 /// The GPU sees memory differently than the ARM cores

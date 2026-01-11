@@ -353,18 +353,21 @@ fn init() -> impl Handler {
     debug_println!("  seL4 Microkit Graphics Demo");
     debug_println!("  Raspberry Pi 4");
     debug_println!("=====================================");
+    debug_println!("");
 
     // First, blink the activity LED to prove we're running
-    // RPi4 activity LED is directly controllable via GPIO 42
     blink_activity_led();
 
-    // Then try framebuffer
-    draw_to_framebuffer();
+    // Initialize framebuffer via mailbox and draw
+    let mut handler = GraphicsHandler::new();
+    handler.init_framebuffer();
+    handler.draw_architecture_diagram();
+    handler.draw_crypto_verification();
 
-    debug_println!("Init complete!");
+    debug_println!("");
+    debug_println!("Graphics PD initialized. Entering event loop...");
 
-    // Keep running
-    GraphicsHandler::new()
+    handler
 }
 
 /// Blink the activity LED in morse code to prove seL4 is running

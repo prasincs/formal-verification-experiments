@@ -1,0 +1,63 @@
+# Wrapper Makefile for microkit-hello
+# Forwards to unified build system at ../build-system/
+#
+# Usage remains the same:
+#   make ARCH=aarch64    # Build for AArch64 (default)
+#   make ARCH=riscv64    # Build for RISC-V 64-bit
+#   make run             # Build and run in QEMU
+#   make clean           # Clean build artifacts
+
+# Architecture to platform mapping
+ARCH ?= aarch64
+ifeq ($(ARCH),aarch64)
+    PLATFORM := qemu-aarch64
+else ifeq ($(ARCH),riscv64)
+    PLATFORM := qemu-riscv64
+else
+    $(error Unsupported ARCH=$(ARCH). Use aarch64 or riscv64)
+endif
+
+# Configuration passthrough
+MICROKIT_SDK ?= $(PWD)/../microkit-sdk
+
+# Unified build system
+BUILD_SYSTEM := ../build-system
+
+# Forward to unified system with product and platform
+UNIFIED_MAKE := $(MAKE) -C $(BUILD_SYSTEM) \
+	PRODUCT=hello \
+	PLATFORM=$(PLATFORM) \
+	MICROKIT_SDK=$(MICROKIT_SDK)
+
+.PHONY: all run run-debug check clean help
+
+all:
+	$(UNIFIED_MAKE) all
+
+run:
+	$(UNIFIED_MAKE) run
+
+run-debug:
+	$(UNIFIED_MAKE) run-debug
+
+check:
+	$(UNIFIED_MAKE) check
+
+clean:
+	$(UNIFIED_MAKE) clean
+	cargo clean
+
+help:
+	@echo "microkit-hello - seL4 Microkit Hello World"
+	@echo ""
+	@echo "This Makefile forwards to the unified build system."
+	@echo ""
+	@echo "Usage:"
+	@echo "  make ARCH=aarch64    Build for AArch64"
+	@echo "  make ARCH=riscv64    Build for RISC-V 64-bit"
+	@echo "  make run ARCH=...    Build and run in QEMU"
+	@echo "  make clean           Clean build artifacts"
+	@echo "  make check           Verify SDK setup"
+	@echo ""
+	@echo "Or use unified build system directly:"
+	@echo "  make -C ../build-system PRODUCT=hello PLATFORM=qemu-aarch64 run"

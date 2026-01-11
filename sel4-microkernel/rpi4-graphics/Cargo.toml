@@ -14,6 +14,14 @@ path = "src/lib.rs"
 name = "graphics_pd"
 path = "src/main.rs"
 
+[[bin]]
+name = "tvdemo_pd"
+path = "src/tvdemo_main.rs"
+
+[[bin]]
+name = "graphics_input_pd"
+path = "src/graphics_input_pd.rs"
+
 [dependencies]
 # sel4-microkit provides the Microkit runtime and API
 # Pinned to specific commit for reproducible builds (rust-sel4 v3.0.0-dev, 2025-11-26)
@@ -26,6 +34,11 @@ sel4-microkit = { git = "https://github.com/seL4/rust-sel4", rev = "3059c2d236bf
 # RustCrypto SHA-256 (no_std compatible, well-audited)
 sha2 = { version = "=0.10.8", default-features = false }
 digest = { version = "=0.10.7", default-features = false }
+
+# TV demo and input support
+rpi4-tvdemo = { path = "../rpi4-tvdemo" }
+rpi4-input = { path = "../rpi4-input" }
+rpi4-input-protocol = { path = "../rpi4-input-protocol" }
 
 [profile.release]
 opt-level = "z"

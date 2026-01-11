@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+    seL4 Microkit System Description - SPI Display + Touch + Input Demo
+
+    This defines a single Protection Domain that:
+    - Controls an ILI9341 SPI LCD display (320x240)
+    - Reads XPT2046 touch controller
+    - Handles IR remote and keyboard input
+    - Runs the TV demo application
+-->
+<system>
+    <!--
+        Display Protection Domain
+
+        Hardware access:
+        - SPI0 for LCD and touch controller
+        - GPIO for display control pins (DC, RST, backlight)
+        - GPIO for input (touch IRQ, IR receiver)
+    -->
+    <protection_domain name="display" priority="254">
+        <program_image path="display_pd.elf" />
+
+        <!-- SPI0 registers (for LCD and touch) -->
+        <map mr="spi0_regs" vaddr="0x5_0000_0000" perms="rw" cached="false" />
+
+        <!-- GPIO registers (for DC, RST, backlight, touch IRQ, IR) -->
+        <map mr="gpio_regs" vaddr="0x5_0001_0000" perms="rw" cached="false" />
+    </protection_domain>
+
+    <!--
+        Memory Regions - BCM2711 peripherals
+    -->
+
+    <!-- SPI0 registers (4KB) at 0xFE204000 -->
+    <memory_region name="spi0_regs" size="0x1000" phys_addr="0xFE204000" />
+
+    <!-- GPIO registers (4KB) at 0xFE200000 -->
+    <memory_region name="gpio_regs" size="0x1000" phys_addr="0xFE200000" />
+
+</system>

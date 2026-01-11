@@ -1,24 +1,23 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-    seL4 Microkit System Description - Raspberry Pi 4 Graphics Demo
+    seL4 Microkit System Description - TV Demo (HDMI)
 
     This defines a single Protection Domain that:
     - Initializes the VideoCore framebuffer via mailbox
-    - Draws an architecture diagram showing the seL4 stack
-    - Demonstrates formally verified microkernel on real hardware
+    - Runs the TV demo application with menu and animations
+    - Uses HDMI output at 1280x720
 -->
 <system>
     <!--
-        Graphics Protection Domain
+        TV Demo Protection Domain
 
         This PD has access to:
         - VideoCore mailbox registers (for framebuffer allocation)
         - Framebuffer memory (after allocation)
-
-        The mailbox is at physical address 0xFE00B880 (BCM2711).
+        - GPIO registers (for input devices, LED control)
     -->
-    <protection_domain name="graphics" priority="254">
-        <program_image path="graphics_pd.elf" />
+    <protection_domain name="tvdemo" priority="254">
+        <program_image path="tvdemo_pd.elf" />
 
         <!--
             Map the BCM2711 mailbox registers into this PD's address space.
@@ -27,9 +26,8 @@
         <map mr="mailbox_regs" vaddr="0x5_0000_0000" perms="rw" cached="false" />
 
         <!--
-            Map GPIO registers for LED control (to prove seL4 is running)
+            Map GPIO registers for LED control and input
             Physical: 0xFE200000 (GPIO base on BCM2711)
-            Note: Placed after framebuffer (16MB ends at 0x5_0101_0000)
         -->
         <map mr="gpio_regs" vaddr="0x5_0200_0000" perms="rw" cached="false" />
 
@@ -43,23 +41,24 @@
         <!--
             DMA buffer for mailbox communication.
             Must be at a known physical address since GPU needs physical addr.
-            4KB is plenty for mailbox messages (typical message is ~144 bytes).
         -->
         <map mr="dma_buffer" vaddr="0x5_0300_0000" perms="rw" cached="false" />
+
+        <!--
+            Map mini-UART registers for serial input.
+            Physical: 0xFE215000 (4KB page containing mini-UART at 0xFE215040)
+        -->
+        <map mr="uart_regs" vaddr="0x5_0400_0000" perms="rw" cached="false" />
     </protection_domain>
 
     <!--
         Memory Regions
-
-        Note: Microkit needs to know about device memory regions.
-        The exact framebuffer address is allocated by the GPU at runtime,
-        so we declare a region that covers the typical framebuffer area.
     -->
 
     <!-- Mailbox registers (4KB) -->
     <memory_region name="mailbox_regs" size="0x1000" phys_addr="0xFE00B000" />
 
-    <!-- GPIO registers (4KB) for LED control -->
+    <!-- GPIO registers (4KB) for LED control and input -->
     <memory_region name="gpio_regs" size="0x1000" phys_addr="0xFE200000" />
 
     <!-- Framebuffer memory at address from U-Boot bdinfo (FB base = 0x3e876000) -->
@@ -67,5 +66,8 @@
 
     <!-- DMA buffer for mailbox communication (4KB, just before framebuffer) -->
     <memory_region name="dma_buffer" size="0x1000" phys_addr="0x3e875000" />
+
+    <!-- Mini-UART registers (4KB) for serial input -->
+    <memory_region name="uart_regs" size="0x1000" phys_addr="0xFE215000" />
 
 </system>

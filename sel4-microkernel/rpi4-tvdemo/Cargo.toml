@@ -1,0 +1,17 @@
+[package]
+name = "rpi4-tvdemo"
+version = "0.1.0"
+edition = "2021"
+authors = ["Formal Verification Experiments"]
+description = "TV demo application for Raspberry Pi 4 (works with SPI LCD or HDMI)"
+license = "MIT OR Apache-2.0"
+
+[lib]
+name = "rpi4_tvdemo"
+path = "src/lib.rs"
+
+[dependencies]
+rpi4-input = { path = "../rpi4-input" }
+
+[features]
+default = []
