@@ -12,9 +12,9 @@ use core::fmt;
 /// Framebuffer virtual address (mapped in tvdemo.system)
 const FB_VADDR: usize = 0x5_0001_0000;
 
-/// Screen dimensions - use same as working graphics demo
-const WIDTH: usize = 1280;
-const HEIGHT: usize = 720;
+/// Screen dimensions - must match config.txt hdmi_mode=82 (1920x1080)
+const WIDTH: usize = 1920;
+const HEIGHT: usize = 1080;
 
 /// GPIO virtual address (mapped in tvdemo.system)
 const GPIO_BASE: usize = 0x5_0200_0000;
@@ -145,7 +145,7 @@ unsafe fn clear_screen(fb: *mut u32, color: u32) {
 
 /// Draw the snake
 unsafe fn draw_snake(fb: *mut u32, snake: &Snake, frame: u32) {
-    let segment_size = 20usize;
+    let segment_size = 30usize;  // Larger for 1080p
 
     for i in 0..snake.length {
         let seg = snake.segments[i];
@@ -191,9 +191,9 @@ unsafe fn draw_snake(fb: *mut u32, snake: &Snake, frame: u32) {
 /// Draw "SNAKE" text using block letters (same style as graphics demo "SEL4")
 unsafe fn draw_title(fb: *mut u32) {
     let white = 0xFFFFFFFF;
-    let block = 15usize;
-    let start_x = 400usize;
-    let start_y = 50usize;
+    let block = 20usize;  // Larger blocks for 1080p
+    let start_x = 600usize;  // Centered for 1920 width
+    let start_y = 80usize;
 
     // S
     draw_block(fb, start_x, start_y, block * 3, block, white);
@@ -235,7 +235,7 @@ unsafe fn draw_title(fb: *mut u32) {
 unsafe fn draw_frame_counter(fb: *mut u32, frame: u32) {
     let green = 0xFF00FF00;
     let x_base = 50usize;
-    let y_base = 650usize;
+    let y_base = 1000usize;  // Near bottom for 1080p
 
     // Simple bar that grows with frame count (visual proof of animation)
     let bar_width = ((frame % 200) as usize) + 10;
