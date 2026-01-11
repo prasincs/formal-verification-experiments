@@ -1,0 +1,31 @@
+[package]
+name = "rpi4-network"
+version = "0.1.0"
+edition = "2021"
+authors = ["@prasincs"]
+description = "Network Protection Domain for seL4 Microkit on Raspberry Pi 4"
+license = "MIT OR Apache-2.0"
+
+[[bin]]
+name = "network_pd"
+path = "src/main.rs"
+
+[features]
+default = []
+
+# Driver selection (compile-time)
+net-ethernet = []
+net-wifi = []
+
+# IP stack selection
+net-stack-lwip = []
+net-stack-picotcp = []
+
+[dependencies]
+# sel4-microkit will be resolved via the target JSON spec
+
+[profile.release]
+opt-level = "z"
+lto = true
+panic = "abort"
+codegen-units = 1
