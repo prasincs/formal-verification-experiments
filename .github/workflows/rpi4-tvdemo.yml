@@ -1,0 +1,314 @@
+name: Build RPi4 TV Demo SD Card Image
+
+on:
+  push:
+    branches:
+      - main
+      - 'claude/**'
+    paths:
+      - 'sel4-microkernel/rpi4-graphics/**'
+      - 'sel4-microkernel/rpi4-tvdemo/**'
+      - 'sel4-microkernel/rpi4-input/**'
+      - 'sel4-microkernel/rpi4-input-protocol/**'
+      - '.github/workflows/rpi4-tvdemo.yml'
+  pull_request:
+    paths:
+      - 'sel4-microkernel/rpi4-graphics/**'
+      - 'sel4-microkernel/rpi4-tvdemo/**'
+      - 'sel4-microkernel/rpi4-input/**'
+  workflow_dispatch:
+    inputs:
+      rpi4_memory:
+        description: 'Raspberry Pi 4 memory variant'
+        required: true
+        default: '8gb'
+        type: choice
+        options:
+          - 8gb
+          - 4gb
+      create_release:
+        description: 'Create a GitHub release'
+        required: false
+        default: false
+        type: boolean
+
+env:
+  # Pinned versions for reproducible builds
+  MICROKIT_VERSION: "2.1.0"
+  MICROKIT_SDK_SHA256: "faff1b6d6b546cbb0bfea134588499533130d406ae2a5e533e791ddf23ac7599"
+  RPI_FIRMWARE_TAG: "1.20250915"
+
+jobs:
+  # Build Microkit SDK from source with RPi4B boot fix
+  build-sdk:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        memory: [8gb]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Cache Microkit SDK build
+        id: cache-sdk
+        uses: actions/cache@v4
+        with:
+          path: microkit-sdk-${{ matrix.memory }}
+          key: microkit-sdk-patched-${{ matrix.memory }}-sel4-14.0.0-v2
+
+      - name: Download pre-built SDK 2.1.0 (for tool binary)
+        if: steps.cache-sdk.outputs.cache-hit != 'true'
+        run: |
+          echo "=== Downloading pre-built SDK 2.1.0 ==="
+          curl -L -o microkit-sdk.tar.gz \
+            "https://github.com/seL4/microkit/releases/download/${{ env.MICROKIT_VERSION }}/microkit-sdk-${{ env.MICROKIT_VERSION }}-linux-x86-64.tar.gz"
+          echo "${{ env.MICROKIT_SDK_SHA256 }}  microkit-sdk.tar.gz" | sha256sum -c -
+          mkdir -p prebuilt-sdk
+          tar -xzf microkit-sdk.tar.gz -C prebuilt-sdk --strip-components=1
+          rm microkit-sdk.tar.gz
+
+      - name: Clone Microkit (with RPi4B fix)
+        if: steps.cache-sdk.outputs.cache-hit != 'true'
+        run: |
+          git clone --depth 1 https://github.com/seL4/microkit.git vendor-microkit
+          cd vendor-microkit
+          echo "=== Microkit version ==="
+          git log --oneline -1
+
+      - name: Clone seL4 kernel source
+        if: steps.cache-sdk.outputs.cache-hit != 'true'
+        run: |
+          # Use seL4 14.0.0 which is compatible with Microkit main
+          git clone --depth 1 --branch 14.0.0 https://github.com/seL4/seL4.git sel4-kernel
+          cd sel4-kernel && git log --oneline -1
+
+      - name: Build Microkit SDK for RPi4B ${{ matrix.memory }}
+        if: steps.cache-sdk.outputs.cache-hit != 'true'
+        run: |
+          echo "=== Building Microkit SDK for rpi4b_${{ matrix.memory }} ==="
+
+          docker pull trustworthysystems/camkes:latest
+
+          # Build SDK - use 'aarch64-linux-gnu' (no trailing dash, script adds it)
+          docker run --rm \
+            -u $(id -u):$(id -g) \
+            -e CCACHE_DISABLE=1 \
+            -v $PWD/vendor-microkit:/microkit \
+            -v $PWD/sel4-kernel:/sel4 \
+            -w /microkit \
+            trustworthysystems/camkes:latest \
+            python3 build_sdk.py \
+              --sel4 /sel4 \
+              --boards rpi4b_${{ matrix.memory }} \
+              --configs debug \
+              --skip-tool \
+              --skip-initialiser \
+              --skip-docs \
+              --gcc-toolchain-prefix-aarch64 aarch64-linux-gnu
+
+          # Assemble final SDK
+          mkdir -p microkit-sdk-${{ matrix.memory }}
+          cp -r vendor-microkit/release/microkit-sdk-*/. microkit-sdk-${{ matrix.memory }}/
+
+          # Copy pre-built tool binary (since we skipped building it)
+          cp prebuilt-sdk/bin/microkit microkit-sdk-${{ matrix.memory }}/bin/
+          chmod +x microkit-sdk-${{ matrix.memory }}/bin/microkit
+
+          # Copy pre-built initialiser.elf (since we skipped building it)
+          # The initialiser is board-specific
+          cp prebuilt-sdk/board/rpi4b_${{ matrix.memory }}/debug/elf/initialiser.elf \
+             microkit-sdk-${{ matrix.memory }}/board/rpi4b_${{ matrix.memory }}/debug/elf/
+
+          echo "=== SDK contents ==="
+          ls -la microkit-sdk-${{ matrix.memory }}/bin/
+          ls -la microkit-sdk-${{ matrix.memory }}/board/rpi4b_${{ matrix.memory }}/debug/elf/
+
+      - name: Upload SDK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: microkit-sdk-tvdemo-${{ matrix.memory }}
+          path: microkit-sdk-${{ matrix.memory }}/
+          retention-days: 7
+
+  # Build 8GB variant
+  build-8gb:
+    needs: build-sdk
+    runs-on: ubuntu-latest
+    outputs:
+      sha_short: ${{ steps.commit.outputs.SHA_SHORT }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Get commit info
+        id: commit
+        run: echo "SHA_SHORT=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+
+      - name: Download Microkit SDK
+        uses: actions/download-artifact@v4
+        with:
+          name: microkit-sdk-tvdemo-8gb
+          path: sel4-microkernel/rpi4-graphics/microkit-sdk
+
+      - name: Fix SDK permissions
+        run: chmod +x sel4-microkernel/rpi4-graphics/microkit-sdk/bin/microkit
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            gcc-aarch64-linux-gnu \
+            qemu-system-arm \
+            dosfstools \
+            mtools \
+            curl
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rust-src
+
+      - name: Cache Raspberry Pi firmware
+        id: cache-firmware
+        uses: actions/cache@v4
+        with:
+          path: sel4-microkernel/rpi4-graphics/build/firmware
+          key: rpi-firmware-${{ env.RPI_FIRMWARE_TAG }}
+
+      - name: Download Raspberry Pi firmware
+        if: steps.cache-firmware.outputs.cache-hit != 'true'
+        working-directory: sel4-microkernel/rpi4-graphics
+        run: make firmware
+
+      - name: Build TV Demo for 8GB Raspberry Pi 4
+        working-directory: sel4-microkernel/rpi4-graphics
+        run: |
+          export MICROKIT_SDK=$PWD/microkit-sdk
+          export SEL4_INCLUDE_DIRS=$MICROKIT_SDK/board/rpi4b_8gb/debug/include
+          echo "=== Environment ==="
+          echo "MICROKIT_SDK=$MICROKIT_SDK"
+          echo "SEL4_INCLUDE_DIRS=$SEL4_INCLUDE_DIRS"
+          ls -la $MICROKIT_SDK/board/
+          echo "=== Build TV Demo ==="
+          make sdcard PRODUCT=tvdemo RPI4_MEMORY=8gb
+          mv build/rpi4-sel4-tvdemo.img build/rpi4-sel4-tvdemo-8gb.img
+
+      - name: Generate checksums
+        working-directory: sel4-microkernel/rpi4-graphics/build
+        run: |
+          sha256sum rpi4-sel4-tvdemo-8gb.img > rpi4-sel4-tvdemo-8gb.img.sha256
+          cat rpi4-sel4-tvdemo-8gb.img.sha256
+
+      - name: Upload SD card image
+        uses: actions/upload-artifact@v4
+        with:
+          name: rpi4-sel4-tvdemo-sdcard-8gb
+          path: |
+            sel4-microkernel/rpi4-graphics/build/rpi4-sel4-tvdemo-8gb.img
+            sel4-microkernel/rpi4-graphics/build/rpi4-sel4-tvdemo-8gb.img.sha256
+          retention-days: 30
+
+      - name: Upload build report
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-report-tvdemo-8gb
+          path: sel4-microkernel/rpi4-graphics/build/report.txt
+          retention-days: 30
+
+  # Create GitHub release
+  release:
+    if: github.ref == 'refs/heads/main' || github.event.inputs.create_release == 'true'
+    needs: [build-8gb]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts
+          pattern: rpi4-sel4-tvdemo-sdcard-*
+          merge-multiple: true
+
+      - name: Get release info
+        id: release-info
+        run: |
+          echo "SHA_SHORT=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+          echo "DATE=$(date -u +'%Y-%m-%d')" >> $GITHUB_OUTPUT
+
+      - name: Create release notes
+        run: |
+          cat > release-notes.md << 'EOF'
+          # seL4 Microkit TV Demo for Raspberry Pi 4
+
+          Bootable SD card image for Raspberry Pi 4 (8GB) running seL4 Microkit with an interactive TV demo.
+
+          ## Features
+
+          - Interactive menu system with UART input
+          - Snake game (playable via serial console)
+          - Snake screensaver mode
+          - About screen with system information
+
+          ## Quick Start
+
+          1. Download `rpi4-sel4-tvdemo-8gb.img`
+          2. Flash to SD card using Raspberry Pi Imager or `dd`
+          3. Connect HDMI display and serial console
+          4. Boot your Pi 4
+
+          ## Flashing
+
+          ```bash
+          sudo dd if=rpi4-sel4-tvdemo-8gb.img of=/dev/sdX bs=4M status=progress conv=fsync
+          ```
+
+          Or use Raspberry Pi Imager → Use custom → Select the image.
+
+          ## Requirements
+
+          - Raspberry Pi 4 Model B (8GB)
+          - MicroSD card (8GB+)
+          - HDMI display
+          - USB-to-serial adapter for input (optional)
+
+          ## Controls
+
+          - **Arrow keys / WASD**: Navigate menu, control snake
+          - **Enter / Space**: Select menu item
+          - **Escape**: Return to menu
+
+          ## Verify Download
+
+          ```bash
+          sha256sum -c rpi4-sel4-tvdemo-8gb.img.sha256
+          ```
+
+          Built with Microkit SDK from source (includes RPi4B boot fix PR #402).
+          EOF
+
+      - name: Delete existing release
+        run: |
+          gh release delete rpi4-tvdemo --yes || true
+          git push origin :refs/tags/rpi4-tvdemo || true
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: rpi4-tvdemo
+          name: "RPi4 TV Demo (${{ steps.release-info.outputs.DATE }})"
+          body_path: release-notes.md
+          files: |
+            release-artifacts/*.img
+            release-artifacts/*.sha256
+          draft: false
+          prerelease: false
+          make_latest: false
