@@ -6,7 +6,18 @@
 #![no_std]
 #![no_main]
 
+extern crate alloc;
+
 use sel4_microkit::{debug_println, protection_domain, Handler, Channel, ChannelSet};
+use linked_list_allocator::LockedHeap;
+
+// Global allocator for fontdue and other alloc-dependent code
+#[global_allocator]
+static ALLOCATOR: LockedHeap = LockedHeap::empty();
+
+// 64KB heap for font rendering
+const HEAP_SIZE: usize = 64 * 1024;
+static mut HEAP: [u8; HEAP_SIZE] = [0; HEAP_SIZE];
 
 use rpi4_graphics::{
     Mailbox, Framebuffer, MAILBOX_BASE,
@@ -384,6 +395,11 @@ impl Handler for GraphicsHandler {
 
 #[protection_domain]
 fn init() -> impl Handler {
+    // Initialize the heap allocator (required for fontdue)
+    unsafe {
+        ALLOCATOR.lock().init(HEAP.as_mut_ptr(), HEAP_SIZE);
+    }
+
     debug_println!("");
     debug_println!("=====================================");
     debug_println!("  seL4 Microkit Graphics Demo");

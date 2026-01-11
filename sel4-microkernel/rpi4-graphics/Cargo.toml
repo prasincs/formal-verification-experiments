@@ -45,6 +45,9 @@ rpi4-input-protocol = { path = "../rpi4-input-protocol" }
 fontdue = { version = "0.9", default-features = false, features = ["hashbrown"] }
 libm = "0.2"
 
+# Global allocator for no_std (required by fontdue)
+linked_list_allocator = "0.10"
+
 [profile.release]
 opt-level = "z"
 lto = true
