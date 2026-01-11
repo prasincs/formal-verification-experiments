@@ -104,6 +104,12 @@ struct Segment {
     y: i32,
 }
 
+/// Play area bounds (snake stays within this region, below title)
+const PLAY_AREA_TOP: i32 = 140;  // Below title (title ends around y=105)
+const PLAY_AREA_BOTTOM: i32 = 630;  // Above frame counter (at y=650)
+const PLAY_AREA_LEFT: i32 = 20;
+const PLAY_AREA_RIGHT: i32 = 1260;
+
 /// Snake state
 struct Snake {
     segments: [Segment; 30],
@@ -113,10 +119,11 @@ struct Snake {
 }
 
 impl Snake {
-    fn new(width: usize, height: usize) -> Self {
+    fn new() -> Self {
         let mut segments = [Segment { x: 0, y: 0 }; 30];
-        let start_x = (width / 2) as i32;
-        let start_y = (height / 2) as i32;
+        // Start in center of play area
+        let start_x = (PLAY_AREA_LEFT + PLAY_AREA_RIGHT) / 2;
+        let start_y = (PLAY_AREA_TOP + PLAY_AREA_BOTTOM) / 2;
         for i in 0..20 {
             segments[i] = Segment {
                 x: start_x - (i as i32 * 25),
@@ -131,7 +138,7 @@ impl Snake {
         }
     }
 
-    fn update(&mut self, width: usize, height: usize) {
+    fn update(&mut self) {
         self.frame = self.frame.wrapping_add(1);
 
         if self.frame % 45 == 0 {
@@ -153,11 +160,11 @@ impl Snake {
             _ => new_y -= speed,
         }
 
-        // Wrap around
-        if new_x < 0 { new_x = width as i32 - 1; }
-        if new_x >= width as i32 { new_x = 0; }
-        if new_y < 0 { new_y = height as i32 - 1; }
-        if new_y >= height as i32 { new_y = 0; }
+        // Wrap around within play area
+        if new_x < PLAY_AREA_LEFT { new_x = PLAY_AREA_RIGHT - 1; }
+        if new_x >= PLAY_AREA_RIGHT { new_x = PLAY_AREA_LEFT; }
+        if new_y < PLAY_AREA_TOP { new_y = PLAY_AREA_BOTTOM - 1; }
+        if new_y >= PLAY_AREA_BOTTOM { new_y = PLAY_AREA_TOP; }
 
         for i in (1..self.length).rev() {
             self.segments[i] = self.segments[i - 1];
@@ -231,30 +238,29 @@ unsafe fn draw_static_elements(ptr: *mut u32, pitch: usize, width: usize, height
     draw_block(ptr, pitch, snake_x + block * 2, start_y + block * 3, block, block, white);
     draw_block(ptr, pitch, snake_x, start_y + block * 4, block * 3, block, white);
 
-    // N - diagonal from top-left to bottom-right
+    // N - 4 blocks wide for proper diagonal
     let n_x = snake_x + block * 4;
-    draw_block(ptr, pitch, n_x, start_y, block, block * 5, white);
-    draw_block(ptr, pitch, n_x + block, start_y + block, block, block, white);
-    draw_block(ptr, pitch, n_x + block, start_y + block * 2, block, block, white);
-    draw_block(ptr, pitch, n_x + block, start_y + block * 3, block, block, white);
-    draw_block(ptr, pitch, n_x + block * 2, start_y, block, block * 5, white);
+    draw_block(ptr, pitch, n_x, start_y, block, block * 5, white);  // Left vertical
+    draw_block(ptr, pitch, n_x + block, start_y + block, block, block, white);  // Diagonal step 1
+    draw_block(ptr, pitch, n_x + block * 2, start_y + block * 2, block, block * 2, white);  // Diagonal step 2
+    draw_block(ptr, pitch, n_x + block * 3, start_y, block, block * 5, white);  // Right vertical
 
-    // A
-    let a_x = snake_x + block * 8;
+    // A (shifted right by 1 block since N is now wider)
+    let a_x = snake_x + block * 9;
     draw_block(ptr, pitch, a_x, start_y, block * 3, block, white);
     draw_block(ptr, pitch, a_x, start_y + block, block, block * 4, white);
     draw_block(ptr, pitch, a_x + block * 2, start_y + block, block, block * 4, white);
     draw_block(ptr, pitch, a_x, start_y + block * 2, block * 3, block, white);
 
     // K
-    let k_x = snake_x + block * 12;
+    let k_x = snake_x + block * 13;
     draw_block(ptr, pitch, k_x, start_y, block, block * 5, white);
     draw_block(ptr, pitch, k_x + block, start_y + block * 2, block, block, white);
     draw_block(ptr, pitch, k_x + block * 2, start_y, block, block * 2, white);
     draw_block(ptr, pitch, k_x + block * 2, start_y + block * 3, block, block * 2, white);
 
     // E
-    let e2_x = snake_x + block * 16;
+    let e2_x = snake_x + block * 17;
     draw_block(ptr, pitch, e2_x, start_y, block * 3, block, white);
     draw_block(ptr, pitch, e2_x, start_y + block, block, block, white);
     draw_block(ptr, pitch, e2_x, start_y + block * 2, block * 2, block, white);
@@ -299,7 +305,7 @@ fn run_animation(fb: &Framebuffer) {
         core::arch::asm!("dsb sy");
     }
 
-    let mut snake = Snake::new(width, height);
+    let mut snake = Snake::new();
     let mut prev_segments: [Segment; 30] = [Segment { x: -100, y: -100 }; 30];
     let mut frame: u32 = 0;
     const FRAME_DELAY: u32 = 500_000;
@@ -311,10 +317,10 @@ fn run_animation(fb: &Framebuffer) {
             // Erase previous snake positions (draw background over them)
             for i in 0..snake.length {
                 let seg = prev_segments[i];
-                if seg.x >= 0 && seg.y >= 0 {
+                if seg.x >= PLAY_AREA_LEFT && seg.y >= PLAY_AREA_TOP {
                     let x = (seg.x as usize).saturating_sub(segment_size / 2);
                     let y = (seg.y as usize).saturating_sub(segment_size / 2);
-                    if x + segment_size < width && y + segment_size < height && y > 130 {
+                    if x + segment_size < PLAY_AREA_RIGHT as usize && y + segment_size < PLAY_AREA_BOTTOM as usize {
                         draw_block(ptr, pitch, x, y, segment_size, segment_size, bg_color);
                     }
                 }
@@ -326,15 +332,15 @@ fn run_animation(fb: &Framebuffer) {
             }
 
             // Update snake
-            snake.update(width, height);
+            snake.update();
 
-            // Draw snake at new positions
+            // Draw snake at new positions (within play area only)
             for i in 0..snake.length {
                 let seg = snake.segments[i];
-                if seg.x >= 0 && seg.y >= 0 {
+                if seg.x >= PLAY_AREA_LEFT && seg.y >= PLAY_AREA_TOP {
                     let x = (seg.x as usize).saturating_sub(segment_size / 2);
                     let y = (seg.y as usize).saturating_sub(segment_size / 2);
-                    if x + segment_size < width && y + segment_size < height {
+                    if x + segment_size < PLAY_AREA_RIGHT as usize && y + segment_size < PLAY_AREA_BOTTOM as usize {
                         let hue = ((i as u32 * 18 + frame * 4) % 360) as u16;
                         let color = hsv_to_rgb(hue, 255, 255);
                         draw_block(ptr, pitch, x, y, segment_size, segment_size, color);
