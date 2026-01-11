@@ -2,8 +2,17 @@
 name = "rpi4-input-protocol"
 version = "0.1.0"
 edition = "2021"
+description = "Verified IPC protocol for Input/Graphics PD isolation"
 
 [dependencies]
+# Verus verification support
+verus_builtin_macros = "=0.0.0-2025-12-07-0054"
+verus_builtin = "=0.0.0-2025-12-07-0054"
 
 [features]
 default = []
+# Enable Verus verification (requires verus toolchain)
+verus = []
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(verus_keep_ghost)'] }
