@@ -44,7 +44,7 @@ const SPI_BASE: usize = 0x5_0400_0000;  // SPI0 for TPM
 const UART5_BASE: usize = 0x5_0500_0000 + 0xa00;
 
 /// Colors
-const COLOR_BG: u32 = 0xFF101020;
+const COLOR_BG: u32 = 0xFF000000;  // Pure black background
 const COLOR_WHITE: u32 = 0xFFFFFFFF;
 const COLOR_GREEN: u32 = 0xFF00B050;
 const COLOR_RED: u32 = 0xFFE04040;
@@ -113,13 +113,27 @@ impl TextRenderer {
         let bitmap = get_char_bitmap(c);
 
         unsafe {
+            // First clear the character cell to black (fixes gray artifacts from redraw)
+            for row in 0..7 {
+                for col in 0..5 {
+                    let px = self.cursor_x + col * 5;
+                    let py = self.cursor_y + row * 5;
+                    for dy in 0..4 {
+                        for dx in 0..4 {
+                            let offset = (py + dy) * self.pitch + (px + dx);
+                            self.fb_ptr.add(offset).write_volatile(COLOR_BG);
+                        }
+                    }
+                }
+            }
+            // Then draw the character pixels
             for row in 0..7 {
                 let bits = bitmap[row];
                 for col in 0..5 {
                     if (bits >> (4 - col)) & 1 == 1 {
                         let px = self.cursor_x + col * 5;
                         let py = self.cursor_y + row * 5;
-                        // Draw 4x4 block for each pixel
+                        // Draw 4x4 block for each pixel (dotted look)
                         for dy in 0..4 {
                             for dx in 0..4 {
                                 let offset = (py + dy) * self.pitch + (px + dx);
@@ -266,13 +280,21 @@ impl TpmTest {
 
     fn clear_screen(&mut self) {
         unsafe {
+            // Clear entire framebuffer to black, using pitch for row stride
+            // but WIDTH for visible pixels to ensure full coverage
+            let clear_width = if self.renderer.pitch > WIDTH as usize {
+                self.renderer.pitch
+            } else {
+                WIDTH as usize
+            };
             for y in 0..HEIGHT as usize {
-                for x in 0..self.renderer.pitch {
+                for x in 0..clear_width {
                     self.renderer.fb_ptr.add(y * self.renderer.pitch + x)
                         .write_volatile(COLOR_BG);
                 }
             }
             core::arch::asm!("dsb sy");
+            core::arch::asm!("isb");
         }
     }
 
