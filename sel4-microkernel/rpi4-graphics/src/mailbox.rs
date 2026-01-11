@@ -108,16 +108,30 @@ impl Mailbox {
 
     /// Send a property tag message and get response
     ///
+    /// Uses a DMA buffer at a known physical address since the GPU
+    /// needs physical addresses for DMA. The buffer is copied to/from
+    /// the DMA region.
+    ///
     /// # Safety
-    /// The buffer must be properly aligned (16 bytes) and contain valid tag data.
-    /// The buffer address must be a physical address visible to the GPU.
+    /// The DMA buffer region must be properly mapped.
     pub unsafe fn call(&self, buffer: &mut [u32; 36]) -> Result<(), MailboxError> {
-        // Buffer address must be 16-byte aligned
-        let buffer_ptr = buffer.as_ptr() as usize;
-        debug_assert!(buffer_ptr & 0xF == 0, "Buffer must be 16-byte aligned");
+        // Use the DMA buffer which has a known physical address
+        let dma_virt = crate::DMA_BUFFER_VIRT as *mut u32;
+        let dma_phys = crate::DMA_BUFFER_PHYS;
 
-        // Convert to GPU bus address
-        let gpu_addr = crate::arm_to_gpu(buffer_ptr);
+        // Memory barrier before DMA
+        core::arch::asm!("dsb sy");
+
+        // Copy message to DMA buffer
+        for i in 0..36 {
+            dma_virt.add(i).write_volatile(buffer[i]);
+        }
+
+        // Memory barrier to ensure write completes
+        core::arch::asm!("dsb sy");
+
+        // Convert physical address to GPU bus address
+        let gpu_addr = crate::arm_to_gpu(dma_phys);
 
         // Wait for mailbox to be ready
         self.wait_write_ready();
@@ -133,7 +147,15 @@ impl Mailbox {
 
             // Check if this is our response (same channel)
             if (response & 0xF) == CHANNEL_PROPERTY {
-                // Check response code in buffer
+                // Memory barrier before reading response
+                core::arch::asm!("dsb sy");
+
+                // Copy response back from DMA buffer
+                for i in 0..36 {
+                    buffer[i] = dma_virt.add(i).read_volatile();
+                }
+
+                // Check response code
                 if buffer[1] == RESPONSE_SUCCESS {
                     return Ok(());
                 } else {

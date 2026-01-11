@@ -72,6 +72,13 @@ pub const FRAMEBUFFER_PHYS_BASE: usize = 0x3e87_6000;
 /// Framebuffer virtual address as mapped by Microkit (graphics.system)
 pub const FRAMEBUFFER_VIRT_BASE: usize = 0x5_0001_0000;
 
+/// DMA buffer physical address (just before framebuffer)
+/// Used for mailbox communication - GPU needs physical addresses
+pub const DMA_BUFFER_PHYS: usize = 0x3e87_5000;
+
+/// DMA buffer virtual address as mapped by Microkit
+pub const DMA_BUFFER_VIRT: usize = 0x5_0300_0000;
+
 /// GPU bus address to ARM physical address translation
 /// The GPU sees memory differently than the ARM cores
 #[inline]

@@ -185,6 +185,94 @@ fn hsv_to_rgb(h: u16, s: u8, v: u8) -> u32 {
     0xFF000000 | (((r + m) as u32) << 16) | (((g + m) as u32) << 8) | ((b + m) as u32)
 }
 
+/// Draw static elements (title, border) - called once
+unsafe fn draw_static_elements(ptr: *mut u32, pitch: usize, width: usize, height: usize) {
+    let white: u32 = 0xFFFFFFFF;
+    let green: u32 = 0xFF00B050;  // seL4 green for "SeL4"
+    let block = 12usize;  // Smaller blocks for more text
+    let start_y = 30usize;
+
+    // ===== "SeL4" in seL4 green (left side) =====
+    let sel4_x = 80usize;
+
+    // S
+    draw_block(ptr, pitch, sel4_x, start_y, block * 3, block, green);
+    draw_block(ptr, pitch, sel4_x, start_y + block, block, block, green);
+    draw_block(ptr, pitch, sel4_x, start_y + block * 2, block * 3, block, green);
+    draw_block(ptr, pitch, sel4_x + block * 2, start_y + block * 3, block, block, green);
+    draw_block(ptr, pitch, sel4_x, start_y + block * 4, block * 3, block, green);
+
+    // e (lowercase - smaller)
+    let e_x = sel4_x + block * 4;
+    draw_block(ptr, pitch, e_x, start_y + block, block * 2, block, green);
+    draw_block(ptr, pitch, e_x, start_y + block * 2, block, block, green);
+    draw_block(ptr, pitch, e_x, start_y + block * 3, block * 2, block, green);
+    draw_block(ptr, pitch, e_x, start_y + block * 4, block * 2, block, green);
+
+    // L
+    let l_x = sel4_x + block * 7;
+    draw_block(ptr, pitch, l_x, start_y, block, block * 4, green);
+    draw_block(ptr, pitch, l_x, start_y + block * 4, block * 3, block, green);
+
+    // 4
+    let four_x = sel4_x + block * 11;
+    draw_block(ptr, pitch, four_x, start_y, block, block * 3, green);
+    draw_block(ptr, pitch, four_x, start_y + block * 2, block * 3, block, green);
+    draw_block(ptr, pitch, four_x + block * 2, start_y, block, block * 5, green);
+
+    // ===== "SNAKE" in white (right side) =====
+    let snake_x = 420usize;
+    let block = 15usize;  // Larger blocks for SNAKE
+
+    // S
+    draw_block(ptr, pitch, snake_x, start_y, block * 3, block, white);
+    draw_block(ptr, pitch, snake_x, start_y + block, block, block, white);
+    draw_block(ptr, pitch, snake_x, start_y + block * 2, block * 3, block, white);
+    draw_block(ptr, pitch, snake_x + block * 2, start_y + block * 3, block, block, white);
+    draw_block(ptr, pitch, snake_x, start_y + block * 4, block * 3, block, white);
+
+    // N - diagonal from top-left to bottom-right
+    let n_x = snake_x + block * 4;
+    draw_block(ptr, pitch, n_x, start_y, block, block * 5, white);
+    draw_block(ptr, pitch, n_x + block, start_y + block, block, block, white);
+    draw_block(ptr, pitch, n_x + block, start_y + block * 2, block, block, white);
+    draw_block(ptr, pitch, n_x + block, start_y + block * 3, block, block, white);
+    draw_block(ptr, pitch, n_x + block * 2, start_y, block, block * 5, white);
+
+    // A
+    let a_x = snake_x + block * 8;
+    draw_block(ptr, pitch, a_x, start_y, block * 3, block, white);
+    draw_block(ptr, pitch, a_x, start_y + block, block, block * 4, white);
+    draw_block(ptr, pitch, a_x + block * 2, start_y + block, block, block * 4, white);
+    draw_block(ptr, pitch, a_x, start_y + block * 2, block * 3, block, white);
+
+    // K
+    let k_x = snake_x + block * 12;
+    draw_block(ptr, pitch, k_x, start_y, block, block * 5, white);
+    draw_block(ptr, pitch, k_x + block, start_y + block * 2, block, block, white);
+    draw_block(ptr, pitch, k_x + block * 2, start_y, block, block * 2, white);
+    draw_block(ptr, pitch, k_x + block * 2, start_y + block * 3, block, block * 2, white);
+
+    // E
+    let e2_x = snake_x + block * 16;
+    draw_block(ptr, pitch, e2_x, start_y, block * 3, block, white);
+    draw_block(ptr, pitch, e2_x, start_y + block, block, block, white);
+    draw_block(ptr, pitch, e2_x, start_y + block * 2, block * 2, block, white);
+    draw_block(ptr, pitch, e2_x, start_y + block * 3, block, block, white);
+    draw_block(ptr, pitch, e2_x, start_y + block * 4, block * 3, block, white);
+
+    // Draw border
+    let gray: u32 = 0xFF808080;
+    for x in 0..width {
+        ptr.add(x).write_volatile(gray);
+        ptr.add((height - 1) * pitch + x).write_volatile(gray);
+    }
+    for y in 0..height {
+        ptr.add(y * pitch).write_volatile(gray);
+        ptr.add(y * pitch + width - 1).write_volatile(gray);
+    }
+}
+
 /// Run snake animation using the properly allocated framebuffer
 fn run_animation(fb: &Framebuffer) {
     let ptr = fb.buffer_ptr();
@@ -195,66 +283,52 @@ fn run_animation(fb: &Framebuffer) {
 
     debug_println!("Starting snake animation: {}x{}, pitch={}", width, height, pitch);
 
+    let bg_color: u32 = 0xFF101030;
+    let segment_size = 20usize;
+
+    // Clear screen ONCE
+    unsafe {
+        core::arch::asm!("dsb sy");
+        for y in 0..height {
+            for x in 0..pitch {
+                ptr.add(y * pitch + x).write_volatile(bg_color);
+            }
+        }
+        // Draw static elements ONCE
+        draw_static_elements(ptr, pitch, width, height);
+        core::arch::asm!("dsb sy");
+    }
+
     let mut snake = Snake::new(width, height);
+    let mut prev_segments: [Segment; 30] = [Segment { x: -100, y: -100 }; 30];
     let mut frame: u32 = 0;
-    const FRAME_DELAY: u32 = 800_000;
+    const FRAME_DELAY: u32 = 500_000;
 
     loop {
         unsafe {
             core::arch::asm!("dsb sy");
 
-            // Clear with dark blue
-            let bg_color: u32 = 0xFF101030;
-            for y in 0..height {
-                for x in 0..pitch {
-                    ptr.add(y * pitch + x).write_volatile(bg_color);
+            // Erase previous snake positions (draw background over them)
+            for i in 0..snake.length {
+                let seg = prev_segments[i];
+                if seg.x >= 0 && seg.y >= 0 {
+                    let x = (seg.x as usize).saturating_sub(segment_size / 2);
+                    let y = (seg.y as usize).saturating_sub(segment_size / 2);
+                    if x + segment_size < width && y + segment_size < height && y > 130 {
+                        draw_block(ptr, pitch, x, y, segment_size, segment_size, bg_color);
+                    }
                 }
             }
 
-            // Draw "SNAKE" title
-            let white: u32 = 0xFFFFFFFF;
-            let block = 15usize;
-            let start_x = 350usize;
-            let start_y = 50usize;
+            // Save current positions before update
+            for i in 0..snake.length {
+                prev_segments[i] = snake.segments[i];
+            }
 
-            // S
-            draw_block(ptr, pitch, start_x, start_y, block * 3, block, white);
-            draw_block(ptr, pitch, start_x, start_y + block, block, block, white);
-            draw_block(ptr, pitch, start_x, start_y + block * 2, block * 3, block, white);
-            draw_block(ptr, pitch, start_x + block * 2, start_y + block * 3, block, block, white);
-            draw_block(ptr, pitch, start_x, start_y + block * 4, block * 3, block, white);
-
-            // N
-            let n_x = start_x + block * 5;
-            draw_block(ptr, pitch, n_x, start_y, block, block * 5, white);
-            draw_block(ptr, pitch, n_x + block, start_y + block, block, block, white);
-            draw_block(ptr, pitch, n_x + block * 2, start_y, block, block * 5, white);
-
-            // A
-            let a_x = start_x + block * 9;
-            draw_block(ptr, pitch, a_x, start_y, block * 3, block, white);
-            draw_block(ptr, pitch, a_x, start_y + block, block, block * 4, white);
-            draw_block(ptr, pitch, a_x + block * 2, start_y + block, block, block * 4, white);
-            draw_block(ptr, pitch, a_x, start_y + block * 2, block * 3, block, white);
-
-            // K
-            let k_x = start_x + block * 14;
-            draw_block(ptr, pitch, k_x, start_y, block, block * 5, white);
-            draw_block(ptr, pitch, k_x + block, start_y + block * 2, block, block, white);
-            draw_block(ptr, pitch, k_x + block * 2, start_y, block, block * 2, white);
-            draw_block(ptr, pitch, k_x + block * 2, start_y + block * 3, block, block * 2, white);
-
-            // E
-            let e_x = start_x + block * 18;
-            draw_block(ptr, pitch, e_x, start_y, block * 3, block, white);
-            draw_block(ptr, pitch, e_x, start_y + block, block, block, white);
-            draw_block(ptr, pitch, e_x, start_y + block * 2, block * 2, block, white);
-            draw_block(ptr, pitch, e_x, start_y + block * 3, block, block, white);
-            draw_block(ptr, pitch, e_x, start_y + block * 4, block * 3, block, white);
-
-            // Update and draw snake
+            // Update snake
             snake.update(width, height);
-            let segment_size = 20usize;
+
+            // Draw snake at new positions
             for i in 0..snake.length {
                 let seg = snake.segments[i];
                 if seg.x >= 0 && seg.y >= 0 {
@@ -268,28 +342,18 @@ fn run_animation(fb: &Framebuffer) {
                 }
             }
 
-            // Draw frame counter bar
+            // Clear and redraw frame counter bar area
+            draw_block(ptr, pitch, 50, 650, 310, 20, bg_color);
             let green: u32 = 0xFF00FF00;
             let bar_width = ((frame % 200) as usize) + 10;
             draw_block(ptr, pitch, 50, 650, bar_width.min(300), 20, green);
-
-            // Draw border
-            let gray: u32 = 0xFF808080;
-            for x in 0..width {
-                ptr.add(x).write_volatile(gray);
-                ptr.add((height - 1) * pitch + x).write_volatile(gray);
-            }
-            for y in 0..height {
-                ptr.add(y * pitch).write_volatile(gray);
-                ptr.add(y * pitch + width - 1).write_volatile(gray);
-            }
 
             core::arch::asm!("dsb sy");
             core::arch::asm!("isb");
         }
 
         frame = frame.wrapping_add(1);
-        if frame % 60 == 0 {
+        if frame % 120 == 0 {
             debug_println!("Frame {}", frame);
         }
 
