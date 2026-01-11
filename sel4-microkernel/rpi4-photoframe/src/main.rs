@@ -22,6 +22,8 @@
 #![no_std]
 #![no_main]
 
+mod decoder;
+
 use sel4_microkit::{debug_println, protection_domain, Handler, ChannelSet, Channel};
 use core::fmt;
 use core::sync::atomic::Ordering;
