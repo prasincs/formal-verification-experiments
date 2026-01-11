@@ -8,6 +8,7 @@ THIS_MAKEFILE := $(lastword $(MAKEFILE_LIST))
 #   graphics    - RPi4 HDMI framebuffer demo
 #   hello       - Hello World for QEMU
 #   tvdemo      - TV Demo with input (RPi4)
+#   tpmtest     - TPM 2.0 boot verification test (RPi4 + TPM module)
 #
 # Platforms:
 #   rpi4           - Raspberry Pi 4 hardware

@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+    TPM 2.0 Boot Verification Test
+
+    Hardware:
+    - Raspberry Pi 4 Model B
+    - GeeekPi TPM9670 (Infineon SLB 9670) on SPI0
+    - HDMI display for output
+
+    GPIO Usage:
+    - SPI0 (TPM): GPIO 7-11 (pins 24,21,19,23,26)
+    - LED: GPIO 42 (activity LED)
+
+    Serial Debug (if header pins available):
+    - UART0: GPIO 14/15 (pins 8,10) - NOT occupied by TPM!
+    - The TPM uses SPI0, not UART pins
+
+    Note: Mini UART is at 0xfe215040, PL011 UART is at 0xfe201000
+-->
+<system>
+    <!-- VideoCore Mailbox for framebuffer allocation (page containing 0xfe00b880) -->
+    <memory_region
+        name="mailbox"
+        size="0x1000"
+        phys_addr="0xfe00b000"
+    />
+
+    <!-- GPIO registers -->
+    <memory_region
+        name="gpio"
+        size="0x1000"
+        phys_addr="0xfe200000"
+    />
+
+    <!-- SPI0 controller for TPM communication -->
+    <memory_region
+        name="spi0"
+        size="0x1000"
+        phys_addr="0xfe204000"
+    />
+
+    <!-- Aux peripherals (includes mini UART for debug) -->
+    <memory_region
+        name="aux"
+        size="0x1000"
+        phys_addr="0xfe215000"
+    />
+
+    <!-- Framebuffer (16MB, allocated by VideoCore) -->
+    <memory_region
+        name="framebuffer"
+        size="0x1000000"
+        page_size="0x200000"
+    />
+
+    <!-- TPM Test Protection Domain -->
+    <protection_domain name="tpmtest" priority="254">
+        <!-- Mailbox for framebuffer setup (vaddr 0x5_0000_0000 + 0x880 offset) -->
+        <map mr="mailbox" vaddr="0x5_0000_0000" perms="rw" cached="false" />
+
+        <!-- Framebuffer memory -->
+        <map mr="framebuffer" vaddr="0x5_0100_0000" perms="rw" cached="false" />
+
+        <!-- GPIO for LED and SPI pin configuration -->
+        <map mr="gpio" vaddr="0x5_0200_0000" perms="rw" cached="false" />
+
+        <!-- SPI0 for TPM communication -->
+        <map mr="spi0" vaddr="0x5_0300_0000" perms="rw" cached="false" />
+
+        <!-- Aux (mini UART for debug output if available) -->
+        <map mr="aux" vaddr="0x5_0400_0000" perms="rw" cached="false" />
+
+        <program_image path="tpmtest_pd.elf" />
+    </protection_domain>
+</system>
