@@ -1,18 +1,27 @@
-# seL4 Microkit Build System - Raspberry Pi 4 Graphics
+# seL4 Microkit Build System - Raspberry Pi 4
 #
-# Builds a bootable SD card image for Raspberry Pi 4 with seL4 Microkit.
+# Builds bootable SD card images for Raspberry Pi 4 with seL4 Microkit.
+# Supports multiple products: graphics demo and TV demo.
 #
 # Usage:
-#   make                  # Build everything
-#   make sdcard           # Create bootable SD card image (direct boot)
-#   make sdcard-uboot     # Build + create SD card with U-Boot & bootelf
-#   make elf              # Build loader.elf for bootelf command
-#   make clean            # Clean build artifacts
+#   make                          # Build graphics demo (default)
+#   make PRODUCT=tvdemo           # Build TV demo
+#   make sdcard                   # Create bootable SD card image
+#   make sdcard PRODUCT=tvdemo    # Create TV demo SD card image
+#   make elf                      # Build loader.elf for bootelf command
+#   make clean                    # Clean build artifacts
+#
+# Products:
+#   graphics  - Simple graphics demo with framebuffer output (default)
+#   tvdemo    - Interactive TV demo with menu system and UART input
 #
 # Prerequisites:
 #   - Microkit SDK with rpi4b support
 #   - Rust nightly with aarch64 target
 #   - aarch64-linux-gnu-gcc (or aarch64-elf-gcc on macOS)
+
+# Product selection (graphics or tvdemo)
+PRODUCT ?= graphics
 
 # Configuration
 MICROKIT_SDK ?= $(PWD)/../microkit-sdk
@@ -48,11 +57,22 @@ SDK_BOARD := $(MICROKIT_SDK)/board/$(MICROKIT_BOARD)/$(MICROKIT_CONFIG)
 UBOOT_DIR := vendor/u-boot
 UBOOT_BIN := $(BUILD_DIR)/u-boot.bin
 
+# Product-specific configuration
+ifeq ($(PRODUCT),tvdemo)
+    PD_NAME := tvdemo_pd
+    SYSTEM_DESC := tvdemo.system
+    PRODUCT_LABEL := tvdemo
+else
+    PD_NAME := graphics_pd
+    SYSTEM_DESC := graphics.system
+    PRODUCT_LABEL := graphics
+endif
+
 # Output files
-PD_ELF := $(BUILD_DIR)/graphics_pd.elf
+PD_ELF := $(BUILD_DIR)/$(PD_NAME).elf
 SYSTEM_IMAGE := $(BUILD_DIR)/loader.img
 REPORT := $(BUILD_DIR)/report.txt
-SDCARD_IMG := $(BUILD_DIR)/rpi4-sel4-graphics.img
+SDCARD_IMG := $(BUILD_DIR)/rpi4-sel4-$(PRODUCT_LABEL).img
 
 # Environment
 export SEL4_INCLUDE_DIRS := $(SDK_BOARD)/include
@@ -65,26 +85,26 @@ all: $(SYSTEM_IMAGE)
 TARGET_JSON := $(PWD)/support/targets/aarch64-sel4-microkit.json
 
 # Build the Rust protection domain
-$(PD_ELF): src/main.rs src/lib.rs Cargo.toml | $(BUILD_DIR)
-	@echo "=== Building Graphics Protection Domain ==="
+$(PD_ELF): src/*.rs Cargo.toml | $(BUILD_DIR)
+	@echo "=== Building $(PD_NAME) Protection Domain ==="
 	$(CARGO) build \
 		--release \
 		--target $(TARGET_JSON) \
+		--bin $(PD_NAME) \
 		-Z build-std=core,alloc,compiler_builtins \
 		-Z build-std-features=compiler-builtins-mem
 	@mkdir -p $(BUILD_DIR)
-	@# sel4-microkit produces .elf files
-	cp target/aarch64-sel4-microkit/release/graphics_pd.elf $@
+	cp target/aarch64-sel4-microkit/release/$(PD_NAME).elf $@
 	@echo "Built: $@"
 
 $(BUILD_DIR):
 	mkdir -p $@
 
 # Build system image with Microkit tool (binary format for go command)
-$(SYSTEM_IMAGE): $(PD_ELF) graphics.system | check
-	@echo "=== Building Microkit System Image ==="
+$(SYSTEM_IMAGE): $(PD_ELF) $(SYSTEM_DESC) | check
+	@echo "=== Building Microkit System Image ($(PRODUCT)) ==="
 	$(MICROKIT_TOOL) \
-		graphics.system \
+		$(SYSTEM_DESC) \
 		--search-path $(BUILD_DIR) \
 		--board $(MICROKIT_BOARD) \
 		--config $(MICROKIT_CONFIG) \
@@ -92,16 +112,17 @@ $(SYSTEM_IMAGE): $(PD_ELF) graphics.system | check
 		-r $(REPORT)
 	@echo ""
 	@echo "Build complete!"
+	@echo "  Product: $(PRODUCT)"
 	@echo "  System image: $@"
 	@echo "  Report: $(REPORT)"
 
 # Also build ELF format for bootelf command
 LOADER_ELF := $(BUILD_DIR)/loader.elf
 
-$(LOADER_ELF): $(PD_ELF) graphics.system | check
-	@echo "=== Building Microkit Loader ELF ==="
+$(LOADER_ELF): $(PD_ELF) $(SYSTEM_DESC) | check
+	@echo "=== Building Microkit Loader ELF ($(PRODUCT)) ==="
 	$(MICROKIT_TOOL) \
-		graphics.system \
+		$(SYSTEM_DESC) \
 		--search-path $(BUILD_DIR) \
 		--board $(MICROKIT_BOARD) \
 		--config $(MICROKIT_CONFIG) \
@@ -251,10 +272,15 @@ clean:
 	cargo clean
 
 help:
-	@echo "seL4 Microkit Graphics - Raspberry Pi 4"
+	@echo "seL4 Microkit - Raspberry Pi 4"
+	@echo ""
+	@echo "Products:"
+	@echo "  graphics            Simple graphics demo with framebuffer output (default)"
+	@echo "  tvdemo              Interactive TV demo with menu system and UART input"
 	@echo ""
 	@echo "Usage:"
-	@echo "  make                Build system image"
+	@echo "  make                Build graphics demo (default)"
+	@echo "  make PRODUCT=tvdemo Build TV demo"
 	@echo "  make sdcard         Create bootable SD card image"
 	@echo "  make bootfiles      Create boot files directory (no root required)"
 	@echo "  make firmware       Download Raspberry Pi firmware"
@@ -264,8 +290,10 @@ help:
 	@echo "  make clean          Clean build artifacts"
 	@echo ""
 	@echo "Configuration:"
+	@echo "  PRODUCT=graphics    Select product to build (graphics/tvdemo)"
 	@echo "  RPI4_MEMORY=4gb     Set Pi 4 memory variant (1gb/2gb/4gb/8gb)"
 	@echo "  MICROKIT_SDK=path   Path to Microkit SDK"
 	@echo ""
-	@echo "Example:"
+	@echo "Examples:"
+	@echo "  make PRODUCT=tvdemo RPI4_MEMORY=8gb sdcard"
 	@echo "  make RPI4_MEMORY=8gb bootfiles"
