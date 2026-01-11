@@ -1,6 +1,8 @@
 //! TV Demo for HDMI on Raspberry Pi 4
 //!
-//! This Protection Domain runs the TV demo application using the HDMI framebuffer.
+//! Displays animated graphics on HDMI using direct framebuffer access.
+//! Uses rpi4-tvdemo for portable animation code with scaling from 320x240
+//! virtual resolution to 1920x1080 physical display.
 
 #![no_std]
 #![no_main]
@@ -8,92 +10,117 @@
 use sel4_microkit::{debug_println, protection_domain, Handler, ChannelSet};
 use core::fmt;
 
-use rpi4_graphics::{Mailbox, Framebuffer, HdmiBackend, MAILBOX_BASE};
-use rpi4_tvdemo::backend::ScaledDisplay;
+use rpi4_graphics::DirectHdmiBackend;
+use rpi4_tvdemo::backend::{DisplayBackend, ScaledDisplay};
 use rpi4_tvdemo::TvDemo;
-use rpi4_input::InputEvent;
 
-/// Screen dimensions (HDMI 720p)
-const SCREEN_WIDTH: u32 = 1280;
-const SCREEN_HEIGHT: u32 = 720;
-
-/// Virtual screen for demo (will be scaled up)
+/// Virtual resolution for the demo (scaled up to 1920x1080)
 const VIRTUAL_WIDTH: u32 = 320;
 const VIRTUAL_HEIGHT: u32 = 240;
 
+/// GPIO virtual address (mapped in tvdemo.system)
+const GPIO_BASE: usize = 0x5_0200_0000;
+
 struct TvDemoHandler {
-    fb: Option<Framebuffer>,
-    demo: Option<TvDemo>,
     frame_count: u32,
 }
 
 impl TvDemoHandler {
     const fn new() -> Self {
         Self {
-            fb: None,
-            demo: None,
             frame_count: 0,
         }
     }
+}
 
-    fn init_framebuffer(&mut self) {
-        debug_println!("Initializing HDMI framebuffer...");
+/// Blink the activity LED to prove seL4 is running
+fn blink_activity_led() {
+    debug_println!("Blinking activity LED...");
 
-        let mailbox = unsafe { Mailbox::new(MAILBOX_BASE) };
+    const GPFSEL4: usize = GPIO_BASE + 0x10;
+    const GPSET1: usize = GPIO_BASE + 0x20;
+    const GPCLR1: usize = GPIO_BASE + 0x2C;
+    const BLINK_DELAY: u32 = 3_000_000;
 
-        match mailbox.get_firmware_revision(&mut [0u32; 36]) {
-            Ok(rev) => debug_println!("Firmware revision: 0x{:08x}", rev),
-            Err(_) => debug_println!("Failed to get firmware revision"),
+    unsafe {
+        core::arch::asm!("dsb sy");
+
+        // Set GPIO 42 as output
+        let gpfsel4 = GPFSEL4 as *mut u32;
+        let mut val = gpfsel4.read_volatile();
+        val &= !(7 << 6);
+        val |= 1 << 6;
+        gpfsel4.write_volatile(val);
+
+        core::arch::asm!("dsb sy");
+
+        // Blink 3 times
+        for _ in 0..3 {
+            (GPSET1 as *mut u32).write_volatile(1 << 10);
+            for _ in 0..BLINK_DELAY { core::hint::spin_loop(); }
+            (GPCLR1 as *mut u32).write_volatile(1 << 10);
+            for _ in 0..BLINK_DELAY { core::hint::spin_loop(); }
         }
 
-        match unsafe { Framebuffer::new(&mailbox, SCREEN_WIDTH, SCREEN_HEIGHT) } {
-            Ok(fb) => {
-                let info = fb.info();
-                debug_println!(
-                    "Framebuffer: {}x{} @ 0x{:08x}",
-                    info.width, info.height, info.base
-                );
-                self.fb = Some(fb);
-            }
-            Err(e) => {
-                debug_println!("Failed to allocate framebuffer: {:?}", e);
-            }
-        }
+        core::arch::asm!("dsb sy");
     }
+    debug_println!("LED done!");
+}
 
-    fn init_demo(&mut self) {
-        debug_println!("Initializing TV demo...");
-        // Use virtual resolution - demo expects 320x240
-        self.demo = Some(TvDemo::new(VIRTUAL_WIDTH, VIRTUAL_HEIGHT));
-        debug_println!("TV demo ready!");
+/// Delay helper for animation timing
+#[inline]
+fn delay(count: u32) {
+    for _ in 0..count {
+        core::hint::spin_loop();
     }
+}
 
-    fn update(&mut self) {
-        let fb = match self.fb.as_mut() {
-            Some(fb) => fb,
-            None => return,
-        };
+/// Run the TV demo with animations
+fn run_demo() {
+    debug_println!("Initializing TV Demo...");
 
-        let demo = match self.demo.as_mut() {
-            Some(demo) => demo,
-            None => return,
-        };
+    // Create the display backend (direct framebuffer access)
+    let hdmi = DirectHdmiBackend::new();
+    debug_println!("DirectHdmiBackend created: {}x{}", hdmi.width(), hdmi.height());
 
-        // Create HDMI backend and wrap with scaling
-        let hdmi = HdmiBackend::new(fb);
-        let mut display = ScaledDisplay::new(hdmi, VIRTUAL_WIDTH, VIRTUAL_HEIGHT);
+    // Wrap with scaled display for virtual 320x240 resolution
+    let mut display = ScaledDisplay::new(hdmi, VIRTUAL_WIDTH, VIRTUAL_HEIGHT);
+    let (scale_x, scale_y) = display.scale();
+    debug_println!("ScaledDisplay created: {}x{} virtual, scale {}x{}",
+        VIRTUAL_WIDTH, VIRTUAL_HEIGHT, scale_x, scale_y);
 
-        // Update and render demo
+    // Create the TV demo application
+    let mut demo = TvDemo::new(VIRTUAL_WIDTH, VIRTUAL_HEIGHT);
+    debug_println!("TvDemo created");
+
+    // Start playing the bouncing ball animation automatically
+    debug_println!("Starting animation...");
+
+    // Simulate selecting "Play Animation" to start with bouncing ball
+    use rpi4_tvdemo::{InputEvent, KeyEvent, KeyCode, KeyState, KeyModifiers};
+
+    // Navigate to "Play Animation" and select it
+    demo.handle_input(InputEvent::Key(KeyEvent {
+        key: KeyCode::Enter,
+        state: KeyState::Pressed,
+        modifiers: KeyModifiers::default(),
+    }));
+
+    debug_println!("Animation loop starting...");
+
+    // Animation frame timing
+    const FRAME_DELAY: u32 = 500_000; // ~60fps at 1.5GHz
+
+    // Run animation loop (infinite)
+    loop {
+        // Update animation state
         demo.update();
+
+        // Render current frame
         demo.render(&mut display);
 
-        self.frame_count += 1;
-    }
-
-    fn handle_input(&mut self, event: InputEvent) {
-        if let Some(demo) = self.demo.as_mut() {
-            demo.handle_input(event);
-        }
+        // Frame delay
+        delay(FRAME_DELAY);
     }
 }
 
@@ -101,23 +128,18 @@ impl TvDemoHandler {
 fn init() -> TvDemoHandler {
     debug_println!("");
     debug_println!("========================================");
-    debug_println!("  TV Demo - HDMI Output                ");
+    debug_println!("  TV Demo - HDMI Animation             ");
     debug_println!("========================================");
     debug_println!("");
 
-    let mut handler = TvDemoHandler::new();
-    handler.init_framebuffer();
-    handler.init_demo();
+    // Blink LED to show we're running
+    blink_activity_led();
 
-    // Initial render
-    handler.update();
+    // Run the demo (this blocks with animation loop)
+    run_demo();
 
-    debug_println!("");
-    debug_println!("TV Demo running!");
-    debug_println!("Use keyboard/IR remote to navigate");
-    debug_println!("");
-
-    handler
+    // This is never reached due to infinite loop above
+    TvDemoHandler::new()
 }
 
 /// Handler error type
@@ -134,8 +156,7 @@ impl Handler for TvDemoHandler {
     type Error = HandlerError;
 
     fn notified(&mut self, _channels: ChannelSet) -> Result<(), Self::Error> {
-        // Handle timer tick for animation updates
-        self.update();
+        self.frame_count += 1;
         Ok(())
     }
 }

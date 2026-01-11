@@ -39,7 +39,7 @@ pub use tv_app::{TvDemo, DemoState, Screen};
 // Re-export input types for convenience
 pub use rpi4_input::{
     InputEvent, InputManager, InputSource, RemoteOptions,
-    KeyCode, KeyEvent, KeyState, Keyboard,
+    KeyCode, KeyEvent, KeyState, KeyModifiers, Keyboard,
     IrButton, IrEvent, IrProtocol, IrRemote,
     TouchEvent, TouchPoint,
 };

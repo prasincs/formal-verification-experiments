@@ -23,8 +23,17 @@ else
 endif
 
 # Cargo settings
-# Use rustup run for better compatibility across different cargo installations
-CARGO := rustup run nightly cargo
+# Detect cargo bin directory (handles PATH not including ~/.cargo/bin)
+CARGO_HOME ?= $(HOME)/.cargo
+CARGO_BIN := $(CARGO_HOME)/bin
+ifneq ($(wildcard $(CARGO_BIN)/rustup),)
+    RUSTUP := $(CARGO_BIN)/rustup
+    CARGO := $(RUSTUP) run nightly cargo
+else
+    # Fall back to PATH-based lookup
+    RUSTUP := rustup
+    CARGO := rustup run nightly cargo
+endif
 CARGO_BUILD_STD := -Z build-std=core,alloc,compiler_builtins -Z build-std-features=compiler-builtins-mem
 
 # Default Microkit configuration

@@ -55,6 +55,17 @@ $(SDCARD_IMG): $(SYSTEM_IMAGE) $(FIRMWARE_DIR) $(BUILD_DIR)/config.txt
 	@echo "  sudo dd if=$@ of=/dev/sdX bs=4M status=progress conv=fsync"
 
 sdcard: $(SDCARD_IMG)
+	@echo ""
+	@echo "=== SD Card Image Ready ==="
+	@echo "Product:  $(PRODUCT_NAME)"
+	@echo "Platform: $(PLATFORM)"
+	@echo "Image:    $(SDCARD_IMG)"
+	@echo "Size:     $$(du -h $(SDCARD_IMG) | cut -f1)"
+	@echo ""
+	@echo "Flash with:"
+	@echo "  sudo dd if=$(SDCARD_IMG) of=/dev/sdX bs=4M status=progress conv=fsync"
+	@echo ""
+	@echo "Or use: make PRODUCT=$(PRODUCT) PLATFORM=$(PLATFORM) write-sdcard DEVICE=/dev/sdX"
 
 # Build U-Boot
 $(UBOOT_BIN): | $(BUILD_DIR)
