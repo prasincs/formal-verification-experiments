@@ -1,7 +1,7 @@
 //! TV Demo for HDMI on Raspberry Pi 4
 //!
 //! Displays a simple snake animation on HDMI using direct framebuffer access.
-//! No menu system - just pure animation to verify display works.
+//! Uses the same drawing approach as the working graphics demo.
 
 #![no_std]
 #![no_main]
@@ -12,9 +12,9 @@ use core::fmt;
 /// Framebuffer virtual address (mapped in tvdemo.system)
 const FB_VADDR: usize = 0x5_0001_0000;
 
-/// Screen dimensions from config.txt (hdmi_mode=82 = 1920x1080)
-const SCREEN_WIDTH: u32 = 1920;
-const SCREEN_HEIGHT: u32 = 1080;
+/// Screen dimensions - use same as working graphics demo
+const WIDTH: usize = 1280;
+const HEIGHT: usize = 720;
 
 /// GPIO virtual address (mapped in tvdemo.system)
 const GPIO_BASE: usize = 0x5_0200_0000;
@@ -28,7 +28,7 @@ struct Segment {
 
 /// Snake state
 struct Snake {
-    segments: [Segment; 50],
+    segments: [Segment; 30],
     length: usize,
     direction: u8, // 0=right, 1=down, 2=left, 3=up
     frame: u32,
@@ -36,20 +36,20 @@ struct Snake {
 
 impl Snake {
     fn new() -> Self {
-        let mut segments = [Segment { x: 0, y: 0 }; 50];
+        let mut segments = [Segment { x: 0, y: 0 }; 30];
         // Start in center, horizontal line
-        let start_x = (SCREEN_WIDTH / 2) as i32;
-        let start_y = (SCREEN_HEIGHT / 2) as i32;
+        let start_x = (WIDTH / 2) as i32;
+        let start_y = (HEIGHT / 2) as i32;
         for i in 0..20 {
             segments[i] = Segment {
-                x: start_x - (i as i32 * 20),
+                x: start_x - (i as i32 * 25),
                 y: start_y,
             };
         }
         Self {
             segments,
             length: 20,
-            direction: 0, // Start moving right
+            direction: 0,
             frame: 0,
         }
     }
@@ -57,69 +57,64 @@ impl Snake {
     fn update(&mut self) {
         self.frame = self.frame.wrapping_add(1);
 
-        // Change direction periodically to create interesting patterns
-        if self.frame % 60 == 0 {
-            // Turn right
+        // Change direction periodically
+        if self.frame % 45 == 0 {
             self.direction = (self.direction + 1) % 4;
         }
-        if self.frame % 150 == 0 {
-            // Sometimes turn left instead
+        if self.frame % 120 == 0 {
             self.direction = (self.direction + 3) % 4;
         }
 
         // Calculate new head position
         let head = self.segments[0];
-        let speed = 15i32;
-        let new_head = match self.direction {
-            0 => Segment { x: head.x + speed, y: head.y }, // right
-            1 => Segment { x: head.x, y: head.y + speed }, // down
-            2 => Segment { x: head.x - speed, y: head.y }, // left
-            _ => Segment { x: head.x, y: head.y - speed }, // up
-        };
+        let speed = 12i32;
+        let mut new_x = head.x;
+        let mut new_y = head.y;
 
-        // Wrap around screen edges
-        let new_head = Segment {
-            x: if new_head.x < 0 {
-                SCREEN_WIDTH as i32 - 1
-            } else if new_head.x >= SCREEN_WIDTH as i32 {
-                0
-            } else {
-                new_head.x
-            },
-            y: if new_head.y < 0 {
-                SCREEN_HEIGHT as i32 - 1
-            } else if new_head.y >= SCREEN_HEIGHT as i32 {
-                0
-            } else {
-                new_head.y
-            },
-        };
+        match self.direction {
+            0 => new_x += speed,
+            1 => new_y += speed,
+            2 => new_x -= speed,
+            _ => new_y -= speed,
+        }
 
-        // Move all segments (tail follows head)
+        // Wrap around screen
+        if new_x < 0 { new_x = WIDTH as i32 - 1; }
+        if new_x >= WIDTH as i32 { new_x = 0; }
+        if new_y < 0 { new_y = HEIGHT as i32 - 1; }
+        if new_y >= HEIGHT as i32 { new_y = 0; }
+
+        // Move segments
         for i in (1..self.length).rev() {
             self.segments[i] = self.segments[i - 1];
         }
-        self.segments[0] = new_head;
+        self.segments[0] = Segment { x: new_x, y: new_y };
     }
 }
 
-struct TvDemoHandler {
-    frame_count: u32,
-}
+struct TvDemoHandler;
 
 impl TvDemoHandler {
     const fn new() -> Self {
-        Self { frame_count: 0 }
+        Self
     }
 }
 
-/// Convert RGB to ARGB u32
+/// Draw a filled block (same pattern as working graphics demo)
 #[inline]
-fn rgb(r: u8, g: u8, b: u8) -> u32 {
-    0xFF000000 | ((r as u32) << 16) | ((g as u32) << 8) | (b as u32)
+unsafe fn draw_block(fb: *mut u32, x: usize, y: usize, w: usize, h: usize, color: u32) {
+    for dy in 0..h {
+        for dx in 0..w {
+            let px = x + dx;
+            let py = y + dy;
+            if px < WIDTH && py < HEIGHT {
+                fb.add(py * WIDTH + px).write_volatile(color);
+            }
+        }
+    }
 }
 
-/// HSV to RGB conversion for rainbow colors
+/// HSV to RGB - returns ARGB u32
 fn hsv_to_rgb(h: u16, s: u8, v: u8) -> u32 {
     let h = h % 360;
     let s = s as u32;
@@ -138,119 +133,148 @@ fn hsv_to_rgb(h: u16, s: u8, v: u8) -> u32 {
         _ => (c, 0, x),
     };
 
-    rgb((r + m) as u8, (g + m) as u8, (b + m) as u8)
+    0xFF000000 | (((r + m) as u32) << 16) | (((g + m) as u32) << 8) | ((b + m) as u32)
 }
 
-/// Fill a rectangle
-#[inline]
-unsafe fn fill_rect(x: i32, y: i32, w: u32, h: u32, color: u32) {
-    if x < 0 || y < 0 || x >= SCREEN_WIDTH as i32 || y >= SCREEN_HEIGHT as i32 {
-        return;
-    }
-    let fb = FB_VADDR as *mut u32;
-    let x = x as u32;
-    let y = y as u32;
-    let x_end = (x + w).min(SCREEN_WIDTH);
-    let y_end = (y + h).min(SCREEN_HEIGHT);
-
-    for py in y..y_end {
-        for px in x..x_end {
-            fb.add((py * SCREEN_WIDTH + px) as usize).write_volatile(color);
-        }
-    }
-}
-
-/// Clear screen
-#[inline]
-unsafe fn clear_screen(color: u32) {
-    let fb = FB_VADDR as *mut u32;
-    for i in 0..(SCREEN_WIDTH * SCREEN_HEIGHT) as usize {
+/// Clear screen to a color
+unsafe fn clear_screen(fb: *mut u32, color: u32) {
+    for i in 0..(WIDTH * HEIGHT) {
         fb.add(i).write_volatile(color);
     }
 }
 
 /// Draw the snake
-unsafe fn draw_snake(snake: &Snake, frame: u32) {
-    // Draw each segment with rainbow gradient
-    let segment_size = 18u32;
+unsafe fn draw_snake(fb: *mut u32, snake: &Snake, frame: u32) {
+    let segment_size = 20usize;
 
     for i in 0..snake.length {
         let seg = snake.segments[i];
-        // Rainbow color based on segment position and frame for animation
-        let hue = ((i as u32 * 15 + frame * 3) % 360) as u16;
-        let color = hsv_to_rgb(hue, 255, 255);
+        if seg.x >= 0 && seg.y >= 0 {
+            let x = seg.x as usize;
+            let y = seg.y as usize;
 
-        fill_rect(
-            seg.x - (segment_size as i32 / 2),
-            seg.y - (segment_size as i32 / 2),
-            segment_size,
-            segment_size,
-            color,
-        );
+            // Rainbow color
+            let hue = ((i as u32 * 18 + frame * 4) % 360) as u16;
+            let color = hsv_to_rgb(hue, 255, 255);
+
+            // Draw segment centered on position
+            let sx = x.saturating_sub(segment_size / 2);
+            let sy = y.saturating_sub(segment_size / 2);
+            draw_block(fb, sx, sy, segment_size, segment_size, color);
+        }
     }
 
-    // Draw eyes on the head
+    // Draw eyes on head
     let head = snake.segments[0];
-    let eye_color = rgb(255, 255, 255);
-    let pupil_color = rgb(0, 0, 0);
+    if head.x >= 0 && head.y >= 0 {
+        let hx = head.x as usize;
+        let hy = head.y as usize;
 
-    // Position eyes based on direction
-    let (eye1_x, eye1_y, eye2_x, eye2_y) = match snake.direction {
-        0 => (head.x + 4, head.y - 4, head.x + 4, head.y + 4),  // right
-        1 => (head.x - 4, head.y + 4, head.x + 4, head.y + 4),  // down
-        2 => (head.x - 4, head.y - 4, head.x - 4, head.y + 4),  // left
-        _ => (head.x - 4, head.y - 4, head.x + 4, head.y - 4),  // up
-    };
+        let white = 0xFFFFFFFF;
+        let black = 0xFF000000;
 
-    fill_rect(eye1_x - 3, eye1_y - 3, 6, 6, eye_color);
-    fill_rect(eye2_x - 3, eye2_y - 3, 6, 6, eye_color);
-    fill_rect(eye1_x - 1, eye1_y - 1, 3, 3, pupil_color);
-    fill_rect(eye2_x - 1, eye2_y - 1, 3, 3, pupil_color);
+        // Eye positions based on direction
+        let (e1x, e1y, e2x, e2y) = match snake.direction {
+            0 => (hx + 5, hy.saturating_sub(5), hx + 5, hy + 5),
+            1 => (hx.saturating_sub(5), hy + 5, hx + 5, hy + 5),
+            2 => (hx.saturating_sub(5), hy.saturating_sub(5), hx.saturating_sub(5), hy + 5),
+            _ => (hx.saturating_sub(5), hy.saturating_sub(5), hx + 5, hy.saturating_sub(5)),
+        };
+
+        draw_block(fb, e1x, e1y, 6, 6, white);
+        draw_block(fb, e2x, e2y, 6, 6, white);
+        draw_block(fb, e1x + 2, e1y + 2, 3, 3, black);
+        draw_block(fb, e2x + 2, e2y + 2, 3, 3, black);
+    }
 }
 
-/// Draw frame counter in corner
-unsafe fn draw_frame_counter(frame: u32) {
-    // Simple digit display using rectangles
-    let x_base = 50;
-    let y_base = 50;
-    let digit_w = 20;
-    let digit_h = 30;
-    let spacing = 25;
+/// Draw "SNAKE" text using block letters (same style as graphics demo "SEL4")
+unsafe fn draw_title(fb: *mut u32) {
+    let white = 0xFFFFFFFF;
+    let block = 15usize;
+    let start_x = 400usize;
+    let start_y = 50usize;
 
-    // Show last 4 digits of frame count
+    // S
+    draw_block(fb, start_x, start_y, block * 3, block, white);
+    draw_block(fb, start_x, start_y + block, block, block, white);
+    draw_block(fb, start_x, start_y + block * 2, block * 3, block, white);
+    draw_block(fb, start_x + block * 2, start_y + block * 3, block, block, white);
+    draw_block(fb, start_x, start_y + block * 4, block * 3, block, white);
+
+    // N
+    let n_x = start_x + block * 5;
+    draw_block(fb, n_x, start_y, block, block * 5, white);
+    draw_block(fb, n_x + block, start_y + block, block, block, white);
+    draw_block(fb, n_x + block * 2, start_y, block, block * 5, white);
+
+    // A
+    let a_x = start_x + block * 9;
+    draw_block(fb, a_x, start_y, block * 3, block, white);
+    draw_block(fb, a_x, start_y + block, block, block * 4, white);
+    draw_block(fb, a_x + block * 2, start_y + block, block, block * 4, white);
+    draw_block(fb, a_x, start_y + block * 2, block * 3, block, white);
+
+    // K
+    let k_x = start_x + block * 14;
+    draw_block(fb, k_x, start_y, block, block * 5, white);
+    draw_block(fb, k_x + block, start_y + block * 2, block, block, white);
+    draw_block(fb, k_x + block * 2, start_y, block, block * 2, white);
+    draw_block(fb, k_x + block * 2, start_y + block * 3, block, block * 2, white);
+
+    // E
+    let e_x = start_x + block * 18;
+    draw_block(fb, e_x, start_y, block * 3, block, white);
+    draw_block(fb, e_x, start_y + block, block, block, white);
+    draw_block(fb, e_x, start_y + block * 2, block * 2, block, white);
+    draw_block(fb, e_x, start_y + block * 3, block, block, white);
+    draw_block(fb, e_x, start_y + block * 4, block * 3, block, white);
+}
+
+/// Draw frame counter
+unsafe fn draw_frame_counter(fb: *mut u32, frame: u32) {
+    let green = 0xFF00FF00;
+    let x_base = 50usize;
+    let y_base = 650usize;
+
+    // Simple bar that grows with frame count (visual proof of animation)
+    let bar_width = ((frame % 200) as usize) + 10;
+    draw_block(fb, x_base, y_base, bar_width, 20, green);
+
+    // Draw frame number as simple blocks
+    let digit_w = 12usize;
+    let digit_h = 20usize;
     let mut n = frame % 10000;
+
     for i in 0..4 {
         let digit = (n % 10) as usize;
         n /= 10;
-        let x = x_base + (3 - i as i32) * spacing;
+        let dx = x_base + 300 - (i * 18);
 
-        // Simple 7-segment style digit
-        let color = rgb(100, 255, 100);
-        let seg_w = digit_w;
-        let seg_h = 4;
-
-        // Segments: top, middle, bottom (horizontal)
-        let top = digit == 0 || digit == 2 || digit == 3 || digit == 5 || digit == 6 || digit == 7 || digit == 8 || digit == 9;
-        let mid = digit == 2 || digit == 3 || digit == 4 || digit == 5 || digit == 6 || digit == 8 || digit == 9;
-        let bot = digit == 0 || digit == 2 || digit == 3 || digit == 5 || digit == 6 || digit == 8 || digit == 9;
-
-        // Segments: top-left, top-right, bot-left, bot-right (vertical)
-        let tl = digit == 0 || digit == 4 || digit == 5 || digit == 6 || digit == 8 || digit == 9;
-        let tr = digit == 0 || digit == 1 || digit == 2 || digit == 3 || digit == 4 || digit == 7 || digit == 8 || digit == 9;
-        let bl = digit == 0 || digit == 2 || digit == 6 || digit == 8;
-        let br = digit == 0 || digit == 1 || digit == 3 || digit == 4 || digit == 5 || digit == 6 || digit == 7 || digit == 8 || digit == 9;
-
-        if top { fill_rect(x, y_base, seg_w as u32, seg_h as u32, color); }
-        if mid { fill_rect(x, y_base + digit_h / 2, seg_w as u32, seg_h as u32, color); }
-        if bot { fill_rect(x, y_base + digit_h, seg_w as u32, seg_h as u32, color); }
-        if tl { fill_rect(x, y_base, seg_h as u32, (digit_h / 2) as u32, color); }
-        if tr { fill_rect(x + digit_w - seg_h, y_base, seg_h as u32, (digit_h / 2) as u32, color); }
-        if bl { fill_rect(x, y_base + digit_h / 2, seg_h as u32, (digit_h / 2 + seg_h) as u32, color); }
-        if br { fill_rect(x + digit_w - seg_h, y_base + digit_h / 2, seg_h as u32, (digit_h / 2 + seg_h) as u32, color); }
+        // Draw digit as filled block with number indicator
+        let brightness = 100 + (digit * 15) as u8;
+        let color = 0xFF000000 | ((brightness as u32) << 16) | ((brightness as u32) << 8) | (brightness as u32);
+        draw_block(fb, dx, y_base, digit_w, digit_h, color);
     }
 }
 
-/// Blink the activity LED to prove seL4 is running
+/// Draw border
+unsafe fn draw_border(fb: *mut u32) {
+    let gray = 0xFF808080;
+
+    // Top and bottom
+    for x in 0..WIDTH {
+        fb.add(x).write_volatile(gray);
+        fb.add((HEIGHT - 1) * WIDTH + x).write_volatile(gray);
+    }
+    // Left and right
+    for y in 0..HEIGHT {
+        fb.add(y * WIDTH).write_volatile(gray);
+        fb.add(y * WIDTH + WIDTH - 1).write_volatile(gray);
+    }
+}
+
+/// Blink the activity LED
 fn blink_activity_led() {
     debug_println!("Blinking activity LED...");
 
@@ -293,40 +317,34 @@ fn delay(count: u32) {
 /// Run the snake animation
 fn run_animation() {
     debug_println!("Starting snake animation...");
-    debug_println!("Screen: {}x{}", SCREEN_WIDTH, SCREEN_HEIGHT);
+    debug_println!("Screen: {}x{}", WIDTH, HEIGHT);
 
+    let fb = FB_VADDR as *mut u32;
     let mut snake = Snake::new();
     let mut frame: u32 = 0;
 
-    // Animation timing (~30fps)
-    const FRAME_DELAY: u32 = 800_000;
+    // Frame timing (~30fps)
+    const FRAME_DELAY: u32 = 600_000;
 
     loop {
         unsafe {
             core::arch::asm!("dsb sy");
 
-            // Clear to dark blue
-            clear_screen(rgb(10, 10, 40));
+            // Dark blue background
+            clear_screen(fb, 0xFF101030);
+
+            // Draw title
+            draw_title(fb);
 
             // Update and draw snake
             snake.update();
-            draw_snake(&snake, frame);
+            draw_snake(fb, &snake, frame);
 
-            // Draw frame counter
-            draw_frame_counter(frame);
+            // Draw frame counter (proof of animation)
+            draw_frame_counter(fb, frame);
 
             // Draw border
-            let border_color = rgb(100, 100, 100);
-            for x in 0..SCREEN_WIDTH {
-                let fb = FB_VADDR as *mut u32;
-                fb.add(x as usize).write_volatile(border_color);
-                fb.add(((SCREEN_HEIGHT - 1) * SCREEN_WIDTH + x) as usize).write_volatile(border_color);
-            }
-            for y in 0..SCREEN_HEIGHT {
-                let fb = FB_VADDR as *mut u32;
-                fb.add((y * SCREEN_WIDTH) as usize).write_volatile(border_color);
-                fb.add((y * SCREEN_WIDTH + SCREEN_WIDTH - 1) as usize).write_volatile(border_color);
-            }
+            draw_border(fb);
 
             core::arch::asm!("dsb sy");
             core::arch::asm!("isb");
@@ -334,8 +352,7 @@ fn run_animation() {
 
         frame = frame.wrapping_add(1);
 
-        // Print progress every 100 frames
-        if frame % 100 == 0 {
+        if frame % 60 == 0 {
             debug_println!("Frame {}", frame);
         }
 
@@ -348,6 +365,7 @@ fn init() -> TvDemoHandler {
     debug_println!("");
     debug_println!("========================================");
     debug_println!("  Snake Animation Demo                 ");
+    debug_println!("  Screen: {}x{}                        ", WIDTH, HEIGHT);
     debug_println!("========================================");
     debug_println!("");
 
@@ -370,7 +388,6 @@ impl Handler for TvDemoHandler {
     type Error = HandlerError;
 
     fn notified(&mut self, _channels: ChannelSet) -> Result<(), Self::Error> {
-        self.frame_count += 1;
         Ok(())
     }
 }
