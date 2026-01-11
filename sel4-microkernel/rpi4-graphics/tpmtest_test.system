@@ -46,12 +46,6 @@
             4KB is plenty for mailbox messages (typical message is ~144 bytes).
         -->
         <map mr="dma_buffer" vaddr="0x5_0300_0000" perms="rw" cached="false" />
-
-        <!-- SPI0 for TPM -->
-        <map mr="spi0_regs" vaddr="0x5_0400_0000" perms="rw" cached="false" />
-
-        <!-- UART for serial debug -->
-        <map mr="uart_regs" vaddr="0x5_0500_0000" perms="rw" cached="false" />
     </protection_domain>
 
     <!--
@@ -73,11 +67,5 @@
 
     <!-- DMA buffer for mailbox communication (4KB, just before framebuffer) -->
     <memory_region name="dma_buffer" size="0x1000" phys_addr="0x3e875000" />
-
-    <!-- SPI0 controller for TPM (BCM2711) -->
-    <memory_region name="spi0_regs" size="0x1000" phys_addr="0xFE204000" />
-
-    <!-- UART block (PL011 UARTs, UART5 at offset 0xA00) -->
-    <memory_region name="uart_regs" size="0x1000" phys_addr="0xFE201000" />
 
 </system>

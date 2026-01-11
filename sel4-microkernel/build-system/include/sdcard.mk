@@ -36,9 +36,6 @@ $(BUILD_DIR)/config.txt: | $(BUILD_DIR)
 	@echo "# Enable UART for debug output" >> $@
 	@echo "enable_uart=1" >> $@
 	@echo "uart_2ndstage=1" >> $@
-	@echo "" >> $@
-	@echo "# Enable UART5 on GPIO 12/13 (pins 32/33) for debug when HAT covers main pins" >> $@
-	@echo "dtoverlay=uart5" >> $@
 	@echo "Created: $@"
 
 # Create SD card image using mtools (no root required)
