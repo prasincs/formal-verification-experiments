@@ -23,11 +23,18 @@ THIS_MAKEFILE := $(lastword $(MAKEFILE_LIST))
 #   clean        - Remove build artifacts
 #   help         - Show this message
 #
+# Optional:
+#   NET_DRIVER     - ethernet, wifi, both, none (default: none)
+#   NET_STACK      - lwip, picotcp (default: lwip)
+#   RPI4_MEMORY    - 1gb, 2gb, 4gb, 8gb (default: 4gb)
+#   ISOLATED       - Enable two-PD architecture (tvdemo only)
+#
 # Examples:
 #   make PRODUCT=hello PLATFORM=qemu-aarch64 run
 #   make PRODUCT=graphics PLATFORM=rpi4 sdcard
 #   make PRODUCT=graphics PLATFORM=rpi4 RPI4_MEMORY=8gb sdcard
 #   make PRODUCT=graphics PLATFORM=rpi4 write-sdcard DEVICE=/dev/sdb
+#   make PRODUCT=tvdemo PLATFORM=rpi4 NET_DRIVER=ethernet sdcard
 
 # Validate required parameters
 ifndef PRODUCT
@@ -62,6 +69,9 @@ include include/microkit.mk
 include include/qemu.mk
 include include/sdcard.mk
 
+# Load optional features (networking, etc.)
+-include config/features/networking.mk
+
 # Default target
 .PHONY: all
 all: $(SYSTEM_IMAGE)
@@ -83,6 +93,13 @@ info:
 	@echo "Microkit SDK:  $(MICROKIT_SDK)"
 	@echo "Build dir:     $(BUILD_DIR)"
 	@echo "Target spec:   $(TARGET_SPEC)"
+ifdef NETWORKING_ENABLED
+	@echo ""
+	@echo "=== Networking ==="
+	@echo "Driver:        $(NET_DRIVER)"
+	@echo "Stack:         $(NET_STACK)"
+	@echo "Features:      $(NETWORK_FEATURES)"
+endif
 	@echo ""
 	@echo "Source: $(PRODUCT_SRC_DIR)"
 	@echo "System: $(SYSTEM_DESC)"
