@@ -38,7 +38,7 @@ const HEIGHT: u32 = 720;
 
 /// Peripheral virtual addresses (mapped by Microkit)
 const GPIO_BASE: usize = 0x5_0200_0000;
-const SPI_BASE: usize = 0x5_0300_0000;
+const SPI_BASE: usize = 0x5_0400_0000;  // SPI0 for TPM
 
 /// UART5 (PL011) for debug output - page base + 0xa00 offset
 const UART5_BASE: usize = 0x5_0500_0000 + 0xa00;
@@ -402,71 +402,147 @@ impl TpmTest {
     }
 
     fn test_tpm_device_id(&mut self) -> TestResult {
-        // Read TPM DID_VID register via SPI TIS protocol
-        // Address 0xD40F00 = TIS_DID_VID for locality 0
-
         unsafe {
-            // Configure SPI for TPM (Mode 0, 10 MHz)
+            // Configure GPIO 7-11 for SPI0 (ALT0)
+            let gpfsel0 = GPIO_BASE as *mut u32;
+            let gpfsel1 = (GPIO_BASE + 0x04) as *mut u32;
+
+            uart5_puts("  Configuring GPIO for SPI0...\n");
+
+            // GPIO 7-9 are in GPFSEL0 (bits 21-29)
+            let mut fsel0 = gpfsel0.read_volatile();
+            fsel0 &= !(0b111 << 21);  // GPIO 7
+            fsel0 &= !(0b111 << 24);  // GPIO 8
+            fsel0 &= !(0b111 << 27);  // GPIO 9
+            fsel0 |= 0b100 << 21;     // GPIO 7 = ALT0 (CE1)
+            fsel0 |= 0b100 << 24;     // GPIO 8 = ALT0 (CE0)
+            fsel0 |= 0b100 << 27;     // GPIO 9 = ALT0 (MISO)
+            gpfsel0.write_volatile(fsel0);
+
+            // GPIO 10-11 are in GPFSEL1 (bits 0-5)
+            let mut fsel1 = gpfsel1.read_volatile();
+            fsel1 &= !(0b111 << 0);   // GPIO 10
+            fsel1 &= !(0b111 << 3);   // GPIO 11
+            fsel1 |= 0b100 << 0;      // GPIO 10 = ALT0 (MOSI)
+            fsel1 |= 0b100 << 3;      // GPIO 11 = ALT0 (SCLK)
+            gpfsel1.write_volatile(fsel1);
+
+            core::arch::asm!("dsb sy");
+            for _ in 0..100000 { core::hint::spin_loop(); }
+
             let spi_cs = SPI_BASE as *mut u32;
             let spi_clk = (SPI_BASE + 0x08) as *mut u32;
             let spi_fifo = (SPI_BASE + 0x04) as *mut u32;
+            let spi_dlen = (SPI_BASE + 0x0C) as *mut u32;
 
-            core::arch::asm!("dsb sy");
+            uart5_puts("  Configuring SPI (very slow)...\n");
 
-            // Set clock divider (500MHz / 50 = 10MHz)
-            spi_clk.write_volatile(50);
+            // Very slow clock: 250MHz / 2500 = 100kHz
+            spi_clk.write_volatile(2500);
+
+            // Read current CS register
+            let cs_val = spi_cs.read_volatile();
+            uart5_puts("  SPI CS reg: 0x");
+            uart5_hex16((cs_val >> 16) as u16);
+            uart5_hex16(cs_val as u16);
+            uart5_puts("\n");
 
             // Clear FIFOs
-            spi_cs.write_volatile(0x30); // CLEAR_TX | CLEAR_RX
+            spi_cs.write_volatile(0x30);
+            for _ in 0..10000 { core::hint::spin_loop(); }
 
-            // Small delay
-            for _ in 0..1000 { core::hint::spin_loop(); }
+            // TPM SPI protocol (TCG PC Client Platform TPM Profile)
+            // Read TPM_DID_VID at locality 0: address 0xD40F00
+            // All TPM registers are in the 0xD4xxxx address space
+            // SPI frame: [0x80 | (n-1)] [addr23:16] [addr15:8] [addr7:0] [wait?] [data...]
 
-            // Start transfer
-            spi_cs.write_volatile(0x80); // TA = 1
+            uart5_puts("  Using CE1 (GPIO 7) for TPM...\n");
+            uart5_puts("  Sending TPM read (addr 0xD40F00)...\n");
 
-            // Send TIS read header for DID_VID (address 0xD40F00)
-            // Header: 0x80 | (size-1) = 0x83 for 4-byte read
-            // Address: D4 0F 00
-            let header = [0x83u8, 0xD4, 0x0F, 0x00];
+            // Start transfer - use CE1 (CS=1), mode 0
+            // CS register: bit 7 = TA (transfer active), bits 1:0 = CS select
+            // 0x81 = TA=1, CS=1 (CE1)
+            spi_cs.write_volatile(0x81);  // TA=1, CS=1 for CE1
 
-            for &byte in &header {
-                // Wait for TX ready
-                while (spi_cs.read_volatile() & 0x40000) == 0 {}
-                spi_fifo.write_volatile(byte as u32);
+            // Send header: read 4 bytes from 0xD40F00 (TPM_DID_VID)
+            // Byte 0: 0x80 (read) | 0x03 (4-1 bytes) = 0x83
+            // Bytes 1-3: 24-bit address 0xD4_0F_00
+            let cmd_bytes: [u8; 4] = [0x83, 0xD4, 0x0F, 0x00];
+
+            for &b in &cmd_bytes {
+                while (spi_cs.read_volatile() & (1 << 18)) == 0 {}
+                spi_fifo.write_volatile(b as u32);
             }
 
-            // Wait for header to complete
-            while (spi_cs.read_volatile() & 0x10000) == 0 {}
+            // Wait for TX to complete
+            while (spi_cs.read_volatile() & (1 << 16)) == 0 {}
 
-            // Drain RX FIFO from header
-            while (spi_cs.read_volatile() & 0x20000) != 0 {
-                let _ = spi_fifo.read_volatile();
+            // Read the 4 response bytes from command phase
+            // Last byte bit 0 = 1 means TPM is ready (no wait states needed)
+            uart5_puts("  Cmd response: ");
+            let mut last_response = 0u8;
+            for _ in 0..4 {
+                while (spi_cs.read_volatile() & (1 << 17)) == 0 {}
+                last_response = spi_fifo.read_volatile() as u8;
+                uart5_hex8(last_response);
+                uart5_puts(" ");
+            }
+            uart5_puts("\n");
+
+            // TCG TPM TIS SPI: Wait for TPM ready (poll until bit 0 = 1)
+            // Only if last command response byte doesn't have bit 0 set
+            if (last_response & 0x01) == 0 {
+                uart5_puts("  Waiting for TPM ready...\n");
+                let mut wait_count = 0u32;
+                loop {
+                    while (spi_cs.read_volatile() & (1 << 18)) == 0 {}  // Wait for TXD
+                    spi_fifo.write_volatile(0x00);  // Send dummy byte
+                    while (spi_cs.read_volatile() & (1 << 17)) == 0 {}  // Wait for RXD
+                    let status = spi_fifo.read_volatile() as u8;
+                    uart5_puts("  Wait status: 0x");
+                    uart5_hex8(status);
+                    uart5_puts("\n");
+                    if (status & 0x01) != 0 {
+                        uart5_puts("  TPM ready!\n");
+                        break;  // TPM is ready
+                    }
+                    wait_count += 1;
+                    if wait_count > 100 {
+                        uart5_puts("  TPM wait timeout!\n");
+                        break;
+                    }
+                    for _ in 0..1000 { core::hint::spin_loop(); }
+                }
+            } else {
+                uart5_puts("  TPM ready (no wait needed)\n");
             }
 
-            // Read 4 bytes (DID_VID register is 32-bit)
+            // Now clock in the actual data (send dummy 0x00 bytes)
+            uart5_puts("  Reading data: ");
             let mut did_vid = [0u8; 4];
             for byte in &mut did_vid {
-                // Send dummy byte
-                while (spi_cs.read_volatile() & 0x40000) == 0 {}
+                while (spi_cs.read_volatile() & (1 << 18)) == 0 {}
                 spi_fifo.write_volatile(0x00);
-
-                // Wait for RX
-                while (spi_cs.read_volatile() & 0x20000) == 0 {}
+                while (spi_cs.read_volatile() & (1 << 17)) == 0 {}
                 *byte = spi_fifo.read_volatile() as u8;
+                uart5_hex8(*byte);
+                uart5_puts(" ");
             }
+            uart5_puts("\n");
 
             // End transfer
             spi_cs.write_volatile(0x00);
-
             core::arch::asm!("dsb sy");
 
-            // Parse DID_VID (little-endian: VID low, VID high, DID low, DID high)
             self.tpm_vendor_id = u16::from_le_bytes([did_vid[0], did_vid[1]]);
             self.tpm_device_id = u16::from_le_bytes([did_vid[2], did_vid[3]]);
 
-            // Check for known TPM vendors
-            // Infineon: 0x15D1, STMicro: 0x104A, Nuvoton: 0x1050
+            uart5_puts("  Vendor: 0x");
+            uart5_hex16(self.tpm_vendor_id);
+            uart5_puts(" Device: 0x");
+            uart5_hex16(self.tpm_device_id);
+            uart5_puts("\n");
+
             if self.tpm_vendor_id == 0x15D1 ||
                self.tpm_vendor_id == 0x104A ||
                self.tpm_vendor_id == 0x1050 ||
@@ -613,11 +689,26 @@ fn uart5_puts(s: &str) {
     }
 }
 
+fn uart5_hex8(val: u8) {
+    const HEX: &[u8] = b"0123456789ABCDEF";
+    uart5_putc(HEX[(val >> 4) as usize]);
+    uart5_putc(HEX[(val & 0xF) as usize]);
+}
+
+fn uart5_hex16(val: u16) {
+    uart5_hex8((val >> 8) as u8);
+    uart5_hex8(val as u8);
+}
+
 #[protection_domain]
 fn init() -> impl Handler {
-    // Try UART5
+    // Initialize UART5 for serial debug
     uart5_init();
-    uart5_puts("\n=== TPM TEST on UART5 ===\n");
+    uart5_puts("\n\n");
+    uart5_puts("========================================\n");
+    uart5_puts("  TPM 2.0 Boot Verification Test\n");
+    uart5_puts("  seL4 Microkit on Raspberry Pi 4\n");
+    uart5_puts("========================================\n\n");
 
     debug_println!("=====================================");
     debug_println!("  TPM 2.0 Boot Verification Test");
@@ -630,21 +721,50 @@ fn init() -> impl Handler {
 
     match unsafe { Framebuffer::new(&mailbox, WIDTH, HEIGHT) } {
         Ok(fb) => {
-            uart5_puts("Framebuffer OK!\n");
+            uart5_puts("Framebuffer OK\n");
             debug_println!("Framebuffer OK");
             let ptr = fb.buffer_ptr();
             let pitch = fb.pitch_pixels();
 
-            // Fill screen with bright green
-            unsafe {
-                for y in 0..HEIGHT as usize {
-                    for x in 0..pitch {
-                        ptr.add(y * pitch + x).write_volatile(0xFF00FF00);
-                    }
-                }
-                core::arch::asm!("dsb sy");
+            // Run TPM tests with screen and serial output
+            uart5_puts("Running TPM tests...\n\n");
+            let mut test = TpmTest::new(ptr, pitch);
+            test.run_tests();
+
+            // Print results to serial
+            uart5_puts("\n--- TPM Test Results ---\n");
+            uart5_puts("SPI Controller: ");
+            uart5_puts(test.spi_detected.text());
+            uart5_puts("\n");
+
+            uart5_puts("TPM Device ID:  ");
+            uart5_puts(test.tpm_detected.text());
+            if test.tpm_detected == TestResult::Pass {
+                uart5_puts(" (Vendor: 0x");
+                uart5_hex16(test.tpm_vendor_id);
+                uart5_puts(", Device: 0x");
+                uart5_hex16(test.tpm_device_id);
+                uart5_puts(")");
             }
-            uart5_puts("Green screen!\n");
+            uart5_puts("\n");
+
+            uart5_puts("TPM Startup:    ");
+            uart5_puts(test.tpm_startup.text());
+            uart5_puts("\n");
+
+            uart5_puts("TPM Self-Test:  ");
+            uart5_puts(test.tpm_selftest.text());
+            uart5_puts("\n");
+
+            uart5_puts("PCR Extend:     ");
+            uart5_puts(test.pcr_extend.text());
+            uart5_puts("\n");
+
+            uart5_puts("PCR Read:       ");
+            uart5_puts(test.pcr_read.text());
+            uart5_puts("\n");
+
+            uart5_puts("\nTest complete!\n");
         }
         Err(e) => {
             uart5_puts("Framebuffer FAILED\n");
