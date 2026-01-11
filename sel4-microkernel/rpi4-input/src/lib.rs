@@ -29,10 +29,12 @@
 pub mod keyboard;
 pub mod ir_remote;
 pub mod touch;
+pub mod uart;
 
 pub use keyboard::{Keyboard, KeyCode, KeyEvent, KeyState, KeyModifiers};
 pub use ir_remote::{IrRemote, IrButton, IrEvent, IrProtocol, ButtonMap};
 pub use touch::{TouchEvent, TouchPoint};
+pub use uart::Uart;
 
 /// Unified input event that can come from any input source
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -54,6 +56,8 @@ pub enum InputSource {
     IrRemote,
     /// Touchscreen
     Touch,
+    /// UART serial input
+    Uart,
 }
 
 /// Remote control options configuration
@@ -65,6 +69,10 @@ pub struct RemoteOptions {
     pub ir_remote_enabled: bool,
     /// Enable touch input
     pub touch_enabled: bool,
+    /// Enable UART serial input
+    pub uart_enabled: bool,
+    /// UART base address (virtual address mapped by Microkit)
+    pub uart_base: usize,
     /// IR protocol to use
     pub ir_protocol: IrProtocol,
 }
@@ -75,6 +83,8 @@ impl Default for RemoteOptions {
             keyboard_enabled: true,
             ir_remote_enabled: true,
             touch_enabled: true,
+            uart_enabled: false,
+            uart_base: uart::UART_BASE,
             ir_protocol: IrProtocol::Nec,
         }
     }
@@ -87,6 +97,8 @@ impl RemoteOptions {
             keyboard_enabled: true,
             ir_remote_enabled: false,
             touch_enabled: false,
+            uart_enabled: false,
+            uart_base: uart::UART_BASE,
             ir_protocol: IrProtocol::Nec,
         }
     }
@@ -97,6 +109,8 @@ impl RemoteOptions {
             keyboard_enabled: false,
             ir_remote_enabled: true,
             touch_enabled: false,
+            uart_enabled: false,
+            uart_base: uart::UART_BASE,
             ir_protocol: IrProtocol::Nec,
         }
     }
@@ -107,6 +121,32 @@ impl RemoteOptions {
             keyboard_enabled: false,
             ir_remote_enabled: false,
             touch_enabled: true,
+            uart_enabled: false,
+            uart_base: uart::UART_BASE,
+            ir_protocol: IrProtocol::Nec,
+        }
+    }
+
+    /// Create options with only UART serial input enabled
+    pub const fn uart_only() -> Self {
+        Self {
+            keyboard_enabled: false,
+            ir_remote_enabled: false,
+            touch_enabled: false,
+            uart_enabled: true,
+            uart_base: uart::UART_BASE,
+            ir_protocol: IrProtocol::Nec,
+        }
+    }
+
+    /// Create options with UART at a specific virtual address
+    pub const fn uart_at(base: usize) -> Self {
+        Self {
+            keyboard_enabled: false,
+            ir_remote_enabled: false,
+            touch_enabled: false,
+            uart_enabled: true,
+            uart_base: base,
             ir_protocol: IrProtocol::Nec,
         }
     }
@@ -117,6 +157,8 @@ impl RemoteOptions {
             keyboard_enabled: true,
             ir_remote_enabled: true,
             touch_enabled: true,
+            uart_enabled: true,
+            uart_base: uart::UART_BASE,
             ir_protocol: IrProtocol::Nec,
         }
     }
@@ -139,6 +181,7 @@ pub struct InputManager {
     options: RemoteOptions,
     keyboard: Option<Keyboard>,
     ir_remote: Option<IrRemote>,
+    uart: Option<Uart>,
 }
 
 impl InputManager {
@@ -156,12 +199,24 @@ impl InputManager {
             } else {
                 None
             },
+            uart: if options.uart_enabled {
+                Some(Uart::with_base(options.uart_base))
+            } else {
+                None
+            },
         }
     }
 
     /// Poll all enabled input sources for events
     pub fn poll(&mut self) -> Option<InputEvent> {
-        // Check keyboard first
+        // Check UART first (most common for serial console development)
+        if let Some(ref mut uart) = self.uart {
+            if let Some(event) = uart.poll() {
+                return Some(InputEvent::Key(event));
+            }
+        }
+
+        // Check keyboard
         if let Some(ref mut kb) = self.keyboard {
             if let Some(event) = kb.poll() {
                 return Some(InputEvent::Key(event));
@@ -198,6 +253,12 @@ impl InputManager {
         } else {
             None
         };
+
+        self.uart = if options.uart_enabled {
+            Some(Uart::with_base(options.uart_base))
+        } else {
+            None
+        };
     }
 
     /// Get mutable access to keyboard driver (for injecting HID reports)
@@ -208,5 +269,10 @@ impl InputManager {
     /// Get mutable access to IR remote driver (for processing edges)
     pub fn ir_remote_mut(&mut self) -> Option<&mut IrRemote> {
         self.ir_remote.as_mut()
+    }
+
+    /// Get mutable access to UART driver
+    pub fn uart_mut(&mut self) -> Option<&mut Uart> {
+        self.uart.as_mut()
     }
 }

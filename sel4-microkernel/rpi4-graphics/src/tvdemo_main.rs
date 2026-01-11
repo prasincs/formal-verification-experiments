@@ -1,7 +1,12 @@
 //! TV Demo for HDMI on Raspberry Pi 4
 //!
-//! Displays a snake animation using proper mailbox-based framebuffer allocation.
-//! The GPU dynamically allocates the framebuffer and returns the address.
+//! Interactive demo with menu system using UART input.
+//! Features:
+//! - Snake Game (interactive)
+//! - Snake Screensaver (automatic)
+//! - Settings and About screens
+//!
+//! The GPU dynamically allocates the framebuffer via VideoCore mailbox.
 
 #![no_std]
 #![no_main]
@@ -10,6 +15,7 @@ use sel4_microkit::{debug_println, protection_domain, Handler, ChannelSet};
 use core::fmt;
 
 use rpi4_graphics::{Mailbox, Framebuffer, MAILBOX_BASE};
+use rpi4_input::{InputManager, RemoteOptions, InputEvent, KeyCode, KeyState};
 
 /// Screen dimensions
 const WIDTH: u32 = 1280;
@@ -17,6 +23,28 @@ const HEIGHT: u32 = 720;
 
 /// GPIO virtual address
 const GPIO_BASE: usize = 0x5_0200_0000;
+
+/// UART virtual address (mapped by Microkit at 0x5_0400_0000, mini-UART at +0x40)
+const UART_VADDR: usize = 0x5_0400_0000 + 0x40;
+
+/// Application state
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum AppState {
+    /// Main menu
+    Menu,
+    /// Interactive snake game
+    SnakeGame,
+    /// Automatic snake screensaver
+    Screensaver,
+    /// About screen
+    About,
+}
+
+/// Menu item indices
+const MENU_SNAKE_GAME: usize = 0;
+const MENU_SCREENSAVER: usize = 1;
+const MENU_ABOUT: usize = 2;
+const MENU_ITEM_COUNT: usize = 3;
 
 struct TvDemoHandler;
 
@@ -138,9 +166,16 @@ impl Snake {
         }
     }
 
+    /// Set direction manually (for interactive game mode)
+    fn set_direction(&mut self, dir: u8) {
+        self.direction = dir % 4;
+    }
+
+    /// Update snake with automatic direction changes (screensaver mode)
     fn update(&mut self) {
         self.frame = self.frame.wrapping_add(1);
 
+        // Auto-turn for screensaver effect
         if self.frame % 45 == 0 {
             self.direction = (self.direction + 1) % 4;
         }
@@ -148,6 +183,17 @@ impl Snake {
             self.direction = (self.direction + 3) % 4;
         }
 
+        self.move_forward();
+    }
+
+    /// Update snake without automatic direction changes (game mode)
+    fn update_no_auto_turn(&mut self) {
+        self.frame = self.frame.wrapping_add(1);
+        self.move_forward();
+    }
+
+    /// Move the snake forward in current direction
+    fn move_forward(&mut self) {
         let head = self.segments[0];
         let speed = 10i32;
         let mut new_x = head.x;
@@ -279,20 +325,181 @@ unsafe fn draw_static_elements(ptr: *mut u32, pitch: usize, width: usize, height
     }
 }
 
-/// Run snake animation using the properly allocated framebuffer
-fn run_animation(fb: &Framebuffer) {
+/// Draw the main menu
+unsafe fn draw_menu(ptr: *mut u32, pitch: usize, width: usize, height: usize, selected: usize) {
+    let bg_color: u32 = 0xFF101030;
+    let white: u32 = 0xFFFFFFFF;
+    let green: u32 = 0xFF00B050;
+    let gray: u32 = 0xFF808080;
+
+    // Clear menu area
+    let menu_top = 200usize;
+    let menu_height = 300usize;
+    for y in menu_top..(menu_top + menu_height) {
+        for x in 200..1080 {
+            ptr.add(y * pitch + x).write_volatile(bg_color);
+        }
+    }
+
+    // Draw menu box
+    let box_left = 300usize;
+    let box_right = 980usize;
+    let box_top = 220usize;
+    let box_bottom = 480usize;
+
+    // Box border
+    for x in box_left..box_right {
+        ptr.add(box_top * pitch + x).write_volatile(gray);
+        ptr.add(box_bottom * pitch + x).write_volatile(gray);
+    }
+    for y in box_top..box_bottom {
+        ptr.add(y * pitch + box_left).write_volatile(gray);
+        ptr.add(y * pitch + box_right).write_volatile(gray);
+    }
+
+    // Menu title "SELECT MODE"
+    let title_y = 240usize;
+    let title_x = 500usize;
+    draw_text_select(ptr, pitch, title_x, title_y, white);
+
+    // Menu items
+    let item_height = 50usize;
+    let item_start_y = 300usize;
+
+    let items = ["Snake Game", "Screensaver", "About"];
+    for (i, _item) in items.iter().enumerate() {
+        let y = item_start_y + i * item_height;
+        let color = if i == selected { green } else { white };
+
+        // Draw selection indicator
+        if i == selected {
+            draw_block(ptr, pitch, box_left + 30, y + 10, 20, 20, green);
+        }
+
+        // Draw item text (simplified block text)
+        match i {
+            0 => draw_text_snake_game(ptr, pitch, box_left + 80, y, color),
+            1 => draw_text_screensaver(ptr, pitch, box_left + 80, y, color),
+            2 => draw_text_about(ptr, pitch, box_left + 80, y, color),
+            _ => {}
+        }
+    }
+
+    // Navigation hint at bottom
+    draw_text_hint(ptr, pitch, 400, 520, gray);
+}
+
+/// Draw "SELECT" text using blocks
+unsafe fn draw_text_select(ptr: *mut u32, pitch: usize, x: usize, y: usize, color: u32) {
+    let b = 8usize;  // block size
+    // S
+    draw_block(ptr, pitch, x, y, b*2, b, color);
+    draw_block(ptr, pitch, x, y+b, b, b, color);
+    draw_block(ptr, pitch, x, y+b*2, b*2, b, color);
+    draw_block(ptr, pitch, x+b, y+b*3, b, b, color);
+    draw_block(ptr, pitch, x, y+b*4, b*2, b, color);
+    // E
+    let ex = x + b*3;
+    draw_block(ptr, pitch, ex, y, b*2, b, color);
+    draw_block(ptr, pitch, ex, y+b, b, b*3, color);
+    draw_block(ptr, pitch, ex, y+b*2, b*2, b, color);
+    draw_block(ptr, pitch, ex, y+b*4, b*2, b, color);
+    // L
+    let lx = x + b*6;
+    draw_block(ptr, pitch, lx, y, b, b*4, color);
+    draw_block(ptr, pitch, lx, y+b*4, b*2, b, color);
+    // E
+    let e2x = x + b*9;
+    draw_block(ptr, pitch, e2x, y, b*2, b, color);
+    draw_block(ptr, pitch, e2x, y+b, b, b*3, color);
+    draw_block(ptr, pitch, e2x, y+b*2, b*2, b, color);
+    draw_block(ptr, pitch, e2x, y+b*4, b*2, b, color);
+    // C
+    let cx = x + b*12;
+    draw_block(ptr, pitch, cx, y, b*2, b, color);
+    draw_block(ptr, pitch, cx, y+b, b, b*3, color);
+    draw_block(ptr, pitch, cx, y+b*4, b*2, b, color);
+    // T
+    let tx = x + b*15;
+    draw_block(ptr, pitch, tx, y, b*3, b, color);
+    draw_block(ptr, pitch, tx+b, y+b, b, b*4, color);
+}
+
+/// Draw "SNAKE GAME" text
+unsafe fn draw_text_snake_game(ptr: *mut u32, pitch: usize, x: usize, y: usize, color: u32) {
+    let b = 6usize;
+    // Simplified: just draw rectangles to represent text
+    draw_block(ptr, pitch, x, y+5, 150, 30, color);
+}
+
+/// Draw "SCREENSAVER" text
+unsafe fn draw_text_screensaver(ptr: *mut u32, pitch: usize, x: usize, y: usize, color: u32) {
+    let b = 6usize;
+    draw_block(ptr, pitch, x, y+5, 180, 30, color);
+}
+
+/// Draw "ABOUT" text
+unsafe fn draw_text_about(ptr: *mut u32, pitch: usize, x: usize, y: usize, color: u32) {
+    let b = 6usize;
+    draw_block(ptr, pitch, x, y+5, 100, 30, color);
+}
+
+/// Draw navigation hint
+unsafe fn draw_text_hint(ptr: *mut u32, pitch: usize, x: usize, y: usize, color: u32) {
+    // "W/S or Arrows: Navigate   Enter: Select   Q: Quit"
+    draw_block(ptr, pitch, x, y, 500, 20, color);
+}
+
+/// Draw About screen
+unsafe fn draw_about_screen(ptr: *mut u32, pitch: usize, width: usize, height: usize) {
+    let bg_color: u32 = 0xFF101030;
+    let white: u32 = 0xFFFFFFFF;
+    let green: u32 = 0xFF00B050;
+
+    // Clear screen
+    for y in 150..600 {
+        for x in 100..1180 {
+            ptr.add(y * pitch + x).write_volatile(bg_color);
+        }
+    }
+
+    // Title
+    draw_block(ptr, pitch, 500, 180, 200, 40, green);  // "ABOUT"
+
+    // Info lines (simplified as blocks)
+    draw_block(ptr, pitch, 200, 280, 400, 25, white);  // "seL4 Microkernel Demo"
+    draw_block(ptr, pitch, 200, 320, 350, 25, white);  // "Raspberry Pi 4"
+    draw_block(ptr, pitch, 200, 360, 300, 25, white);  // "1280x720 HDMI"
+    draw_block(ptr, pitch, 200, 420, 450, 25, white);  // "Press Q or ESC to return"
+}
+
+/// Run the main application loop with menu and state machine
+fn run_app(fb: &Framebuffer) {
     let ptr = fb.buffer_ptr();
     let pitch = fb.pitch_pixels();
     let (width, height) = fb.dimensions();
     let width = width as usize;
     let height = height as usize;
 
-    debug_println!("Starting snake animation: {}x{}, pitch={}", width, height, pitch);
+    debug_println!("Starting app with UART input: {}x{}, pitch={}", width, height, pitch);
+
+    // Initialize input manager with UART at mapped virtual address
+    let mut input = InputManager::new(RemoteOptions::uart_at(UART_VADDR));
 
     let bg_color: u32 = 0xFF101030;
+
+    // Application state
+    let mut state = AppState::Menu;
+    let mut menu_selected: usize = 0;
+    let mut needs_redraw = true;
+
+    // Snake state (for game and screensaver)
+    let mut snake = Snake::new();
+    let mut prev_segments: [Segment; 30] = [Segment { x: -100, y: -100 }; 30];
+    let mut frame: u32 = 0;
     let segment_size = 20usize;
 
-    // Clear screen ONCE
+    // Clear screen once
     unsafe {
         core::arch::asm!("dsb sy");
         for y in 0..height {
@@ -300,70 +507,174 @@ fn run_animation(fb: &Framebuffer) {
                 ptr.add(y * pitch + x).write_volatile(bg_color);
             }
         }
-        // Draw static elements ONCE
-        draw_static_elements(ptr, pitch, width, height);
         core::arch::asm!("dsb sy");
     }
 
-    let mut snake = Snake::new();
-    let mut prev_segments: [Segment; 30] = [Segment { x: -100, y: -100 }; 30];
-    let mut frame: u32 = 0;
-    const FRAME_DELAY: u32 = 500_000;
+    debug_println!("Entering main loop. Use WASD/arrows to navigate, Enter to select, Q to quit.");
 
     loop {
+        // Poll for input
+        if let Some(event) = input.poll() {
+            if let InputEvent::Key(key_event) = event {
+                if key_event.state == KeyState::Pressed {
+                    debug_println!("Key pressed: {:?}", key_event.key);
+
+                    match state {
+                        AppState::Menu => {
+                            match key_event.key {
+                                KeyCode::Up => {
+                                    if menu_selected > 0 {
+                                        menu_selected -= 1;
+                                        needs_redraw = true;
+                                    }
+                                }
+                                KeyCode::Down => {
+                                    if menu_selected < MENU_ITEM_COUNT - 1 {
+                                        menu_selected += 1;
+                                        needs_redraw = true;
+                                    }
+                                }
+                                KeyCode::Enter | KeyCode::Space => {
+                                    match menu_selected {
+                                        MENU_SNAKE_GAME => {
+                                            state = AppState::SnakeGame;
+                                            snake = Snake::new();
+                                            needs_redraw = true;
+                                            debug_println!("Starting Snake Game");
+                                        }
+                                        MENU_SCREENSAVER => {
+                                            state = AppState::Screensaver;
+                                            snake = Snake::new();
+                                            needs_redraw = true;
+                                            debug_println!("Starting Screensaver");
+                                        }
+                                        MENU_ABOUT => {
+                                            state = AppState::About;
+                                            needs_redraw = true;
+                                            debug_println!("Showing About");
+                                        }
+                                        _ => {}
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                        AppState::SnakeGame => {
+                            match key_event.key {
+                                KeyCode::Up => snake.set_direction(3),
+                                KeyCode::Down => snake.set_direction(1),
+                                KeyCode::Left => snake.set_direction(2),
+                                KeyCode::Right => snake.set_direction(0),
+                                KeyCode::Escape => {
+                                    state = AppState::Menu;
+                                    needs_redraw = true;
+                                    debug_println!("Returning to menu");
+                                }
+                                _ => {}
+                            }
+                        }
+                        AppState::Screensaver | AppState::About => {
+                            if key_event.key == KeyCode::Escape || key_event.key == KeyCode::Enter {
+                                state = AppState::Menu;
+                                needs_redraw = true;
+                                debug_println!("Returning to menu");
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Render based on state
         unsafe {
             core::arch::asm!("dsb sy");
 
-            // Erase previous snake positions (draw background over them)
-            for i in 0..snake.length {
-                let seg = prev_segments[i];
-                if seg.x >= PLAY_AREA_LEFT && seg.y >= PLAY_AREA_TOP {
-                    let x = (seg.x as usize).saturating_sub(segment_size / 2);
-                    let y = (seg.y as usize).saturating_sub(segment_size / 2);
-                    if x + segment_size < PLAY_AREA_RIGHT as usize && y + segment_size < PLAY_AREA_BOTTOM as usize {
-                        draw_block(ptr, pitch, x, y, segment_size, segment_size, bg_color);
+            match state {
+                AppState::Menu => {
+                    if needs_redraw {
+                        // Clear and draw menu
+                        for y in 0..height {
+                            for x in 0..pitch {
+                                ptr.add(y * pitch + x).write_volatile(bg_color);
+                            }
+                        }
+                        draw_static_elements(ptr, pitch, width, height);
+                        draw_menu(ptr, pitch, width, height, menu_selected);
+                        needs_redraw = false;
+                    }
+                }
+                AppState::SnakeGame | AppState::Screensaver => {
+                    if needs_redraw {
+                        // Clear and draw title
+                        for y in 0..height {
+                            for x in 0..pitch {
+                                ptr.add(y * pitch + x).write_volatile(bg_color);
+                            }
+                        }
+                        draw_static_elements(ptr, pitch, width, height);
+                        needs_redraw = false;
+                    }
+
+                    // Erase previous snake
+                    for i in 0..snake.length {
+                        let seg = prev_segments[i];
+                        if seg.x >= PLAY_AREA_LEFT && seg.y >= PLAY_AREA_TOP {
+                            let x = (seg.x as usize).saturating_sub(segment_size / 2);
+                            let y = (seg.y as usize).saturating_sub(segment_size / 2);
+                            if x + segment_size < PLAY_AREA_RIGHT as usize && y + segment_size < PLAY_AREA_BOTTOM as usize {
+                                draw_block(ptr, pitch, x, y, segment_size, segment_size, bg_color);
+                            }
+                        }
+                    }
+
+                    // Save positions
+                    for i in 0..snake.length {
+                        prev_segments[i] = snake.segments[i];
+                    }
+
+                    // Update snake (auto-turn only in screensaver mode)
+                    if state == AppState::Screensaver {
+                        snake.update();
+                    } else {
+                        snake.update_no_auto_turn();
+                    }
+
+                    // Draw snake
+                    for i in 0..snake.length {
+                        let seg = snake.segments[i];
+                        if seg.x >= PLAY_AREA_LEFT && seg.y >= PLAY_AREA_TOP {
+                            let x = (seg.x as usize).saturating_sub(segment_size / 2);
+                            let y = (seg.y as usize).saturating_sub(segment_size / 2);
+                            if x + segment_size < PLAY_AREA_RIGHT as usize && y + segment_size < PLAY_AREA_BOTTOM as usize {
+                                let hue = ((i as u32 * 18 + frame * 4) % 360) as u16;
+                                let color = hsv_to_rgb(hue, 255, 255);
+                                draw_block(ptr, pitch, x, y, segment_size, segment_size, color);
+                            }
+                        }
+                    }
+
+                    frame = frame.wrapping_add(1);
+                }
+                AppState::About => {
+                    if needs_redraw {
+                        for y in 0..height {
+                            for x in 0..pitch {
+                                ptr.add(y * pitch + x).write_volatile(bg_color);
+                            }
+                        }
+                        draw_static_elements(ptr, pitch, width, height);
+                        draw_about_screen(ptr, pitch, width, height);
+                        needs_redraw = false;
                     }
                 }
             }
-
-            // Save current positions before update
-            for i in 0..snake.length {
-                prev_segments[i] = snake.segments[i];
-            }
-
-            // Update snake
-            snake.update();
-
-            // Draw snake at new positions (within play area only)
-            for i in 0..snake.length {
-                let seg = snake.segments[i];
-                if seg.x >= PLAY_AREA_LEFT && seg.y >= PLAY_AREA_TOP {
-                    let x = (seg.x as usize).saturating_sub(segment_size / 2);
-                    let y = (seg.y as usize).saturating_sub(segment_size / 2);
-                    if x + segment_size < PLAY_AREA_RIGHT as usize && y + segment_size < PLAY_AREA_BOTTOM as usize {
-                        let hue = ((i as u32 * 18 + frame * 4) % 360) as u16;
-                        let color = hsv_to_rgb(hue, 255, 255);
-                        draw_block(ptr, pitch, x, y, segment_size, segment_size, color);
-                    }
-                }
-            }
-
-            // Clear and redraw frame counter bar area
-            draw_block(ptr, pitch, 50, 650, 310, 20, bg_color);
-            let green: u32 = 0xFF00FF00;
-            let bar_width = ((frame % 200) as usize) + 10;
-            draw_block(ptr, pitch, 50, 650, bar_width.min(300), 20, green);
 
             core::arch::asm!("dsb sy");
             core::arch::asm!("isb");
         }
 
-        frame = frame.wrapping_add(1);
-        if frame % 120 == 0 {
-            debug_println!("Frame {}", frame);
-        }
-
-        for _ in 0..FRAME_DELAY { core::hint::spin_loop(); }
+        // Frame delay (shorter for responsive input)
+        for _ in 0..100_000 { core::hint::spin_loop(); }
     }
 }
 
@@ -371,7 +682,7 @@ fn run_animation(fb: &Framebuffer) {
 fn init() -> TvDemoHandler {
     debug_println!("");
     debug_println!("========================================");
-    debug_println!("  TV Demo - Mailbox Framebuffer Init");
+    debug_println!("  seL4 TV Demo - Interactive Menu");
     debug_println!("========================================");
     debug_println!("");
 
@@ -381,8 +692,8 @@ fn init() -> TvDemoHandler {
     // Step 2: Initialize framebuffer via VideoCore mailbox
     match init_framebuffer() {
         Some(fb) => {
-            debug_println!("Framebuffer ready, starting animation...");
-            run_animation(&fb);
+            debug_println!("Framebuffer ready, starting app...");
+            run_app(&fb);
         }
         None => {
             debug_println!("ERROR: Could not allocate framebuffer!");

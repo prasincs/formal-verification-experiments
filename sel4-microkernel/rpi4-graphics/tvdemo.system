@@ -43,6 +43,12 @@
             Must be at a known physical address since GPU needs physical addr.
         -->
         <map mr="dma_buffer" vaddr="0x5_0300_0000" perms="rw" cached="false" />
+
+        <!--
+            Map mini-UART registers for serial input.
+            Physical: 0xFE215000 (4KB page containing mini-UART at 0xFE215040)
+        -->
+        <map mr="uart_regs" vaddr="0x5_0400_0000" perms="rw" cached="false" />
     </protection_domain>
 
     <!--
@@ -60,5 +66,8 @@
 
     <!-- DMA buffer for mailbox communication (4KB, just before framebuffer) -->
     <memory_region name="dma_buffer" size="0x1000" phys_addr="0x3e875000" />
+
+    <!-- Mini-UART registers (4KB) for serial input -->
+    <memory_region name="uart_regs" size="0x1000" phys_addr="0xFE215000" />
 
 </system>
