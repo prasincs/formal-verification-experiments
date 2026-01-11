@@ -24,8 +24,10 @@ rpi4-input-protocol = { path = "../rpi4-input-protocol" }
 # Photo protocol (verified)
 rpi4-photo-protocol = { path = "../rpi4-photo-protocol" }
 
-# BMP decoding (no_std, no alloc - perfect for embedded)
-tinybmp = "0.6"
+# Image decoding (all no_std, no alloc - perfect for embedded)
+tinybmp = "0.6"      # BMP - uncompressed, simple
+tinytga = "0.5"      # TGA - common in graphics, simple RLE
+# QOI decoder is implemented inline (~100 lines, no dependencies needed)
 
 [profile.release]
 opt-level = "z"
