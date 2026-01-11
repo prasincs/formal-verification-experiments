@@ -156,6 +156,25 @@ impl Framebuffer {
     pub fn dimensions(&self) -> (u32, u32) {
         (self.info.width, self.info.height)
     }
+
+    /// Get raw pointer to framebuffer memory for direct writes
+    ///
+    /// Use this for performance-critical animation loops where you want
+    /// to bypass the bounds-checking methods.
+    ///
+    /// # Safety
+    /// Caller must ensure writes stay within framebuffer bounds.
+    pub fn buffer_ptr(&self) -> *mut u32 {
+        self.buffer
+    }
+
+    /// Get pitch in pixels (for address calculation in direct writes)
+    ///
+    /// Use with buffer_ptr() for direct pixel addressing:
+    /// `buffer_ptr.add(y * pitch_pixels() + x)`
+    pub fn pitch_pixels(&self) -> usize {
+        (self.info.pitch / 4) as usize
+    }
 }
 
 impl Framebuffer {
