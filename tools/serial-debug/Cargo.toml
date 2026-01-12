@@ -1,0 +1,72 @@
+[package]
+name = "serial-debug"
+version = "0.1.0"
+edition = "2021"
+authors = ["Prasanna Gautam"]
+description = "Serial debugging toolkit with device profiles for embedded systems (RPi4, STM32, ESP32, etc.)"
+license = "MIT"
+readme = "README.md"
+repository = "https://github.com/prasincs/formal-verification-experiments"
+
+[features]
+default = []
+# Enable serial port support (requires libudev on Linux)
+serial = ["serialport"]
+
+[[bin]]
+name = "serial-debug"
+path = "src/main.rs"
+
+[dependencies]
+# Serial port communication (optional, requires libudev on Linux)
+serialport = { version = "4.5", optional = true }
+
+# CLI interface
+clap = { version = "4.5", features = ["derive"] }
+
+# Async runtime for serial monitoring
+tokio = { version = "1.41", features = ["full"] }
+
+# Error handling
+anyhow = "1.0"
+thiserror = "1.0"
+
+# Colored terminal output
+colored = "2.1"
+
+# Hex dump formatting
+hexdump = "0.1"
+
+# Time handling
+chrono = "0.4"
+
+# File system operations
+walkdir = "2.5"
+
+# Binary parsing
+byteorder = "1.5"
+
+# Logging
+log = "0.4"
+env_logger = "0.11"
+
+# CRC calculations for boot image verification
+crc = "3.2"
+
+# Configuration file parsing
+serde = { version = "1.0", features = ["derive"] }
+toml = "0.8"
+
+# Lazy initialization for device profiles
+once_cell = "1.19"
+
+# Unix-specific operations
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[dev-dependencies]
+tempfile = "3.14"
+
+[profile.release]
+opt-level = 2
+lto = true
