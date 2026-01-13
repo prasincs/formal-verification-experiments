@@ -1,0 +1,151 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+    seL4 Microkit System Description - TV Demo with Networking
+
+    Three Protection Domain architecture:
+    - Input PD: Handles UART input, writes to shared ring buffer
+    - Network PD: Handles Ethernet/WiFi, isolated network stack
+    - Graphics PD: Framebuffer rendering, network client
+
+    Security Properties:
+    1. Network PD has exclusive access to network hardware (GENET/SDIO)
+    2. Graphics PD cannot directly access network hardware
+    3. Network traffic is isolated from input and graphics
+    4. Each PD has minimal required capabilities
+
+    Build with: make PRODUCT=tvdemo PLATFORM=rpi4 NET_DRIVER=ethernet ISOLATED=1 sdcard
+-->
+<system>
+    <!--
+        Input Protection Domain (priority 200 - highest for responsive input)
+
+        Memory access:
+        - UART registers (read/write) - for receiving serial input
+        - Ring buffer (read/write) - for writing input events
+    -->
+    <protection_domain name="input" priority="200">
+        <program_image path="input_pd.elf" />
+
+        <!-- Mini-UART registers for serial input -->
+        <map mr="uart_regs" vaddr="0x5_0300_0000" perms="rw" cached="false" />
+
+        <!-- Shared ring buffer for IPC with Graphics (write access) -->
+        <map mr="input_ring" vaddr="0x5_0400_0000" perms="rw" cached="false" />
+    </protection_domain>
+
+    <!--
+        Network Protection Domain (priority 180 - high for network responsiveness)
+
+        Memory access:
+        - GENET registers (Ethernet) - for BCM54213PE driver
+        - SDIO registers (WiFi) - for CYW43455 driver (if enabled)
+        - Network ring buffers - for IPC with clients
+
+        This PD is isolated from:
+        - Framebuffer memory
+        - UART registers
+        - GPIO registers (except network-related)
+    -->
+    <protection_domain name="network" priority="180">
+        <program_image path="network_pd.elf" />
+
+        <!-- GENET (Gigabit Ethernet) controller registers (64KB) -->
+        <map mr="genet_regs" vaddr="0x5_0500_0000" perms="rw" cached="false" />
+
+        <!-- SDIO controller registers for WiFi (4KB) -->
+        <!-- Uncomment for WiFi support -->
+        <!-- <map mr="sdio_regs" vaddr="0x5_0600_0000" perms="rw" cached="false" /> -->
+
+        <!-- Network shared memory for IPC with Graphics PD -->
+        <map mr="net_ring" vaddr="0x5_0700_0000" perms="rw" cached="false" />
+
+        <!-- IRQ for GENET -->
+        <irq irq="189" id="1" />
+    </protection_domain>
+
+    <!--
+        Graphics Protection Domain (priority 150 - lower than input/network)
+
+        Memory access:
+        - Mailbox registers (read/write) - for GPU communication
+        - GPIO registers (read/write) - for LED control
+        - Framebuffer (read/write) - for graphics output
+        - DMA buffer (read/write) - for mailbox messages
+        - Input ring buffer (read only) - for receiving input events
+        - Network ring buffer (read/write) - for network I/O
+
+        This PD is isolated from:
+        - UART registers
+        - Network hardware registers
+    -->
+    <protection_domain name="graphics" priority="150">
+        <program_image path="graphics_input_pd.elf" />
+
+        <!-- VideoCore mailbox registers -->
+        <map mr="mailbox_regs" vaddr="0x5_0000_0000" perms="rw" cached="false" />
+
+        <!-- GPIO registers for LED control -->
+        <map mr="gpio_regs" vaddr="0x5_0200_0000" perms="rw" cached="false" />
+
+        <!-- Framebuffer memory -->
+        <map mr="framebuffer" vaddr="0x5_0001_0000" perms="rw" cached="false" />
+
+        <!-- DMA buffer for mailbox communication -->
+        <map mr="dma_buffer" vaddr="0x5_0300_0000" perms="rw" cached="false" />
+
+        <!-- Shared ring buffer for input IPC (read-only for security) -->
+        <map mr="input_ring" vaddr="0x5_0400_0000" perms="rw" cached="false" />
+
+        <!-- Network shared memory for IPC with Network PD -->
+        <map mr="net_ring" vaddr="0x5_0700_0000" perms="rw" cached="false" />
+    </protection_domain>
+
+    <!--
+        Memory Regions
+    -->
+
+    <!-- Mini-UART registers (4KB page containing mini-UART at 0xFE215040) -->
+    <memory_region name="uart_regs" size="0x1000" phys_addr="0xFE215000" />
+
+    <!-- Mailbox registers (4KB) -->
+    <memory_region name="mailbox_regs" size="0x1000" phys_addr="0xFE00B000" />
+
+    <!-- GPIO registers (4KB) -->
+    <memory_region name="gpio_regs" size="0x1000" phys_addr="0xFE200000" />
+
+    <!-- GENET (Gigabit Ethernet) controller registers (64KB) -->
+    <memory_region name="genet_regs" size="0x10000" phys_addr="0xFD580000" />
+
+    <!-- SDIO controller registers for WiFi (4KB) -->
+    <!-- Uncomment for WiFi support -->
+    <!-- <memory_region name="sdio_regs" size="0x1000" phys_addr="0xFE340000" /> -->
+
+    <!-- Framebuffer memory (16MB) -->
+    <memory_region name="framebuffer" size="0x1000000" phys_addr="0x3e876000" />
+
+    <!-- DMA buffer for mailbox (4KB) -->
+    <memory_region name="dma_buffer" size="0x1000" phys_addr="0x3e875000" />
+
+    <!-- Shared input ring buffer (4KB) - allocated by Microkit -->
+    <memory_region name="input_ring" size="0x1000" />
+
+    <!-- Network shared memory (256KB for TX/RX buffers) -->
+    <memory_region name="net_ring" size="0x40000" />
+
+    <!--
+        IPC Channels
+    -->
+
+    <!-- Channel 1: Input PD -> Graphics PD (input events) -->
+    <channel>
+        <end pd="input" id="1" />
+        <end pd="graphics" id="1" />
+    </channel>
+
+    <!-- Channel 2: Network PD <-> Graphics PD (network requests/responses) -->
+    <channel>
+        <end pd="network" id="2" />
+        <end pd="graphics" id="2" />
+    </channel>
+
+</system>
