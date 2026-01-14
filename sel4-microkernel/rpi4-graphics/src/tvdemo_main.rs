@@ -11,10 +11,21 @@
 #![no_std]
 #![no_main]
 
+extern crate alloc;
+
 use sel4_microkit::{debug_println, protection_domain, Handler, ChannelSet};
 use core::fmt;
+use linked_list_allocator::LockedHeap;
 
 use rpi4_graphics::{Mailbox, Framebuffer, MAILBOX_BASE};
+
+// Global allocator for alloc-dependent code
+#[global_allocator]
+static ALLOCATOR: LockedHeap = LockedHeap::empty();
+
+// 64KB heap
+const HEAP_SIZE: usize = 64 * 1024;
+static mut HEAP: [u8; HEAP_SIZE] = [0; HEAP_SIZE];
 use rpi4_input::{InputManager, RemoteOptions, InputEvent, KeyCode, KeyState};
 
 /// Screen dimensions
@@ -888,6 +899,11 @@ fn run_app(fb: &Framebuffer) {
 
 #[protection_domain]
 fn init() -> TvDemoHandler {
+    // Initialize the heap allocator
+    unsafe {
+        ALLOCATOR.lock().init(HEAP.as_mut_ptr(), HEAP_SIZE);
+    }
+
     debug_println!("");
     debug_println!("========================================");
     debug_println!("  seL4 TV Demo - Interactive Menu");
