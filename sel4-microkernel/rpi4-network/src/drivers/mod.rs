@@ -105,12 +105,10 @@ pub struct DriverStats {
 }
 
 /// Common trait for network drivers
+///
+/// Initialization is not part of this trait because each driver requires
+/// different mapped MMIO regions (see each driver's inherent `init`).
 pub trait NetworkDriver {
-    /// Initialize the driver
-    fn init() -> Result<Self, DriverError>
-    where
-        Self: Sized;
-
     /// Get the MAC address
     fn mac_address(&self) -> MacAddress;
 

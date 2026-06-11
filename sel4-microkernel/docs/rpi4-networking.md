@@ -110,20 +110,22 @@ GPIO (pins 34-39 for SDIO)
 
 ## Compile-Time Configuration
 
-Networking is enabled via the `NET_DRIVER` build variable:
+Networking is enabled via the `NET_DRIVER` build variable. The networked
+tvdemo uses the three-PD system description (Input + Network + Graphics),
+so `ISOLATED=1` is required:
 
 ```bash
 # No networking (default)
 make PRODUCT=tvdemo PLATFORM=rpi4
 
 # Ethernet only
-make PRODUCT=tvdemo PLATFORM=rpi4 NET_DRIVER=ethernet
+make PRODUCT=tvdemo PLATFORM=rpi4 ISOLATED=1 NET_DRIVER=ethernet
 
 # WiFi only
-make PRODUCT=tvdemo PLATFORM=rpi4 NET_DRIVER=wifi
+make PRODUCT=tvdemo PLATFORM=rpi4 ISOLATED=1 NET_DRIVER=wifi
 
 # Both (Ethernet primary, WiFi secondary)
-make PRODUCT=tvdemo PLATFORM=rpi4 NET_DRIVER=both
+make PRODUCT=tvdemo PLATFORM=rpi4 ISOLATED=1 NET_DRIVER=both
 ```
 
 ### Feature Flags in Rust

@@ -16,15 +16,18 @@ supporting both Ethernet (BCM54213PE) and WiFi (CYW43455) interfaces.
 
 ## Building
 
+The networked tvdemo uses the three-PD system description
+(Input + Network + Graphics), so `ISOLATED=1` is required:
+
 ```bash
 # Ethernet only (recommended)
-make PRODUCT=tvdemo PLATFORM=rpi4 NET_DRIVER=ethernet sdcard
+make PRODUCT=tvdemo PLATFORM=rpi4 ISOLATED=1 NET_DRIVER=ethernet sdcard
 
 # WiFi only
-make PRODUCT=tvdemo PLATFORM=rpi4 NET_DRIVER=wifi sdcard
+make PRODUCT=tvdemo PLATFORM=rpi4 ISOLATED=1 NET_DRIVER=wifi sdcard
 
 # Both interfaces
-make PRODUCT=tvdemo PLATFORM=rpi4 NET_DRIVER=both sdcard
+make PRODUCT=tvdemo PLATFORM=rpi4 ISOLATED=1 NET_DRIVER=both sdcard
 ```
 
 ## Architecture

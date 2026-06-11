@@ -28,8 +28,6 @@
 //! - `NetResponse`: Network PD → Client responses
 //! - `NetEvent`: Network PD → Client async events
 
-use crate::drivers::MacAddress;
-
 /// Maximum packet size (MTU + headers)
 pub const MAX_PACKET_SIZE: usize = 1518;
 

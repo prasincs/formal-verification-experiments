@@ -28,6 +28,22 @@ pub enum NetifError {
     LinkDown,
 }
 
+/// Mapped MMIO base addresses for the enabled drivers
+///
+/// All addresses are *virtual* addresses as mapped by the Microkit
+/// system description.
+pub struct NetifConfig {
+    /// GENET register base (Ethernet)
+    #[cfg(feature = "net-ethernet")]
+    pub ethernet_base: usize,
+    /// SDIO controller register base (WiFi)
+    #[cfg(feature = "net-wifi")]
+    pub sdio_base: usize,
+    /// GPIO register base (WiFi power control)
+    #[cfg(feature = "net-wifi")]
+    pub gpio_base: usize,
+}
+
 /// Abstract network interface
 pub struct NetworkInterface {
     /// Ethernet driver (if enabled)
@@ -67,12 +83,14 @@ impl NetworkInterface {
     /// Initialize the network interface
     ///
     /// Tries Ethernet first (if enabled), then falls back to WiFi.
-    pub fn init(&mut self) -> Result<(), NetifError> {
+    pub fn init(&mut self, config: &NetifConfig) -> Result<(), NetifError> {
+        // Silence unused warning when no driver feature is enabled
+        let _ = config;
+
         // Try Ethernet first (preferred)
         #[cfg(feature = "net-ethernet")]
         {
-            use crate::drivers::NetworkDriver;
-            match EthernetDriver::init() {
+            match EthernetDriver::init(config.ethernet_base) {
                 Ok(driver) => {
                     self.ethernet = Some(driver);
                     self.active = ActiveInterface::Ethernet;
@@ -87,8 +105,7 @@ impl NetworkInterface {
         // Try WiFi
         #[cfg(feature = "net-wifi")]
         {
-            use crate::drivers::NetworkDriver;
-            match WifiDriver::init() {
+            match WifiDriver::init(config.sdio_base, config.gpio_base) {
                 Ok(driver) => {
                     self.wifi = Some(driver);
                     self.active = ActiveInterface::Wifi;

@@ -3,10 +3,10 @@
 # This feature module adds networking capabilities to seL4 products.
 # It supports both Ethernet (BCM54213PE) and WiFi (CYW43455) on Raspberry Pi 4.
 #
-# Usage:
-#   make PRODUCT=tvdemo PLATFORM=rpi4 NET_DRIVER=ethernet
-#   make PRODUCT=tvdemo PLATFORM=rpi4 NET_DRIVER=wifi
-#   make PRODUCT=tvdemo PLATFORM=rpi4 NET_DRIVER=both
+# Usage (requires ISOLATED=1 for the three-PD system):
+#   make PRODUCT=tvdemo PLATFORM=rpi4 ISOLATED=1 NET_DRIVER=ethernet
+#   make PRODUCT=tvdemo PLATFORM=rpi4 ISOLATED=1 NET_DRIVER=wifi
+#   make PRODUCT=tvdemo PLATFORM=rpi4 ISOLATED=1 NET_DRIVER=both
 #
 # Options:
 #   NET_DRIVER   - ethernet, wifi, both, or none (default: none)
@@ -86,6 +86,18 @@ NETWORK_SOURCES := $(wildcard $(NETWORK_PD_SRC_DIR)/src/*.rs) \
                    $(wildcard $(NETWORK_PD_SRC_DIR)/src/**/*.rs) \
                    $(NETWORK_PD_SRC_DIR)/Cargo.toml
 
+# Wire the Network PD into supported products.
+# The three-PD system description (tvdemo-network.system) uses the isolated
+# Input PD and Graphics PD images, so ISOLATED=1 is required.
+ifeq ($(PRODUCT),tvdemo)
+ifndef ISOLATED
+$(error NET_DRIVER=$(NET_DRIVER) on tvdemo requires ISOLATED=1 (three-PD system))
+endif
+SYSTEM_DESC := $(PRODUCT_SRC_DIR)/tvdemo-network.system
+else
+$(error NET_DRIVER is currently only supported for PRODUCT=tvdemo)
+endif
+
 # Build rule for Network PD
 $(NETWORK_PD_ELF): $(NETWORK_SOURCES) | $(BUILD_DIR)
 	@echo "=== Building Network PD ($(NET_DRIVER), $(NET_STACK)) ==="
@@ -100,6 +112,10 @@ $(NETWORK_PD_ELF): $(NETWORK_SOURCES) | $(BUILD_DIR)
 # Add Network PD to build dependencies
 .PHONY: build-network-pd
 build-network-pd: $(NETWORK_PD_ELF)
+
+# The system image and loader need the Network PD ELF in the search path
+$(SYSTEM_IMAGE): $(NETWORK_PD_ELF)
+$(LOADER_ELF): $(NETWORK_PD_ELF)
 
 # Print networking configuration
 .PHONY: print-network-config

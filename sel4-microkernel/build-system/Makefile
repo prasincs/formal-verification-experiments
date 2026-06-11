@@ -35,7 +35,7 @@ THIS_MAKEFILE := $(lastword $(MAKEFILE_LIST))
 #   make PRODUCT=graphics PLATFORM=rpi4 sdcard
 #   make PRODUCT=graphics PLATFORM=rpi4 RPI4_MEMORY=8gb sdcard
 #   make PRODUCT=graphics PLATFORM=rpi4 write-sdcard DEVICE=/dev/sdb
-#   make PRODUCT=tvdemo PLATFORM=rpi4 NET_DRIVER=ethernet sdcard
+#   make PRODUCT=tvdemo PLATFORM=rpi4 ISOLATED=1 NET_DRIVER=ethernet sdcard
 
 # Validate required parameters
 ifndef PRODUCT
@@ -64,14 +64,16 @@ $(error Unknown product: $(PRODUCT). Available: graphics, hello, tvdemo)
 endif
 include $(PRODUCT_MK)
 
+# Load optional features (networking, etc.)
+# Must be included before build rules so feature overrides (e.g. SYSTEM_DESC)
+# are visible when rule prerequisites are expanded.
+include config/features/networking.mk
+
 # Load build rules
 include include/rust.mk
 include include/microkit.mk
 include include/qemu.mk
 include include/sdcard.mk
-
-# Load optional features (networking, etc.)
--include config/features/networking.mk
 
 # Default target
 .PHONY: all

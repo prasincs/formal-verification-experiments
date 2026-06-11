@@ -38,13 +38,7 @@
 //! - NetBSD bwfm driver
 //! - FreeBSD if_bwfm driver
 
-use super::{DriverError, DriverStats, LinkSpeed, LinkStatus, MacAddress, NetworkDriver};
-
-/// Arasan SDIO controller base address
-const SDIO_BASE: usize = 0xfe340000;
-
-/// GPIO base for WiFi control pins
-const GPIO_BASE: usize = 0xfe200000;
+use super::{DriverError, DriverStats, LinkStatus, MacAddress, NetworkDriver};
 
 /// WiFi power enable GPIO (active high)
 const WL_ON_GPIO: u32 = 41;
@@ -150,6 +144,35 @@ pub struct WifiDriver {
 }
 
 impl WifiDriver {
+    /// Initialize the driver
+    ///
+    /// `sdio_base` and `gpio_base` are *virtual* addresses, as mapped by the
+    /// Microkit system description (not the physical 0xFE340000/0xFE200000).
+    pub fn init(sdio_base: usize, gpio_base: usize) -> Result<Self, DriverError> {
+        let mut driver = Self::new(sdio_base, gpio_base);
+
+        // Power on the WiFi chip
+        driver.power_on()?;
+
+        // Initialize SDIO controller
+        driver.init_sdio()?;
+
+        // Load firmware (this will currently fail as not implemented)
+        // In production, you would embed or load the firmware blobs
+        match driver.load_firmware() {
+            Ok(()) => {
+                driver.state = WifiState::Ready;
+            }
+            Err(DriverError::FirmwareError) => {
+                // WiFi cannot operate without firmware
+                return Err(DriverError::FirmwareError);
+            }
+            Err(e) => return Err(e),
+        }
+
+        Ok(driver)
+    }
+
     /// Create a new WiFi driver instance
     fn new(sdio_base: usize, gpio_base: usize) -> Self {
         Self {
@@ -179,14 +202,16 @@ impl WifiDriver {
 
     /// Set GPIO pin output
     fn gpio_set(&self, pin: u32, high: bool) {
+        // GPSET0/GPCLR0 cover pins 0-31; GPSET1/GPCLR1 cover pins 32-57
+        let bank = (pin / 32) as usize;
         let reg_offset = if high {
-            0x1c // GPSET0
+            0x1c + bank * 4 // GPSETn
         } else {
-            0x28 // GPCLR0
+            0x28 + bank * 4 // GPCLRn
         };
         let addr = (self.gpio_base + reg_offset) as *mut u32;
         unsafe {
-            core::ptr::write_volatile(addr, 1 << pin);
+            core::ptr::write_volatile(addr, 1 << (pin % 32));
         }
     }
 
@@ -380,33 +405,6 @@ impl WifiDriver {
 }
 
 impl NetworkDriver for WifiDriver {
-    fn init() -> Result<Self, DriverError> {
-        let mut driver = Self::new(SDIO_BASE, GPIO_BASE);
-
-        // Power on the WiFi chip
-        driver.power_on()?;
-
-        // Initialize SDIO controller
-        driver.init_sdio()?;
-
-        // Load firmware (this will currently fail as not implemented)
-        // In production, you would embed or load the firmware blobs
-        match driver.load_firmware() {
-            Ok(()) => {
-                driver.state = WifiState::Ready;
-            }
-            Err(DriverError::FirmwareError) => {
-                // WiFi cannot operate without firmware
-                // Return error for now, but keep driver in Initializing state
-                // for debugging purposes
-                return Err(DriverError::FirmwareError);
-            }
-            Err(e) => return Err(e),
-        }
-
-        Ok(driver)
-    }
-
     fn mac_address(&self) -> MacAddress {
         self.mac
     }

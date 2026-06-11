@@ -19,9 +19,6 @@
 
 use super::{DriverError, DriverStats, LinkSpeed, LinkStatus, MacAddress, NetworkDriver};
 
-/// GENET controller base address
-const GENET_BASE: usize = 0xfd580000;
-
 /// GENET register offsets
 #[allow(dead_code)]
 mod regs {
@@ -105,12 +102,29 @@ pub struct EthernetDriver {
 }
 
 impl EthernetDriver {
+    /// Initialize the driver
+    ///
+    /// `base` is the *virtual* address of the GENET registers, as mapped
+    /// by the Microkit system description (not the physical 0xFD580000).
+    pub fn init(base: usize) -> Result<Self, DriverError> {
+        let mut driver = Self::new(base);
+
+        // Detect GENET version
+        driver.detect_version()?;
+
+        // Initialize PHY
+        driver.init_phy()?;
+
+        // Initialize UniMAC
+        driver.init_umac()?;
+
+        // Update link status
+        driver.update_link_status()?;
+
+        Ok(driver)
+    }
+
     /// Create a new Ethernet driver instance
-    ///
-    /// # Safety
-    ///
-    /// The base address must be mapped by the Microkit system description
-    /// and accessible from this protection domain.
     fn new(base: usize) -> Self {
         Self {
             base,
@@ -316,24 +330,6 @@ impl EthernetDriver {
 }
 
 impl NetworkDriver for EthernetDriver {
-    fn init() -> Result<Self, DriverError> {
-        let mut driver = Self::new(GENET_BASE);
-
-        // Detect GENET version
-        driver.detect_version()?;
-
-        // Initialize PHY
-        driver.init_phy()?;
-
-        // Initialize UniMAC
-        driver.init_umac()?;
-
-        // Update link status
-        driver.update_link_status()?;
-
-        Ok(driver)
-    }
-
     fn mac_address(&self) -> MacAddress {
         self.mac
     }
@@ -375,6 +371,7 @@ impl NetworkDriver for EthernetDriver {
         // 4. Return packet length
 
         // Placeholder: no data available
+        let _ = buffer;
         Ok(0)
     }
 
