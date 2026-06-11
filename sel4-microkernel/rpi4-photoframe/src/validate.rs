@@ -364,7 +364,9 @@ mod tests {
 
     #[test]
     fn test_jpeg_validation() {
-        // Minimal valid JPEG-like header (simplified)
+        // Minimal valid JPEG-like header (simplified). Padded past the 20-byte
+        // minimum-length guard with a trailing EOI; the SOF scan returns before
+        // reaching the padding.
         let data = [
             0xFF, 0xD8,             // SOI
             0xFF, 0xC0,             // SOF0
@@ -374,6 +376,7 @@ mod tests {
             0x00, 0xC8,             // Width: 200
             0x03,                   // Components
             0x01, 0x11, 0x00,       // Component data
+            0xFF, 0xD9, 0x00, 0x00, 0x00, // padding to satisfy length guard
         ];
 
         let result = validate_jpeg(&data);
@@ -408,7 +411,7 @@ mod tests {
 
     #[test]
     fn test_oversized_rejection() {
-        // JPEG with dimensions exceeding MAX
+        // JPEG with dimensions exceeding MAX (padded past the length guard).
         let data = [
             0xFF, 0xD8,
             0xFF, 0xC0,
@@ -418,6 +421,7 @@ mod tests {
             0xFF, 0xFF,  // Width: 65535 (too large)
             0x03,
             0x01, 0x11, 0x00,
+            0xFF, 0xD9, 0x00, 0x00, 0x00, // padding to satisfy length guard
         ];
 
         let result = validate_jpeg(&data);

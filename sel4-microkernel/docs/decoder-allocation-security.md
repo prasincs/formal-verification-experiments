@@ -362,35 +362,61 @@ With 8MB bounded allocator + 8MB output buffer, we're safe.
 
 ## Implementation Phases
 
-### Phase 1: Bounded Allocator
-- Implement bump allocator with fixed pool
-- Add to Decoder PD
-- Test with over-allocation attempts
+### Phase 1: Bounded Allocator — ✅ IMPLEMENTED
+- `src/bounded_alloc.rs`: `BoundedBumpAllocator<N>` with a fixed pool
+- Wired as `#[global_allocator]` in `src/main.rs` (16 MB pool)
+- Absolute-address alignment (not offset-relative — see note below)
+- Tracks usage / peak / OOM; `reset()` between photos
+- Tested: allocation, OOM rejection, reset, alignment
 
-### Phase 2: Header Validation
-- JPEG SOF parsing
-- PNG IHDR parsing
-- Reject before decode
+### Phase 2: Header Validation — ✅ IMPLEMENTED
+- `src/validate.rs`: JPEG SOF parsing, PNG IHDR parsing, BMP/QOI headers
+- Rejects bad magic / zero / oversized dimensions before any allocation
+- Estimates decode memory up front for the budget check
 
-### Phase 3: zune-jpeg Integration
-- Add dependency
-- Wire up bounded allocator
-- Reset between photos
+### Phase 3: zune-jpeg / zune-png Integration — ✅ IMPLEMENTED
+- `src/decoder.rs`: `decode_jpeg` / `decode_png` (pure-Rust, no_std + alloc)
+- `src/secure_decode.rs`: `secure_decode_into()` ties the pipeline together
+  (validate → budget → reset → decode → verify-no-OOM)
+- Decoders allocate only through the bounded global heap
 
-### Phase 4: Full 3-PD Split
+### Phase 4: Full 3-PD Split — 🔲 FUTURE
 - Separate Decoder PD from Display PD
-- seL4 enforced isolation
-- Shared pixel buffer only
+- seL4-enforced isolation; shared pixel buffer only
+- Currently a 2-PD demo (Input PD + Photoframe PD); the decoder runs in the
+  Photoframe PD behind the bounded heap + validation gates
+
+### Allocator alignment note
+
+The bump allocator aligns the **absolute** address, not the offset within the
+pool. A `static` pool is only guaranteed `u8` alignment, so aligning the offset
+alone would return misaligned pointers and corrupt `u32`/struct allocations made
+by the decoders. This was caught by an alignment unit test during integration.
+
+## Verification Performed
+
+The allocation-independent logic was compiled and tested on the host (the seL4
+target itself can't be built without the SDK):
+
+- `no_std` compile check of `bounded_alloc` + `decoder` + `validate` +
+  `secure_decode` against the real `zune-jpeg` / `zune-png` / `tinybmp`
+  dependencies.
+- End-to-end pipeline tests decoding the **real** embedded BMP and QOI files:
+  - BMP and QOI decode to **identical** pixels (cross-checks both decoders)
+  - bad magic → `Validation` rejection
+  - undersized output buffer → `OutputTooSmall` rejection
+  - 1 KB heap vs 320×240 image → `ExceedsBudget` rejection
+- QOI test vector round-tripped against a reference decoder (all opcodes).
 
 ## Summary: Defense Layers
 
 | Layer | What It Catches | Verified By |
 |-------|-----------------|-------------|
 | seL4 isolation | Capability escape | Isabelle/HOL proofs |
-| Bounded allocator | Memory exhaustion | Code review |
+| Bounded allocator | Memory exhaustion | Unit + pipeline tests |
 | Header validation | Malformed dimensions | Unit tests |
 | Rust memory safety | Buffer overflows | Compiler |
-| Output validation | Garbage pixels | Display PD code |
-| Timeout | Infinite loops | Timer PD |
+| Output validation | Garbage pixels | `blit_centered` clamps to display |
+| Timeout | Infinite loops | Timer PD (future) |
 
 **Key insight**: Even with allocation, the Decoder PD is **sandboxed by hardware-enforced capabilities**. A fully compromised decoder cannot escape its memory region or access any other resources.

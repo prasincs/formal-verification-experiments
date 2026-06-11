@@ -11,7 +11,7 @@
 //!
 //! ## Usage
 //!
-//! ```rust
+//! ```ignore
 //! // In your decoder PD:
 //! #[global_allocator]
 //! static ALLOCATOR: BoundedBumpAllocator<{8 * 1024 * 1024}> =
@@ -116,6 +116,15 @@ impl<const N: usize> BoundedBumpAllocator<N> {
     pub fn usage_percent(&self) -> u8 {
         ((self.used() as u64 * 100) / N as u64) as u8
     }
+
+    /// Record an allocation failure and return null. Shared by the OOM and
+    /// integer-overflow paths in `alloc`.
+    #[inline]
+    fn fail(&self) -> *mut u8 {
+        self.failures.fetch_add(1, Ordering::Relaxed);
+        self.oom_occurred.store(true, Ordering::Release);
+        null_mut()
+    }
 }
 
 unsafe impl<const N: usize> GlobalAlloc for BoundedBumpAllocator<N> {
@@ -123,27 +132,33 @@ unsafe impl<const N: usize> GlobalAlloc for BoundedBumpAllocator<N> {
         let size = layout.size();
         let align = layout.align();
 
+        // Alignment must be applied to the *absolute* address, not the offset
+        // within the pool: the static pool's base address has no guaranteed
+        // alignment beyond `u8`, so aligning only the offset would hand back
+        // misaligned pointers and corrupt `u32`/struct allocations.
+        let base = self.pool.get() as *mut u8 as usize;
+
         // Retry loop for atomic compare-exchange
         loop {
             let current = self.offset.load(Ordering::Acquire);
+            let cur_addr = base + current;
 
-            // Align up to required alignment
-            let aligned = (current + align - 1) & !(align - 1);
-            let new_offset = match aligned.checked_add(size) {
-                Some(off) => off,
-                None => {
-                    // Integer overflow - reject
-                    self.failures.fetch_add(1, Ordering::Relaxed);
-                    self.oom_occurred.store(true, Ordering::Release);
-                    return null_mut();
-                }
+            // Align the absolute address up to `align`.
+            let aligned_addr = match cur_addr.checked_add(align - 1) {
+                Some(a) => a & !(align - 1),
+                None => return self.fail(),
             };
+
+            // Compute the end address and translate back to a pool offset.
+            let end_addr = match aligned_addr.checked_add(size) {
+                Some(e) => e,
+                None => return self.fail(),
+            };
+            let new_offset = end_addr - base;
 
             // Check if allocation would exceed pool
             if new_offset > N {
-                self.failures.fetch_add(1, Ordering::Relaxed);
-                self.oom_occurred.store(true, Ordering::Release);
-                return null_mut();
+                return self.fail();
             }
 
             // Try to claim this space atomically
@@ -156,10 +171,7 @@ unsafe impl<const N: usize> GlobalAlloc for BoundedBumpAllocator<N> {
                 Ok(_) => {
                     // Update peak if this is a new high
                     let _ = self.peak.fetch_max(new_offset, Ordering::Relaxed);
-
-                    // Return pointer into pool
-                    let pool_ptr = self.pool.get() as *mut u8;
-                    return pool_ptr.add(aligned);
+                    return aligned_addr as *mut u8;
                 }
                 Err(_) => {
                     // Another thread modified offset, retry
@@ -232,6 +244,51 @@ impl<const N: usize> BoundedBumpAllocator<N> {
             failures: self.failure_count(),
             oom_occurred: self.oom_occurred(),
         }
+    }
+}
+
+// ============================================================================
+// HEAP CONTROL TRAIT
+// ============================================================================
+
+/// Control and observation interface for a bounded heap.
+///
+/// This trait erases the const-generic pool size so that callers (e.g. the
+/// secure decode pipeline) can reset and inspect the global heap through a
+/// plain `&dyn HeapControl` reference without knowing its compile-time size.
+pub trait HeapControl {
+    /// Reclaim all memory. Caller must ensure no live references remain.
+    fn reset(&self);
+    /// Bytes currently allocated.
+    fn used(&self) -> usize;
+    /// Peak bytes allocated since the last reset.
+    fn peak(&self) -> usize;
+    /// Total pool capacity in bytes.
+    fn capacity(&self) -> usize;
+    /// Whether any allocation has failed since the last reset.
+    fn oom_occurred(&self) -> bool;
+}
+
+impl<const N: usize> HeapControl for BoundedBumpAllocator<N> {
+    #[inline]
+    fn reset(&self) {
+        BoundedBumpAllocator::reset(self)
+    }
+    #[inline]
+    fn used(&self) -> usize {
+        BoundedBumpAllocator::used(self)
+    }
+    #[inline]
+    fn peak(&self) -> usize {
+        BoundedBumpAllocator::peak(self)
+    }
+    #[inline]
+    fn capacity(&self) -> usize {
+        BoundedBumpAllocator::capacity(self)
+    }
+    #[inline]
+    fn oom_occurred(&self) -> bool {
+        BoundedBumpAllocator::oom_occurred(self)
     }
 }
 

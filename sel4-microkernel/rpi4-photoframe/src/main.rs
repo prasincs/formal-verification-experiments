@@ -22,13 +22,41 @@
 #![no_std]
 #![no_main]
 
+extern crate alloc;
+
 mod decoder;
 mod bounded_alloc;
 mod validate;
+mod secure_decode;
 
 use sel4_microkit::{debug_println, protection_domain, Handler, ChannelSet, Channel};
 use core::fmt;
+use core::cell::UnsafeCell;
 use core::sync::atomic::Ordering;
+
+use bounded_alloc::BoundedBumpAllocator;
+use secure_decode::{secure_decode_into, SecureDecodeError};
+
+// ============================================================================
+// BOUNDED GLOBAL ALLOCATOR
+// ============================================================================
+//
+// The decoders for allocation-based formats (JPEG/PNG) allocate through the
+// global allocator. We make that a fixed-size bump allocator so total
+// allocation is hard-capped regardless of input. A malicious image cannot
+// exhaust memory: once the pool is full, allocation fails and the secure
+// pipeline reports OutOfMemory instead of letting the heap grow unbounded.
+//
+// Memory cost: this reserves DECODER_HEAP_SIZE of zero-initialized BSS in the
+// PD image. 16 MB comfortably covers a full-screen (1280x720) JPEG/PNG decode
+// plus the decoder's internal working buffers. A production build would back
+// this with a dedicated `memory_region` in the .system file rather than BSS.
+
+/// Fixed heap budget for image decoding.
+const DECODER_HEAP_SIZE: usize = 16 * 1024 * 1024;
+
+#[global_allocator]
+static DECODER_HEAP: BoundedBumpAllocator<DECODER_HEAP_SIZE> = BoundedBumpAllocator::new();
 
 use rpi4_graphics::{Mailbox, Framebuffer, MAILBOX_BASE};
 use rpi4_input::{KeyCode, KeyState};
@@ -57,14 +85,39 @@ const SLIDESHOW_INTERVAL: u32 = 300;
 // EMBEDDED PHOTO DATA
 // ============================================================================
 
+/// Where a photo's pixels come from.
+#[derive(Clone, Copy)]
+enum PhotoSource {
+    /// Procedurally generated test pattern (no decoding).
+    Generated(fn(u32, u32) -> u32),
+    /// Encoded image bytes (BMP/QOI/PNG/JPEG) run through the secure pipeline.
+    Encoded(&'static [u8]),
+}
+
 /// Photo metadata
 struct Photo {
     name: &'static str,
-    width: u32,
-    height: u32,
-    /// Generate function for test patterns (in real use, this would be BMP data)
-    generator: fn(u32, u32) -> u32,
+    source: PhotoSource,
 }
+
+// Real encoded images embedded at compile time. These are decoded at runtime
+// through the secure pipeline (validate -> budget -> bounded decode), exercising
+// the exact path a dropped-in JPEG/PNG would take.
+//
+// To add your own: drop a file in `photos/` and `include_bytes!` it below. JPEG
+// and PNG decode through zune-jpeg / zune-png under the bounded heap; BMP and QOI
+// decode allocation-free.
+const SAMPLE_QOI: &[u8] = include_bytes!("../photos/sample_gradient.qoi");
+const SAMPLE_BMP: &[u8] = include_bytes!("../photos/sample_gradient.bmp");
+
+/// Decoded-pixel scratch buffer (ARGB32), sized to the display. Encoded photos
+/// are decoded here, then blitted (centered) to the framebuffer. Wrapped in an
+/// `UnsafeCell` because the PD is single-threaded and the seL4 event loop never
+/// re-enters `render` concurrently.
+struct PixelScratch(UnsafeCell<[u32; (WIDTH * HEIGHT) as usize]>);
+unsafe impl Sync for PixelScratch {}
+static PIXEL_SCRATCH: PixelScratch =
+    PixelScratch(UnsafeCell::new([0; (WIDTH * HEIGHT) as usize]));
 
 /// Test pattern generators for demo photos
 fn pattern_gradient(x: u32, y: u32) -> u32 {
@@ -165,13 +218,16 @@ fn pattern_mountains(x: u32, y: u32) -> u32 {
     }
 }
 
-/// Collection of demo photos
+/// Collection of demo photos: a mix of procedural patterns and real encoded
+/// images decoded through the secure pipeline.
 const PHOTOS: &[Photo] = &[
-    Photo { name: "GRADIENT", width: WIDTH, height: HEIGHT, generator: pattern_gradient },
-    Photo { name: "CIRCLES", width: WIDTH, height: HEIGHT, generator: pattern_circles },
-    Photo { name: "CHECKERBOARD", width: WIDTH, height: HEIGHT, generator: pattern_checkerboard },
-    Photo { name: "SUNSET", width: WIDTH, height: HEIGHT, generator: pattern_sunset },
-    Photo { name: "MOUNTAINS", width: WIDTH, height: HEIGHT, generator: pattern_mountains },
+    Photo { name: "GRADIENT", source: PhotoSource::Generated(pattern_gradient) },
+    Photo { name: "QOI PHOTO", source: PhotoSource::Encoded(SAMPLE_QOI) },
+    Photo { name: "BMP PHOTO", source: PhotoSource::Encoded(SAMPLE_BMP) },
+    Photo { name: "CIRCLES", source: PhotoSource::Generated(pattern_circles) },
+    Photo { name: "CHECKERBOARD", source: PhotoSource::Generated(pattern_checkerboard) },
+    Photo { name: "SUNSET", source: PhotoSource::Generated(pattern_sunset) },
+    Photo { name: "MOUNTAINS", source: PhotoSource::Generated(pattern_mountains) },
 ];
 
 // ============================================================================
@@ -347,6 +403,20 @@ unsafe fn draw_text(fb: *mut u32, pitch: usize, x: usize, y: usize, text: &str, 
 // PHOTO FRAME STATE
 // ============================================================================
 
+/// Result of drawing the current photo, used to render the on-screen status.
+#[derive(Clone, Copy)]
+enum PhotoStatus {
+    /// A procedural pattern was drawn (no decoding).
+    Generated,
+    /// An encoded image was decoded through the secure pipeline.
+    Decoded {
+        format: validate::ImageType,
+        heap_peak_kb: u32,
+    },
+    /// The secure pipeline rejected or failed to decode the image.
+    Failed(&'static str),
+}
+
 /// Photoframe application state
 enum AppMode {
     Slideshow,
@@ -466,13 +536,53 @@ impl PhotoFrameHandler {
 
             let photo = &PHOTOS[self.current_photo];
 
-            // Draw the photo using the generator function
-            for y in 0..HEIGHT {
-                for x in 0..WIDTH {
-                    let color = (photo.generator)(x, y);
-                    ptr.add(y as usize * pitch + x as usize).write_volatile(color);
+            // Draw the photo. Generated patterns fill the screen directly;
+            // encoded images are run through the secure decode pipeline into the
+            // scratch buffer and then blitted centered.
+            let photo_status = match photo.source {
+                PhotoSource::Generated(gen) => {
+                    for y in 0..HEIGHT {
+                        for x in 0..WIDTH {
+                            let color = gen(x, y);
+                            ptr.add(y as usize * pitch + x as usize).write_volatile(color);
+                        }
+                    }
+                    PhotoStatus::Generated
                 }
-            }
+                PhotoSource::Encoded(bytes) => {
+                    // Fill the background first so margins around a smaller,
+                    // centered image are clean rather than stale pixels.
+                    for y in 0..HEIGHT as usize {
+                        for x in 0..WIDTH as usize {
+                            ptr.add(y * pitch + x).write_volatile(0xFF101018);
+                        }
+                    }
+
+                    // SECURE PIPELINE: validate -> budget -> bounded decode.
+                    let scratch = &mut *PIXEL_SCRATCH.0.get();
+                    match secure_decode_into(bytes, scratch, &DECODER_HEAP) {
+                        Ok(res) => {
+                            blit_centered(ptr, pitch, scratch, res.width, res.height);
+                            debug_println!(
+                                "Photoframe PD: decoded {} {}x{} heap_peak={}KB",
+                                image_type_str(res.format),
+                                res.width,
+                                res.height,
+                                res.heap_peak / 1024
+                            );
+                            PhotoStatus::Decoded {
+                                format: res.format,
+                                heap_peak_kb: (res.heap_peak / 1024) as u32,
+                            }
+                        }
+                        Err(e) => {
+                            let reason = secure_error_str(&e);
+                            debug_println!("Photoframe PD: secure decode rejected: {}", reason);
+                            PhotoStatus::Failed(reason)
+                        }
+                    }
+                }
+            };
 
             // Draw info overlay if enabled
             if self.show_info {
@@ -521,6 +631,29 @@ impl PhotoFrameHandler {
 
                 // SEL4 SECURE badge
                 draw_text(ptr, pitch, WIDTH as usize - 180, hint_y + 5, "SEL4 SECURE", 1, 0xFF00B050);
+
+                // Secure-decode status line for encoded photos (just above the
+                // bottom hint bar). Tells the on-screen story: which decoder ran
+                // and how much of the bounded heap it touched.
+                let status_y = hint_y - 22;
+                match photo_status {
+                    PhotoStatus::Decoded { format, heap_peak_kb } => {
+                        let mut num = [0u8; 12];
+                        let kb = format_u32(heap_peak_kb, &mut num);
+                        draw_text(ptr, pitch, 20, status_y, "SECURE DECODE:", 1, 0xFF80FF80);
+                        draw_text(ptr, pitch, 180, status_y, image_type_str(format), 1, 0xFFFFFFFF);
+                        draw_text(ptr, pitch, 260, status_y, "OK  HEAP PEAK", 1, 0xFFCCCCCC);
+                        draw_text(ptr, pitch, 420, status_y, kb, 1, 0xFFFFFFFF);
+                        draw_text(ptr, pitch, 480, status_y, "KB", 1, 0xFFCCCCCC);
+                    }
+                    PhotoStatus::Failed(reason) => {
+                        draw_text(ptr, pitch, 20, status_y, "SECURE DECODE: REJECTED", 1, 0xFFFF6060);
+                        draw_text(ptr, pitch, 320, status_y, reason, 1, 0xFFFF6060);
+                    }
+                    PhotoStatus::Generated => {
+                        draw_text(ptr, pitch, 20, status_y, "PROCEDURAL PATTERN", 1, 0xFF8080FF);
+                    }
+                }
             }
 
             core::arch::asm!("dsb sy");
@@ -540,6 +673,73 @@ fn format_counter(current: usize, total: usize, buf: &mut [u8; 8]) -> &str {
     buf[2] = t;
     // Safety: we know these are valid ASCII
     unsafe { core::str::from_utf8_unchecked(&buf[0..3]) }
+}
+
+/// Format a u32 as decimal into `buf`, returning the written slice as &str.
+fn format_u32(mut val: u32, buf: &mut [u8; 12]) -> &str {
+    if val == 0 {
+        buf[0] = b'0';
+        return unsafe { core::str::from_utf8_unchecked(&buf[0..1]) };
+    }
+    // Write digits back-to-front, then shift to the front.
+    let mut tmp = [0u8; 12];
+    let mut i = 12;
+    while val > 0 {
+        i -= 1;
+        tmp[i] = b'0' + (val % 10) as u8;
+        val /= 10;
+    }
+    let len = 12 - i;
+    buf[..len].copy_from_slice(&tmp[i..]);
+    unsafe { core::str::from_utf8_unchecked(&buf[..len]) }
+}
+
+/// Human-readable name for a validated image format.
+fn image_type_str(t: validate::ImageType) -> &'static str {
+    match t {
+        validate::ImageType::Jpeg => "JPEG",
+        validate::ImageType::Png => "PNG",
+        validate::ImageType::Bmp => "BMP",
+        validate::ImageType::Tga => "TGA",
+        validate::ImageType::Qoi => "QOI",
+        validate::ImageType::Unknown => "UNKNOWN",
+    }
+}
+
+/// Short, fixed reason string for a secure-decode failure (for logs/overlay).
+fn secure_error_str(e: &SecureDecodeError) -> &'static str {
+    match e {
+        SecureDecodeError::Validation(_) => "BAD HEADER",
+        SecureDecodeError::ExceedsBudget { .. } => "OVER BUDGET",
+        SecureDecodeError::OutputTooSmall { .. } => "TOO LARGE",
+        SecureDecodeError::Decode(_) => "CORRUPT",
+        SecureDecodeError::OutOfMemory { .. } => "OUT OF MEMORY",
+    }
+}
+
+/// Blit a decoded image from the scratch buffer to the framebuffer, centered.
+///
+/// Bounds are clamped to the display so an image reported larger than the
+/// screen (or a dimension mismatch) can never write outside the framebuffer.
+/// `src` is laid out as `src_w * src_h` ARGB32 pixels, row-major.
+unsafe fn blit_centered(fb: *mut u32, pitch: usize, src: &[u32], src_w: u32, src_h: u32) {
+    let copy_w = src_w.min(WIDTH) as usize;
+    let copy_h = src_h.min(HEIGHT) as usize;
+    let off_x = ((WIDTH.saturating_sub(src_w)) / 2) as usize;
+    let off_y = ((HEIGHT.saturating_sub(src_h)) / 2) as usize;
+    let stride = src_w as usize;
+
+    for y in 0..copy_h {
+        let src_row = y * stride;
+        let dst_row = (off_y + y) * pitch + off_x;
+        for x in 0..copy_w {
+            // Defensive bound: never read past the scratch slice.
+            let si = src_row + x;
+            if si < src.len() {
+                fb.add(dst_row + x).write_volatile(src[si]);
+            }
+        }
+    }
 }
 
 // ============================================================================
@@ -605,7 +805,9 @@ fn init() -> PhotoFrameHandler {
     debug_println!("========================================");
     debug_println!("");
     debug_println!("Security: Input isolated from display");
-    debug_println!("Photos: {} embedded test patterns", PHOTOS.len());
+    debug_println!("Photos: {} ({} procedural, BMP+QOI decoded securely)", PHOTOS.len(), PHOTOS.len() - 2);
+    debug_println!("Decoder heap: {} MB bounded (BoundedBumpAllocator)", DECODER_HEAP_SIZE / (1024 * 1024));
+    debug_println!("Pipeline: validate -> budget -> bounded decode");
     debug_println!("");
 
     blink_activity_led();

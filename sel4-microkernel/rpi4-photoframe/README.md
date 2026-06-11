@@ -103,11 +103,69 @@ Add Storage PD for runtime photo loading:
 
 ## Demo Photos
 
-Currently uses 5 embedded test patterns:
-1. **GRADIENT** - Color gradient
-2. **CIRCLES** - Concentric circles
-3. **CHECKERBOARD** - Classic pattern
-4. **SUNSET** - Sunset with sun
-5. **MOUNTAINS** - Mountain silhouette
+The slideshow mixes procedural patterns with **real encoded images** decoded at
+runtime through the secure pipeline:
 
-For real photos, embed BMP files using `include_bytes!()` or add SD card support.
+| # | Name | Source | Decode path |
+|---|------|--------|-------------|
+| 1 | GRADIENT | procedural | none |
+| 2 | QOI PHOTO | `photos/sample_gradient.qoi` | inline QOI (no alloc) |
+| 3 | BMP PHOTO | `photos/sample_gradient.bmp` | tinybmp (no alloc) |
+| 4 | CIRCLES | procedural | none |
+| 5 | CHECKERBOARD | procedural | none |
+| 6 | SUNSET | procedural | none |
+| 7 | MOUNTAINS | procedural | none |
+
+## Image Formats & Secure Decode Pipeline
+
+Encoded photos are decoded through `secure_decode_into()`, which enforces
+defense-in-depth before and during decode:
+
+```
+raw bytes
+   │
+   ├─ 1. validate header   (validate.rs)      reject bad magic / oversized / zero-dim
+   │                                          BEFORE any allocation
+   ├─ 2. budget check       (estimate ≤ heap cap)   reject memory bombs
+   ├─ 3. reset bounded heap (bounded_alloc.rs)      clean slate per photo
+   ├─ 4. decode             (decoder.rs)            against fixed 16 MB pool
+   └─ 5. verify no OOM      (HeapControl)           detect over-allocation
+   │
+   ▼
+ARGB32 pixels → blitted centered to framebuffer
+```
+
+Supported formats:
+
+| Format | Decoder | Allocation | Notes |
+|--------|---------|------------|-------|
+| BMP | tinybmp | none | uncompressed |
+| QOI | inline (~100 LoC) | none | lossless, ~30% of BMP |
+| PNG | zune-png | bounded heap | inflate under 16 MB cap |
+| JPEG | zune-jpeg | bounded heap | baseline + progressive |
+
+JPEG/PNG decoders allocate **only** through the
+`BoundedBumpAllocator` wired as `#[global_allocator]`, so a malicious image
+cannot exhaust memory — once the pool is full, allocation fails and the pipeline
+returns `OutOfMemory` instead of growing unbounded. See
+[`docs/decoder-allocation-security.md`](../docs/decoder-allocation-security.md).
+
+### Adding your own photo
+
+```bash
+# Drop a file in photos/ and reference it in src/main.rs:
+#   const MY_PHOTO: &[u8] = include_bytes!("../photos/my_photo.jpg");
+#   Photo { name: "MY PHOTO", source: PhotoSource::Encoded(MY_PHOTO) },
+# JPEG/PNG/BMP/QOI all work; the format is auto-detected from magic bytes.
+```
+
+The on-screen info overlay shows the secure-decode result for each encoded
+photo: `SECURE DECODE: <FMT> OK  HEAP PEAK <N> KB`, or `REJECTED <reason>` if the
+pipeline refuses the image.
+
+### Future: SD Card Photo Loading
+
+Add Storage PD for runtime photo loading:
+- FAT32 filesystem support
+- Photo enumeration
+- Streaming transfer protocol

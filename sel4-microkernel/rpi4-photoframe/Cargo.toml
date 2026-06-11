@@ -24,10 +24,17 @@ rpi4-input-protocol = { path = "../rpi4-input-protocol" }
 # Photo protocol (verified)
 rpi4-photo-protocol = { path = "../rpi4-photo-protocol" }
 
-# Image decoding (all no_std, no alloc - perfect for embedded)
+# Image decoding - no-allocation formats (parsed without heap)
 tinybmp = "0.6"      # BMP - uncompressed, simple
 tinytga = "0.5"      # TGA - common in graphics, simple RLE
 # QOI decoder is implemented inline (~100 lines, no dependencies needed)
+
+# Image decoding - allocation-based formats (decoded under a bounded heap)
+# These are pure-Rust, no_std + alloc, memory-safe decoders. They run only
+# behind the secure_decode pipeline: header validation + budget check first,
+# then decode against the fixed-size BoundedBumpAllocator. See decoder.rs.
+zune-jpeg = { version = "0.4", default-features = false }
+zune-png = { version = "0.4", default-features = false }
 
 [profile.release]
 opt-level = "z"

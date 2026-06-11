@@ -135,6 +135,144 @@ pub fn decode_tga(data: &[u8], output: &mut [u32]) -> Result<(u32, u32), DecodeE
 }
 
 // ============================================================================
+// CHANNEL-AWARE PIXEL PACKING
+// ============================================================================
+
+/// Pack raw decoder output (grayscale, RGB, or RGBA bytes) into ARGB32.
+///
+/// `channels` is derived from `bytes.len() / (width*height)`, so this works
+/// regardless of the decoder's chosen colorspace. Alpha is forced opaque
+/// because the framebuffer is opaque ARGB.
+fn pack_to_argb(
+    bytes: &[u8],
+    channels: usize,
+    width: u32,
+    height: u32,
+    output: &mut [u32],
+) -> Result<(), DecodeError> {
+    let pixel_count = (width as usize)
+        .checked_mul(height as usize)
+        .ok_or(DecodeError::InvalidDimensions)?;
+
+    if output.len() < pixel_count {
+        return Err(DecodeError::BufferTooSmall);
+    }
+    if bytes.len() < pixel_count * channels {
+        return Err(DecodeError::CorruptedData);
+    }
+
+    match channels {
+        1 => {
+            // Grayscale: replicate luma across RGB
+            for i in 0..pixel_count {
+                let v = bytes[i] as u32;
+                output[i] = 0xFF00_0000 | (v << 16) | (v << 8) | v;
+            }
+        }
+        3 => {
+            for i in 0..pixel_count {
+                let o = i * 3;
+                output[i] = 0xFF00_0000
+                    | ((bytes[o] as u32) << 16)
+                    | ((bytes[o + 1] as u32) << 8)
+                    | (bytes[o + 2] as u32);
+            }
+        }
+        4 => {
+            for i in 0..pixel_count {
+                let o = i * 4;
+                // Force alpha opaque; framebuffer does not blend.
+                output[i] = 0xFF00_0000
+                    | ((bytes[o] as u32) << 16)
+                    | ((bytes[o + 1] as u32) << 8)
+                    | (bytes[o + 2] as u32);
+            }
+        }
+        _ => return Err(DecodeError::UnsupportedFormat),
+    }
+
+    Ok(())
+}
+
+// ============================================================================
+// JPEG DECODER (zune-jpeg, allocation-based)
+// ============================================================================
+
+/// Decode a JPEG image to ARGB32 pixels.
+///
+/// # Safety / Security
+///
+/// This allocates via the global allocator. In this crate that is the
+/// [`crate::bounded_alloc::BoundedBumpAllocator`], so total allocation is
+/// hard-capped. Call only through [`crate::secure_decode`], which validates
+/// the header and checks the memory budget *before* invoking the decoder.
+pub fn decode_jpeg(data: &[u8], output: &mut [u32]) -> Result<(u32, u32), DecodeError> {
+    use zune_jpeg::JpegDecoder;
+
+    let mut decoder = JpegDecoder::new(data);
+    let pixels = decoder.decode().map_err(|_| DecodeError::CorruptedData)?;
+    let info = decoder.info().ok_or(DecodeError::InvalidHeader)?;
+
+    let width = info.width as u32;
+    let height = info.height as u32;
+    let pixel_count = (width as usize) * (height as usize);
+    if pixel_count == 0 {
+        return Err(DecodeError::InvalidDimensions);
+    }
+
+    // Derive channel count from the produced buffer (1=gray, 3=RGB).
+    let channels = pixels.len() / pixel_count;
+    pack_to_argb(&pixels, channels, width, height, output)?;
+
+    Ok((width, height))
+}
+
+// ============================================================================
+// PNG DECODER (zune-png, allocation-based)
+// ============================================================================
+
+/// Decode a PNG image to ARGB32 pixels.
+///
+/// See [`decode_jpeg`] for the allocation/security contract; the same applies
+/// here (PNG inflate uses the bounded global heap).
+pub fn decode_png(data: &[u8], output: &mut [u32]) -> Result<(u32, u32), DecodeError> {
+    use zune_png::PngDecoder;
+
+    let mut decoder = PngDecoder::new(data);
+    let pixels = decoder.decode_raw().map_err(|_| DecodeError::CorruptedData)?;
+    let (w, h) = decoder.get_dimensions().ok_or(DecodeError::InvalidHeader)?;
+
+    let width = w as u32;
+    let height = h as u32;
+    let pixel_count = w * h;
+    if pixel_count == 0 {
+        return Err(DecodeError::InvalidDimensions);
+    }
+
+    // Channels from buffer length (1=gray, 2=gray+alpha, 3=RGB, 4=RGBA).
+    let channels = pixels.len() / pixel_count;
+    // Map gray+alpha (2) down to grayscale by ignoring alpha bytes.
+    if channels == 2 {
+        // Repack: take every first byte of each 2-byte pair as luma.
+        let pc = pixel_count;
+        if output.len() < pc {
+            return Err(DecodeError::BufferTooSmall);
+        }
+        if pixels.len() < pc * 2 {
+            return Err(DecodeError::CorruptedData);
+        }
+        for i in 0..pc {
+            let v = pixels[i * 2] as u32;
+            output[i] = 0xFF00_0000 | (v << 16) | (v << 8) | v;
+        }
+        return Ok((width, height));
+    }
+
+    pack_to_argb(&pixels, channels, width, height, output)?;
+    Ok((width, height))
+}
+
+// ============================================================================
 // QOI DECODER (inline, no dependencies, no allocation)
 // ============================================================================
 
