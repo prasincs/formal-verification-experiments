@@ -74,12 +74,19 @@ else ifeq ($(ARCH),riscv64)
     CARGO_TARGET := riscv64gc-sel4-microkit
 endif
 
+# Newer nightlies (>= 2026-06) gate custom target specs: name-based lookup
+# via RUST_TARGET_PATH is rejected by rustc outright, and .json paths need
+# an explicit cargo opt-in. Pass the spec by path and probe for the flag so
+# older nightlies keep working.
+JSON_TARGET_SPEC_FLAG := $(shell cargo +nightly build -Zjson-target-spec --help >/dev/null 2>&1 && echo -Zjson-target-spec)
+
 # Build the Rust protection domain
 $(PD_ELF): src/main.rs Cargo.toml $(TARGET_SPEC) | $(BUILD_DIR)
 	@echo "Building Rust protection domain for $(ARCH)..."
 	cargo +nightly build \
 		--release \
-		--target $(CARGO_TARGET)
+		--target $(TARGET_SPEC) \
+		$(JSON_TARGET_SPEC_FLAG)
 	cp target/$(CARGO_TARGET)/release/hello.elf $@
 
 $(BUILD_DIR):
