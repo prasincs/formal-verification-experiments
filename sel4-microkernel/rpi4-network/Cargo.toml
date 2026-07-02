@@ -10,11 +10,17 @@ license = "MIT"
 name = "network_pd"
 path = "src/main.rs"
 
+# Minimal ring-protocol client used by the QEMU netdemo product for CI
+[[bin]]
+name = "netclient_pd"
+path = "src/bin/netclient_pd.rs"
+
 [features]
 default = []
 
 # Driver selection (compile-time)
 net-ethernet = []
+net-virtio = []
 net-wifi = []
 
 # IP stack selection

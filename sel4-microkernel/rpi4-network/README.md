@@ -1,16 +1,18 @@
 # RPI4 Network Protection Domain
 
-Network Protection Domain for seL4 Microkit on Raspberry Pi 4.
+Network Protection Domain for seL4 Microkit on Raspberry Pi 4 (and QEMU).
 
 ## Overview
 
-This crate provides isolated network functionality for seL4 systems on RPi4,
-supporting both Ethernet (BCM54213PE) and WiFi (CYW43455) interfaces.
+This crate provides isolated network functionality for seL4 systems,
+supporting Ethernet (BCM54213PE) and WiFi (CYW43455) on RPi4 hardware,
+plus virtio-net on the QEMU virt machine for CI testing.
 
 ## Features
 
 - **Ethernet Support**: Native Gigabit Ethernet via BCM54213PE PHY
 - **WiFi Support**: 802.11ac WiFi via CYW43455 (requires firmware)
+- **Virtio-net Support**: virtio-mmio driver for QEMU (CI testing)
 - **Compile-time Selection**: Choose driver at build time
 - **IP Stack Integration**: Support for lwIP and picoTCP
 
@@ -28,6 +30,28 @@ make PRODUCT=tvdemo PLATFORM=rpi4 ISOLATED=1 NET_DRIVER=wifi sdcard
 
 # Both interfaces
 make PRODUCT=tvdemo PLATFORM=rpi4 ISOLATED=1 NET_DRIVER=both sdcard
+```
+
+### QEMU network demo (virtio-net)
+
+The `netdemo` product boots a two-PD system (Network PD + a minimal ring
+client) on the QEMU virt machine. The client sends an ARP probe through
+the TX ring; QEMU's user-mode network answers, and the reply flows back
+through the RX ring — testing the driver, IRQ routing, and the full IPC
+protocol without hardware. CI runs this on every push.
+
+```bash
+make PRODUCT=netdemo PLATFORM=qemu-aarch64        # build
+make PRODUCT=netdemo PLATFORM=qemu-aarch64 run    # boot in QEMU
+```
+
+Expected output:
+
+```
+Network PD: interface initialized
+netclient: ARP probe sent to 10.0.2.2
+netclient: received frame (64 bytes)
+netclient: ARP reply from 10.0.2.2 (52:55:0a:00:02:02)
 ```
 
 ## Architecture

@@ -179,11 +179,27 @@ pub fn init_network() {
 
 ## Component Layout
 
-- `rpi4-network` — Network PD binary (drivers + ring-buffer server)
+- `rpi4-network` — Network PD binary (drivers + ring-buffer server) and
+  the `netclient_pd` test client for QEMU
 - `rpi4-network-protocol` — shared IPC protocol crate used by the Network
   PD and clients (mirrors the `rpi4-input-protocol` pattern)
 - `rpi4-graphics` `network` feature — client that drains the RX ring and
   reads link state (enabled automatically when `NET_DRIVER` is set)
+
+## CI Testing (QEMU virtio-net)
+
+QEMU cannot emulate the RPi4's GENET or CYW43455, so the drivers above
+need real hardware. To keep the rest of the stack testable in CI, the
+`netdemo` product (`PLATFORM=qemu-aarch64`) pairs the Network PD with a
+virtio-net driver (`net-virtio` feature, legacy virtio-mmio) and a
+minimal client PD. The client ARP-probes QEMU's user-network gateway
+through the shared-memory rings and logs the reply, covering:
+
+- driver init, TX/RX virtqueues, and IRQ routing (GIC SPI 79)
+- the full client -> TX ring -> driver -> QEMU -> RX ring -> client path
+
+The `qemu-netdemo` job in `.github/workflows/qemu-mockpi.yml` runs this
+boot test on every push.
 
 ## Implementation Roadmap
 

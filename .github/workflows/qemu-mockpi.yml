@@ -124,6 +124,122 @@ jobs:
           path: sel4-microkernel/microkit-hello/boot.log
           retention-days: 7
 
+  # End-to-end network test: virtio-net driver + shared-memory ring protocol.
+  # A client PD sends an ARP probe through the Network PD's TX ring; QEMU's
+  # user-mode network (slirp) answers; the reply flows back through the RX
+  # ring. Verifies the driver, IRQ routing, and the full IPC protocol.
+  qemu-netdemo:
+    name: Network Test (netdemo, virtio-net)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            qemu-system-arm \
+            gcc-aarch64-linux-gnu
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rust-src
+
+      - name: Cache Microkit SDK
+        id: cache-microkit
+        uses: actions/cache@v4
+        with:
+          path: /opt/microkit-sdk
+          key: microkit-sdk-${{ env.MICROKIT_VERSION }}-linux-x86-64
+
+      - name: Download Microkit SDK
+        if: steps.cache-microkit.outputs.cache-hit != 'true'
+        run: |
+          curl -L -o /tmp/microkit-sdk.tar.gz \
+            "https://github.com/seL4/microkit/releases/download/${{ env.MICROKIT_VERSION }}/microkit-sdk-${{ env.MICROKIT_VERSION }}-linux-x86-64.tar.gz"
+
+          echo "${{ env.MICROKIT_SDK_SHA256 }}  /tmp/microkit-sdk.tar.gz" | sha256sum -c -
+
+          sudo mkdir -p /opt/microkit-sdk
+          sudo tar -xzf /tmp/microkit-sdk.tar.gz -C /opt/microkit-sdk --strip-components=1
+          rm /tmp/microkit-sdk.tar.gz
+
+      - name: Build netdemo
+        working-directory: sel4-microkernel/build-system
+        run: |
+          make PRODUCT=netdemo PLATFORM=qemu-aarch64 \
+            MICROKIT_SDK=/opt/microkit-sdk all
+
+      - name: Boot test with virtio-net
+        working-directory: sel4-microkernel
+        run: |
+          TIMEOUT="${{ github.event.inputs.boot_timeout || '30' }}"
+          echo "=== QEMU Network Boot Test (virtio-net + slirp) ==="
+          echo "Timeout: ${TIMEOUT}s"
+
+          timeout ${TIMEOUT}s qemu-system-aarch64 \
+            -machine virt,virtualization=on \
+            -cpu cortex-a53 \
+            -m 2G \
+            -nographic \
+            -device virtio-net-device,netdev=net0 \
+            -netdev user,id=net0 \
+            -device loader,file=build/qemu-aarch64/netdemo/loader.img,addr=0x70000000,cpu-num=0 \
+            2>&1 | tee netdemo-boot.log || true
+
+      - name: Verify network test results
+        working-directory: sel4-microkernel
+        run: |
+          echo "=== Checking network test markers ==="
+          PASS=true
+
+          if grep -q "Network PD: interface initialized" netdemo-boot.log; then
+            echo "✓ virtio-net driver initialized"
+          else
+            echo "✗ virtio-net driver NOT initialized"
+            PASS=false
+          fi
+
+          if grep -q "netclient: ARP probe sent" netdemo-boot.log; then
+            echo "✓ client sent ARP probe via TX ring"
+          else
+            echo "✗ client did NOT send ARP probe"
+            PASS=false
+          fi
+
+          if grep -q "netclient: received frame" netdemo-boot.log; then
+            echo "✓ client received frame via RX ring"
+          else
+            echo "✗ client did NOT receive any frame"
+            PASS=false
+          fi
+
+          if grep -q "netclient: ARP reply from 10.0.2.2" netdemo-boot.log; then
+            echo "✓ ARP reply from QEMU gateway decoded"
+          else
+            echo "✗ ARP reply NOT received"
+            PASS=false
+          fi
+
+          if [ "$PASS" = true ]; then
+            echo "=== NETWORK TEST PASSED ==="
+          else
+            echo "=== NETWORK TEST FAILED ==="
+            cat netdemo-boot.log
+            exit 1
+          fi
+
+      - name: Upload boot log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: netdemo-boot-log
+          path: sel4-microkernel/netdemo-boot.log
+          retention-days: 7
+
   # RPi4 graphics image boot test with TPM 2.0
   # Note: VideoCore framebuffer won't work in QEMU, but we can verify:
   # - Kernel boots

@@ -7,6 +7,7 @@ THIS_MAKEFILE := $(lastword $(MAKEFILE_LIST))
 # Products:
 #   graphics    - RPi4 HDMI framebuffer demo
 #   hello       - Hello World for QEMU
+#   netdemo     - Virtio network demo for QEMU (CI network testing)
 #   tvdemo      - TV Demo with input (RPi4)
 #   tpmtest     - TPM 2.0 boot verification test (RPi4 + TPM module)
 #
@@ -39,7 +40,7 @@ THIS_MAKEFILE := $(lastword $(MAKEFILE_LIST))
 
 # Validate required parameters
 ifndef PRODUCT
-$(error PRODUCT is required. Use: make PRODUCT=<graphics|hello|tvdemo> PLATFORM=<platform>)
+$(error PRODUCT is required. Use: make PRODUCT=<graphics|hello|netdemo|tvdemo> PLATFORM=<platform>)
 endif
 
 ifndef PLATFORM
@@ -60,7 +61,7 @@ include $(PLATFORM_MK)
 # Load product configuration
 PRODUCT_MK := config/products/$(PRODUCT).mk
 ifeq ($(wildcard $(PRODUCT_MK)),)
-$(error Unknown product: $(PRODUCT). Available: graphics, hello, tvdemo)
+$(error Unknown product: $(PRODUCT). Available: graphics, hello, netdemo, tvdemo)
 endif
 include $(PRODUCT_MK)
 

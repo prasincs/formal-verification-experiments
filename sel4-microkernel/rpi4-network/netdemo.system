@@ -1,0 +1,83 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+    seL4 Microkit System Description - Virtio Network Demo (QEMU virt)
+
+    Two Protection Domain architecture for CI network testing:
+    - Network PD: virtio-net driver + shared-memory ring server
+    - Netclient PD: minimal client exercising the ring protocol
+      (sends an ARP probe, logs received frames)
+
+    Run with:
+      qemu-system-aarch64 -machine virt,virtualization=on -cpu cortex-a53 \
+        -m 2G -nographic \
+        -device virtio-net-device,netdev=net0 -netdev user,id=net0 \
+        -device loader,file=loader.img,addr=0x70000000,cpu-num=0
+
+    QEMU assigns the single virtio-net-device to the LAST virtio-mmio
+    transport: slot 31 at 0x0a003e00, GIC SPI 16+31 -> IRQ 79 (verified
+    with `info qtree`). The driver probes the whole window for the device,
+    but the IRQ declared below must match that slot.
+
+    Build with: make PRODUCT=netdemo PLATFORM=qemu-aarch64
+-->
+<system>
+    <!--
+        Network Protection Domain (priority 200 - runs first, so its init
+        publishes MAC/link state before the client's init reads it)
+    -->
+    <protection_domain name="network" priority="200">
+        <program_image path="network_pd.elf" />
+
+        <!-- All 32 virtio-mmio transports (0x200 bytes each) -->
+        <map mr="virtio_mmio" vaddr="0x5_0900_0000" perms="rw" cached="false" />
+
+        <!-- Virtqueues + packet buffers (fixed phys addr, uncached) -->
+        <map mr="net_dma" vaddr="0x5_0800_0000" perms="rw" cached="false" />
+
+        <!-- Shared ring buffers for IPC with the client -->
+        <map mr="net_ring" vaddr="0x5_0700_0000" perms="rw" cached="false" />
+
+        <!-- Virtio-mmio transport slot 31 interrupt (GIC SPI 16+31) -->
+        <irq irq="79" id="1" />
+    </protection_domain>
+
+    <!--
+        Network Client Protection Domain (priority 150)
+
+        Only sees the shared ring region - no device access. Sends an ARP
+        probe through the TX ring at init and logs frames from the RX ring.
+    -->
+    <protection_domain name="netclient" priority="150">
+        <program_image path="netclient_pd.elf" />
+
+        <map mr="net_ring" vaddr="0x5_0700_0000" perms="rw" cached="false" />
+    </protection_domain>
+
+    <!--
+        Memory Regions
+    -->
+
+    <!-- Virtio-mmio transport window on the QEMU virt machine -->
+    <memory_region name="virtio_mmio" size="0x4000" phys_addr="0xa000000" />
+
+    <!-- DMA region for virtqueues and packet buffers (1MB).
+         Fixed phys addr in guest RAM (RAM starts at 0x40000000 with -m 2G;
+         the Microkit loader image loads at 0x70000000, kernel at
+         0x60000000) - 0x50000000 is clear of both. The Microkit tool
+         validates this against the kernel's untypeds at build time. -->
+    <memory_region name="net_dma" size="0x100000" phys_addr="0x50000000" />
+
+    <!-- Network shared memory rings (256KB, allocated by Microkit) -->
+    <memory_region name="net_ring" size="0x40000" />
+
+    <!--
+        IPC Channels
+    -->
+
+    <!-- Channel 2: Network PD <-> client (matches NET_CLIENT_CHANNEL_ID) -->
+    <channel>
+        <end pd="network" id="2" />
+        <end pd="netclient" id="2" />
+    </channel>
+
+</system>

@@ -1,14 +1,36 @@
-//! Network drivers for Raspberry Pi 4
+//! Network drivers
 //!
-//! This module provides hardware drivers for the RPi4's network interfaces:
-//! - `ethernet`: BCM54213PE Gigabit Ethernet (native SoC)
-//! - `wifi`: CYW43455 WiFi/Bluetooth (SDIO)
+//! Hardware drivers for the network interfaces supported by the Network PD:
+//! - `ethernet`: BCM54213PE Gigabit Ethernet (RPi4 native SoC)
+//! - `wifi`: CYW43455 WiFi/Bluetooth (RPi4, SDIO)
+//! - `virtio_net`: virtio-net over MMIO (QEMU virt machine, for CI testing)
 
 #[cfg(feature = "net-ethernet")]
 pub mod ethernet;
 
+#[cfg(feature = "net-virtio")]
+pub mod virtio_net;
+
 #[cfg(feature = "net-wifi")]
 pub mod wifi;
+
+/// A physically-contiguous, uncached memory region used for DMA packet
+/// buffers and (for virtio) virtqueue rings.
+///
+/// The region must be mapped into the protection domain (giving `vaddr`)
+/// and backed by a fixed physical address (`paddr`) declared in the
+/// Microkit system description. Each driver defines its own layout inside
+/// the region.
+#[cfg(any(feature = "net-ethernet", feature = "net-virtio"))]
+#[derive(Debug, Clone, Copy)]
+pub struct DmaRegion {
+    /// Virtual address of the region as mapped into this PD
+    pub vaddr: usize,
+    /// Physical address of the region (what the device sees)
+    pub paddr: usize,
+    /// Size of the region in bytes
+    pub size: usize,
+}
 
 /// Common error types for network drivers
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

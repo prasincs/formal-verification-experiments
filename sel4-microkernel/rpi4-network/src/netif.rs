@@ -1,12 +1,15 @@
 //! Network Interface Abstraction
 //!
 //! This module provides a unified interface for network operations,
-//! abstracting over the underlying driver (Ethernet or WiFi).
+//! abstracting over the underlying driver (Ethernet, virtio-net, or WiFi).
 
 use crate::drivers::{DriverStats, LinkStatus, MacAddress};
 
 #[cfg(feature = "net-ethernet")]
 use crate::drivers::ethernet::EthernetDriver;
+
+#[cfg(feature = "net-virtio")]
+use crate::drivers::virtio_net::VirtioNetDriver;
 
 #[cfg(feature = "net-wifi")]
 use crate::drivers::wifi::WifiDriver;
@@ -39,7 +42,16 @@ pub struct NetifConfig {
     pub ethernet_base: usize,
     /// DMA packet buffer region for Ethernet (vaddr, paddr, size)
     #[cfg(feature = "net-ethernet")]
-    pub ethernet_dma: crate::drivers::ethernet::DmaRegion,
+    pub ethernet_dma: crate::drivers::DmaRegion,
+    /// Mapped virtio-mmio transport window (all transports)
+    #[cfg(feature = "net-virtio")]
+    pub virtio_scan_base: usize,
+    /// Size of the virtio-mmio window in bytes
+    #[cfg(feature = "net-virtio")]
+    pub virtio_scan_size: usize,
+    /// DMA region for virtqueues + packet buffers (vaddr, paddr, size)
+    #[cfg(feature = "net-virtio")]
+    pub virtio_dma: crate::drivers::DmaRegion,
     /// SDIO controller register base (WiFi)
     #[cfg(feature = "net-wifi")]
     pub sdio_base: usize,
@@ -53,6 +65,10 @@ pub struct NetworkInterface {
     /// Ethernet driver (if enabled)
     #[cfg(feature = "net-ethernet")]
     pub ethernet: Option<EthernetDriver>,
+
+    /// Virtio-net driver (if enabled)
+    #[cfg(feature = "net-virtio")]
+    pub virtio: Option<VirtioNetDriver>,
 
     /// WiFi driver (if enabled)
     #[cfg(feature = "net-wifi")]
@@ -68,6 +84,8 @@ enum ActiveInterface {
     None,
     #[cfg(feature = "net-ethernet")]
     Ethernet,
+    #[cfg(feature = "net-virtio")]
+    Virtio,
     #[cfg(feature = "net-wifi")]
     Wifi,
 }
@@ -78,6 +96,8 @@ impl NetworkInterface {
         Self {
             #[cfg(feature = "net-ethernet")]
             ethernet: None,
+            #[cfg(feature = "net-virtio")]
+            virtio: None,
             #[cfg(feature = "net-wifi")]
             wifi: None,
             active: ActiveInterface::None,
@@ -110,6 +130,25 @@ impl NetworkInterface {
             }
         }
 
+        // Try virtio-net (QEMU virt machine)
+        #[cfg(feature = "net-virtio")]
+        {
+            match VirtioNetDriver::init(
+                config.virtio_scan_base,
+                config.virtio_scan_size,
+                config.virtio_dma,
+            ) {
+                Ok(driver) => {
+                    self.virtio = Some(driver);
+                    self.active = ActiveInterface::Virtio;
+                    return Ok(());
+                }
+                Err(_) => {
+                    // Virtio probe failed, try WiFi if available
+                }
+            }
+        }
+
         // Try WiFi
         #[cfg(feature = "net-wifi")]
         {
@@ -138,6 +177,10 @@ impl NetworkInterface {
             ActiveInterface::Ethernet => {
                 self.ethernet.as_ref().map(|d| d.mac_address()).ok_or(NetifError::NoInterface)
             }
+            #[cfg(feature = "net-virtio")]
+            ActiveInterface::Virtio => {
+                self.virtio.as_ref().map(|d| d.mac_address()).ok_or(NetifError::NoInterface)
+            }
             #[cfg(feature = "net-wifi")]
             ActiveInterface::Wifi => {
                 self.wifi.as_ref().map(|d| d.mac_address()).ok_or(NetifError::NoInterface)
@@ -155,6 +198,10 @@ impl NetworkInterface {
             ActiveInterface::Ethernet => {
                 self.ethernet.as_ref().map(|d| d.link_status()).ok_or(NetifError::NoInterface)
             }
+            #[cfg(feature = "net-virtio")]
+            ActiveInterface::Virtio => {
+                self.virtio.as_ref().map(|d| d.link_status()).ok_or(NetifError::NoInterface)
+            }
             #[cfg(feature = "net-wifi")]
             ActiveInterface::Wifi => {
                 self.wifi.as_ref().map(|d| d.link_status()).ok_or(NetifError::NoInterface)
@@ -171,6 +218,14 @@ impl NetworkInterface {
             #[cfg(feature = "net-ethernet")]
             ActiveInterface::Ethernet => {
                 self.ethernet
+                    .as_mut()
+                    .ok_or(NetifError::NoInterface)?
+                    .transmit(packet)
+                    .map_err(|_| NetifError::TransmitFailed)
+            }
+            #[cfg(feature = "net-virtio")]
+            ActiveInterface::Virtio => {
+                self.virtio
                     .as_mut()
                     .ok_or(NetifError::NoInterface)?
                     .transmit(packet)
@@ -201,6 +256,14 @@ impl NetworkInterface {
                     .receive(buffer)
                     .map_err(|_| NetifError::ReceiveFailed)
             }
+            #[cfg(feature = "net-virtio")]
+            ActiveInterface::Virtio => {
+                self.virtio
+                    .as_mut()
+                    .ok_or(NetifError::NoInterface)?
+                    .receive(buffer)
+                    .map_err(|_| NetifError::ReceiveFailed)
+            }
             #[cfg(feature = "net-wifi")]
             ActiveInterface::Wifi => {
                 self.wifi
@@ -224,6 +287,12 @@ impl NetworkInterface {
                     eth.handle_irq();
                 }
             }
+            #[cfg(feature = "net-virtio")]
+            ActiveInterface::Virtio => {
+                if let Some(ref mut vnet) = self.virtio {
+                    vnet.handle_irq();
+                }
+            }
             #[cfg(feature = "net-wifi")]
             ActiveInterface::Wifi => {
                 if let Some(ref mut wifi) = self.wifi {
@@ -242,6 +311,10 @@ impl NetworkInterface {
             #[cfg(feature = "net-ethernet")]
             ActiveInterface::Ethernet => {
                 self.ethernet.as_ref().map(|d| d.stats()).ok_or(NetifError::NoInterface)
+            }
+            #[cfg(feature = "net-virtio")]
+            ActiveInterface::Virtio => {
+                self.virtio.as_ref().map(|d| d.stats()).ok_or(NetifError::NoInterface)
             }
             #[cfg(feature = "net-wifi")]
             ActiveInterface::Wifi => {

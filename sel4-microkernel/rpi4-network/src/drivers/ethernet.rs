@@ -43,7 +43,7 @@
 //! - Linux driver: drivers/net/ethernet/broadcom/genet/ (bcmgenet.c/.h)
 //! - Circle bare metal: https://github.com/rsta2/circle/blob/master/lib/bcm54213.cpp
 
-use super::{DriverError, DriverStats, LinkSpeed, LinkStatus, MacAddress, NetworkDriver};
+use super::{DmaRegion, DriverError, DriverStats, LinkSpeed, LinkStatus, MacAddress, NetworkDriver};
 
 /// GENET register offsets
 ///
@@ -242,44 +242,29 @@ const ETH_ZLEN: usize = 60;
 /// Maximum frame length accepted for transmit / programmed into the UniMAC.
 const ETH_MAX_FRAME_LEN: usize = 1518;
 
-/// A physically-contiguous, uncached memory region used for DMA packet
-/// buffers.
-///
-/// The region must be mapped into the protection domain (giving `vaddr`)
-/// and backed by a fixed physical address (`paddr`) declared in the Microkit
-/// system description. For the tvdemo network PD this is the `net_dma`
-/// region: paddr `0x3e700000`, vaddr `0x5_0800_0000`, size 1MiB — but the
-/// driver takes whatever it is given and never hardcodes those values.
-#[derive(Debug, Clone, Copy)]
-pub struct DmaRegion {
-    /// Virtual address of the region as mapped into this PD
-    pub vaddr: usize,
-    /// Physical address of the region (what the GENET DMA engines see)
-    pub paddr: usize,
-    /// Size of the region in bytes (needs >= 1MiB for 256+256 2KiB buffers)
-    pub size: usize,
+// GENET layout inside the shared DmaRegion (see super::DmaRegion). For the
+// tvdemo network PD this is the `net_dma` region: paddr `0x3e700000`, vaddr
+// `0x5_0800_0000`, size 1MiB (>= 256+256 2KiB buffers) — but the driver
+// takes whatever it is given and never hardcodes those values.
+
+/// Virtual address of RX buffer `slot`
+fn rx_buf_vaddr(region: &DmaRegion, slot: usize) -> usize {
+    region.vaddr + slot * regs::BUF_LENGTH
 }
 
-impl DmaRegion {
-    /// Virtual address of RX buffer `slot`
-    fn rx_buf_vaddr(&self, slot: usize) -> usize {
-        self.vaddr + slot * regs::BUF_LENGTH
-    }
+/// Physical address of RX buffer `slot`
+fn rx_buf_paddr(region: &DmaRegion, slot: usize) -> usize {
+    region.paddr + slot * regs::BUF_LENGTH
+}
 
-    /// Physical address of RX buffer `slot`
-    fn rx_buf_paddr(&self, slot: usize) -> usize {
-        self.paddr + slot * regs::BUF_LENGTH
-    }
+/// Virtual address of TX buffer `slot` (TX half follows the RX half)
+fn tx_buf_vaddr(region: &DmaRegion, slot: usize) -> usize {
+    region.vaddr + (regs::TOTAL_DESC + slot) * regs::BUF_LENGTH
+}
 
-    /// Virtual address of TX buffer `slot` (TX half follows the RX half)
-    fn tx_buf_vaddr(&self, slot: usize) -> usize {
-        self.vaddr + (regs::TOTAL_DESC + slot) * regs::BUF_LENGTH
-    }
-
-    /// Physical address of TX buffer `slot`
-    fn tx_buf_paddr(&self, slot: usize) -> usize {
-        self.paddr + (regs::TOTAL_DESC + slot) * regs::BUF_LENGTH
-    }
+/// Physical address of TX buffer `slot`
+fn tx_buf_paddr(region: &DmaRegion, slot: usize) -> usize {
+    region.paddr + (regs::TOTAL_DESC + slot) * regs::BUF_LENGTH
 }
 
 /// Runtime DMA ring state (present once `attach_dma` has succeeded)
@@ -646,7 +631,7 @@ impl EthernetDriver {
         // ------------------------------------------------------------------
         for i in 0..regs::TOTAL_DESC {
             // RX descriptor i -> RX buffer i
-            let rx_paddr = region.rx_buf_paddr(i) as u64;
+            let rx_paddr = rx_buf_paddr(&region, i) as u64;
             let off = Self::rx_desc_off(i);
             self.write_reg(off + regs::DMA_DESC_ADDRESS_LO, rx_paddr as u32);
             self.write_reg(off + regs::DMA_DESC_ADDRESS_HI, (rx_paddr >> 32) as u32);
@@ -659,7 +644,7 @@ impl EthernetDriver {
 
             // TX descriptor i -> TX buffer i (address programmed again on
             // every transmit; cleared here for a known-good initial state)
-            let tx_paddr = region.tx_buf_paddr(i) as u64;
+            let tx_paddr = tx_buf_paddr(&region, i) as u64;
             let off = Self::tx_desc_off(i);
             self.write_reg(off + regs::DMA_DESC_ADDRESS_LO, tx_paddr as u32);
             self.write_reg(off + regs::DMA_DESC_ADDRESS_HI, (tx_paddr >> 32) as u32);
@@ -821,7 +806,7 @@ impl NetworkDriver for EthernetDriver {
 
         // Copy the frame into the DMA buffer, zero-padding runts to the
         // 60-byte minimum (the hardware appends the 4-byte FCS).
-        let buf = region.tx_buf_vaddr(slot) as *mut u8;
+        let buf = tx_buf_vaddr(&region, slot) as *mut u8;
         let len = packet.len().max(ETH_ZLEN);
         // Safety: `buf` points into the attached, mapped DMA region and
         // `len <= 1518 < BUF_LENGTH`.
@@ -834,7 +819,7 @@ impl NetworkDriver for EthernetDriver {
 
         // Fill the TX descriptor: single-fragment frame, append CRC.
         // QTAG 0x3F at shift 7 matches Linux/Circle for the default ring.
-        let paddr = region.tx_buf_paddr(slot) as u64;
+        let paddr = tx_buf_paddr(&region, slot) as u64;
         let length_status = ((len as u32) << regs::DMA_BUFLENGTH_SHIFT)
             | (0x3f << regs::DMA_TX_QTAG_SHIFT)
             | regs::DMA_TX_APPEND_CRC
@@ -909,7 +894,7 @@ impl NetworkDriver for EthernetDriver {
         } else {
             // Safety: `src` points into the attached, mapped DMA region and
             // `len <= BUF_LENGTH`; `buffer` bounds were checked above.
-            let src = region.rx_buf_vaddr(slot) as *const u8;
+            let src = rx_buf_vaddr(&region, slot) as *const u8;
             unsafe {
                 core::ptr::copy_nonoverlapping(src, buffer.as_mut_ptr(), len);
             }
@@ -919,7 +904,7 @@ impl NetworkDriver for EthernetDriver {
         }
 
         // Restore the descriptor for reuse by hardware
-        let paddr = region.rx_buf_paddr(slot) as u64;
+        let paddr = rx_buf_paddr(&region, slot) as u64;
         let rx_cons = rx_cons.wrapping_add(1);
         if let Some(dma) = self.dma.as_mut() {
             dma.rx_cons = rx_cons;

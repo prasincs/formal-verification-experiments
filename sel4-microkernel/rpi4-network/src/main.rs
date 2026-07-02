@@ -7,11 +7,12 @@
 //!
 //! Enable drivers and stack via Cargo features:
 //! - `net-ethernet`: BCM54213PE Gigabit Ethernet
+//! - `net-virtio`: virtio-net over MMIO (QEMU virt machine)
 //! - `net-wifi`: CYW43455 WiFi (SDIO)
 //! - `net-stack-lwip`: lwIP TCP/IP stack
 //! - `net-stack-picotcp`: picoTCP stack
 //!
-//! # Memory map (must match tvdemo-network.system)
+//! # Memory map — RPi4 (must match tvdemo-network.system)
 //!
 //! | Region      | Virtual address | Physical address |
 //! |-------------|-----------------|------------------|
@@ -19,6 +20,14 @@
 //! | SDIO regs   | 0x5_0600_0000   | 0xFE340000       |
 //! | Net ring    | 0x5_0700_0000   | (allocated)      |
 //! | Net DMA     | 0x5_0800_0000   | 0x3E700000       |
+//!
+//! # Memory map — QEMU virt (must match netdemo.system)
+//!
+//! | Region      | Virtual address | Physical address |
+//! |-------------|-----------------|------------------|
+//! | virtio-mmio | 0x5_0900_0000   | 0x0A000000       |
+//! | Net ring    | 0x5_0700_0000   | (allocated)      |
+//! | Net DMA     | 0x5_0800_0000   | 0x50000000       |
 
 #![no_std]
 #![no_main]
@@ -45,6 +54,22 @@ const NET_DMA_VADDR: usize = 0x5_0800_0000;
 const NET_DMA_PADDR: usize = 0x3e70_0000;
 #[cfg(feature = "net-ethernet")]
 const NET_DMA_SIZE: usize = 0x10_0000;
+
+/// Virtio-mmio transport window on the QEMU virt machine (32 transports
+/// of 0x200 bytes at phys 0x0a000000; must match netdemo.system)
+#[cfg(feature = "net-virtio")]
+const VIRTIO_MMIO_VADDR: usize = 0x5_0900_0000;
+#[cfg(feature = "net-virtio")]
+const VIRTIO_MMIO_SIZE: usize = 0x4000;
+
+/// Virtio DMA region for virtqueues and packet buffers (must match the
+/// net_dma region in netdemo.system: fixed phys addr in guest RAM, 1MiB)
+#[cfg(feature = "net-virtio")]
+const VIRTIO_DMA_VADDR: usize = 0x5_0800_0000;
+#[cfg(feature = "net-virtio")]
+const VIRTIO_DMA_PADDR: usize = 0x5000_0000;
+#[cfg(feature = "net-virtio")]
+const VIRTIO_DMA_SIZE: usize = 0x10_0000;
 
 /// SDIO registers for WiFi, mapped by Microkit
 /// NOTE: requires the sdio_regs mapping in the system description
@@ -164,10 +189,20 @@ fn init() -> NetworkPdHandler {
         #[cfg(feature = "net-ethernet")]
         ethernet_base: GENET_VADDR,
         #[cfg(feature = "net-ethernet")]
-        ethernet_dma: drivers::ethernet::DmaRegion {
+        ethernet_dma: drivers::DmaRegion {
             vaddr: NET_DMA_VADDR,
             paddr: NET_DMA_PADDR,
             size: NET_DMA_SIZE,
+        },
+        #[cfg(feature = "net-virtio")]
+        virtio_scan_base: VIRTIO_MMIO_VADDR,
+        #[cfg(feature = "net-virtio")]
+        virtio_scan_size: VIRTIO_MMIO_SIZE,
+        #[cfg(feature = "net-virtio")]
+        virtio_dma: drivers::DmaRegion {
+            vaddr: VIRTIO_DMA_VADDR,
+            paddr: VIRTIO_DMA_PADDR,
+            size: VIRTIO_DMA_SIZE,
         },
         #[cfg(feature = "net-wifi")]
         sdio_base: SDIO_VADDR,
