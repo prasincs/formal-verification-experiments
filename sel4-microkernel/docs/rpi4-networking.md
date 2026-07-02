@@ -2,6 +2,9 @@
 
 This document describes networking options for seL4 Microkit on Raspberry Pi 4, comparing Ethernet and WiFi approaches, and explaining the compile-time configuration system.
 
+> Work tracking: see the [Networking Roadmap](networking-roadmap.md) for
+> per-phase status, open items, and the testing matrix.
+
 ## Hardware Overview
 
 The Raspberry Pi 4 Model B includes two networking interfaces:
@@ -203,19 +206,11 @@ boot test on every push.
 
 ## Implementation Roadmap
 
-### Phase 1: Ethernet Driver (done, pending hardware validation)
-1. ~~Implement BCM54213PE PHY initialization~~
-2. ~~Implement GENET controller driver (DMA rings, INTRL2 interrupts)~~
-3. ~~Create Network PD with IPC interface~~
-4. Integrate an IP stack (lwIP/picoTCP/smoltcp) — not yet implemented
-5. Validate on real RPi4 hardware
-
-### Phase 2: WiFi Driver (Optional)
-1. Implement SDIO bus driver (Arasan)
-2. Firmware blob loading
-3. BCDC protocol
-4. Basic open network support
-5. WPA supplicant integration (complex)
+Tracked in the dedicated [Networking Roadmap](networking-roadmap.md) —
+phase status, open items with code locations, and the testing matrix.
+Summary: foundations, the GENET Ethernet driver, and QEMU/CI testing are
+complete; the IP stack (Phase 4) is next; hardware validation, WiFi, and
+formal verification of the ring protocol follow.
 
 ## Security Considerations
 
