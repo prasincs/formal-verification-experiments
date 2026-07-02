@@ -18,24 +18,33 @@
 //! | GENET regs  | 0x5_0500_0000   | 0xFD580000       |
 //! | SDIO regs   | 0x5_0600_0000   | 0xFE340000       |
 //! | Net ring    | 0x5_0700_0000   | (allocated)      |
+//! | Net DMA     | 0x5_0800_0000   | 0x3E700000       |
 
 #![no_std]
 #![no_main]
 
 mod drivers;
 mod netif;
-mod protocol;
 
 use core::fmt;
 
 use sel4_microkit::{debug_println, protection_domain, Channel, ChannelSet, Handler};
 
 use netif::{NetifConfig, NetworkInterface};
-use protocol::{ring_flags, NetSharedMemory, RING_SIZE};
+use rpi4_network_protocol::{ring_flags, NetSharedMemory, NET_CLIENT_CHANNEL_ID, RING_SIZE};
 
 /// GENET (Ethernet) registers, mapped by Microkit
 #[cfg(feature = "net-ethernet")]
 const GENET_VADDR: usize = 0x5_0500_0000;
+
+/// GENET DMA packet buffer region (must match the net_dma region in
+/// tvdemo-network.system: mapped at this vaddr, fixed phys addr, 1MiB)
+#[cfg(feature = "net-ethernet")]
+const NET_DMA_VADDR: usize = 0x5_0800_0000;
+#[cfg(feature = "net-ethernet")]
+const NET_DMA_PADDR: usize = 0x3e70_0000;
+#[cfg(feature = "net-ethernet")]
+const NET_DMA_SIZE: usize = 0x10_0000;
 
 /// SDIO registers for WiFi, mapped by Microkit
 /// NOTE: requires the sdio_regs mapping in the system description
@@ -50,11 +59,10 @@ const GPIO_VADDR: usize = 0x5_0610_0000;
 /// Shared memory with client PDs, mapped by Microkit
 const NET_RING_VADDR: usize = 0x5_0700_0000;
 
-/// Channel IDs (must match tvdemo-network.system)
+/// IRQ channel id (must match tvdemo-network.system)
 const NET_IRQ_CHANNEL_ID: usize = 1;
-const CLIENT_CHANNEL_ID: usize = 2;
 
-const CLIENT_CHANNEL: Channel = Channel::new(CLIENT_CHANNEL_ID);
+const CLIENT_CHANNEL: Channel = Channel::new(NET_CLIENT_CHANNEL_ID);
 const NET_IRQ_CHANNEL: Channel = Channel::new(NET_IRQ_CHANNEL_ID);
 
 /// Network PD handler
@@ -155,6 +163,12 @@ fn init() -> NetworkPdHandler {
     let config = NetifConfig {
         #[cfg(feature = "net-ethernet")]
         ethernet_base: GENET_VADDR,
+        #[cfg(feature = "net-ethernet")]
+        ethernet_dma: drivers::ethernet::DmaRegion {
+            vaddr: NET_DMA_VADDR,
+            paddr: NET_DMA_PADDR,
+            size: NET_DMA_SIZE,
+        },
         #[cfg(feature = "net-wifi")]
         sdio_base: SDIO_VADDR,
         #[cfg(feature = "net-wifi")]

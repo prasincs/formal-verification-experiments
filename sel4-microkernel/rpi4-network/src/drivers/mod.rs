@@ -23,6 +23,8 @@ pub enum DriverError {
     Timeout,
     /// Buffer allocation failed
     BufferAllocation,
+    /// DMA buffer region has not been attached (Ethernet: call `attach_dma`)
+    DmaNotAttached,
     /// Link not established
     NoLink,
     /// Firmware loading failed (WiFi only)

@@ -52,6 +52,14 @@ libm = "0.2"
 # Global allocator for no_std (required by fontdue)
 linked_list_allocator = "0.10"
 
+# Shared IPC protocol with the Network PD (client code gated by `network` feature)
+rpi4-network-protocol = { path = "../rpi4-network-protocol" }
+
+[features]
+default = []
+# Enable the network client (consumes the Network PD shared memory ring)
+network = []
+
 [profile.release]
 opt-level = "z"
 lto = true

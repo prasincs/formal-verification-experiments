@@ -59,6 +59,9 @@
         <!-- Network shared memory for IPC with Graphics PD -->
         <map mr="net_ring" vaddr="0x5_0700_0000" perms="rw" cached="false" />
 
+        <!-- GENET DMA packet buffers (fixed phys addr, uncached) -->
+        <map mr="net_dma" vaddr="0x5_0800_0000" perms="rw" cached="false" />
+
         <!-- IRQ for GENET -->
         <irq irq="189" id="1" />
     </protection_domain>
@@ -125,6 +128,13 @@
 
     <!-- DMA buffer for mailbox (4KB) -->
     <memory_region name="dma_buffer" size="0x1000" phys_addr="0x3e875000" />
+
+    <!-- GENET DMA packet buffers (1MB): 256 RX + 256 TX buffers of 2KiB.
+         Fixed phys addr so the driver can program buffer addresses into the
+         DMA descriptors. Placed just below the mailbox dma_buffer
+         (0x3e875000) / framebuffer (0x3e876000) carve-out; assumed free of
+         other reservations - must not overlap them. -->
+    <memory_region name="net_dma" size="0x100000" phys_addr="0x3e700000" />
 
     <!-- Shared input ring buffer (4KB) - allocated by Microkit -->
     <memory_region name="input_ring" size="0x1000" />

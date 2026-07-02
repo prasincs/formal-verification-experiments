@@ -25,6 +25,9 @@ net-stack-picotcp = []
 # sel4-microkit provides the Microkit runtime and API
 sel4-microkit = { git = "https://github.com/seL4/rust-sel4", rev = "3059c2d236bf56b066936dd48d8966255e172c3b" }
 
+# Shared IPC protocol between the Network PD and client PDs
+rpi4-network-protocol = { path = "../rpi4-network-protocol" }
+
 [profile.release]
 opt-level = "z"
 lto = true

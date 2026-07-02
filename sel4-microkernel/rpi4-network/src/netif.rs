@@ -30,12 +30,16 @@ pub enum NetifError {
 
 /// Mapped MMIO base addresses for the enabled drivers
 ///
-/// All addresses are *virtual* addresses as mapped by the Microkit
-/// system description.
+/// Register bases are *virtual* addresses as mapped by the Microkit
+/// system description. The Ethernet DMA region additionally carries its
+/// fixed *physical* address, which the GENET DMA engines require.
 pub struct NetifConfig {
     /// GENET register base (Ethernet)
     #[cfg(feature = "net-ethernet")]
     pub ethernet_base: usize,
+    /// DMA packet buffer region for Ethernet (vaddr, paddr, size)
+    #[cfg(feature = "net-ethernet")]
+    pub ethernet_dma: crate::drivers::ethernet::DmaRegion,
     /// SDIO controller register base (WiFi)
     #[cfg(feature = "net-wifi")]
     pub sdio_base: usize,
@@ -91,7 +95,11 @@ impl NetworkInterface {
         #[cfg(feature = "net-ethernet")]
         {
             match EthernetDriver::init(config.ethernet_base) {
-                Ok(driver) => {
+                Ok(mut driver) => {
+                    // Bring up the TX/RX DMA rings. If this fails the
+                    // interface stays usable for link/MAC queries; TX/RX
+                    // return DriverError::DmaNotAttached.
+                    let _ = driver.attach_dma(config.ethernet_dma);
                     self.ethernet = Some(driver);
                     self.active = ActiveInterface::Ethernet;
                     return Ok(());

@@ -1,6 +1,6 @@
 //! Network IPC Protocol
 //!
-//! This module defines the IPC protocol between the Network PD and client PDs.
+//! This crate defines the IPC protocol between the Network PD and client PDs.
 //! It uses shared memory ring buffers for efficient zero-copy packet transfer.
 //!
 //! # Protocol Overview
@@ -27,6 +27,17 @@
 //! - `NetRequest`: Client → Network PD requests
 //! - `NetResponse`: Network PD → Client responses
 //! - `NetEvent`: Network PD → Client async events
+//!
+//! The virtual address at which the shared ring region is mapped is
+//! per-PD (set in the Microkit system description), so it is deliberately
+//! not part of this crate.
+
+#![no_std]
+
+/// Microkit channel id connecting the Network PD and the client PD.
+///
+/// Must match the channel declared in `tvdemo-network.system`.
+pub const NET_CLIENT_CHANNEL_ID: usize = 2;
 
 /// Maximum packet size (MTU + headers)
 pub const MAX_PACKET_SIZE: usize = 1518;

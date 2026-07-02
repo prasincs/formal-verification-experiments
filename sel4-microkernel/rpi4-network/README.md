@@ -75,15 +75,20 @@ WiFi is more complex and requires proprietary firmware blobs.
 - Base: `0xfe340000`
 - Size: 4KB
 
+### DMA (net_dma region)
+- Base: `0x3e700000` (phys), `0x5_0800_0000` (network PD vaddr)
+- Size: 1MB (256 RX + 256 TX buffers of 2KiB)
+
 ## Implementation Status
 
 ### Ethernet Driver
 - [x] PHY detection and initialization
 - [x] MDIO bus interface
 - [x] Link status detection
-- [ ] DMA ring buffers (TX/RX)
-- [ ] Interrupt handling
-- [ ] Full packet transmission
+- [x] DMA ring buffers (TX/RX, GENET ring 16, ported from Linux bcmgenet)
+- [x] Interrupt handling (INTRL2: RX/TX done, link events)
+- [x] Packet transmission and reception
+- [ ] Hardware validation on a real RPi4
 
 ### WiFi Driver
 - [x] SDIO controller initialization
@@ -102,7 +107,8 @@ TX Ring: Client → Network (packets to send)
 RX Ring: Network → Client (received packets)
 ```
 
-See `src/protocol.rs` for message definitions.
+The protocol definitions live in the shared `rpi4-network-protocol` crate,
+used by both this PD and clients (e.g. the Graphics PD's `network` feature).
 
 ## References
 

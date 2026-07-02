@@ -99,6 +99,7 @@ The Raspberry Pi 4 Model B includes two networking interfaces:
 ```
 GENET Base:     0xfd580000
 GENET Size:     0x10000 (64KB)
+DMA buffers:    0x3e700000 (1MB, fixed phys addr for descriptors)
 ```
 
 **WiFi (SDIO):**
@@ -176,13 +177,22 @@ pub fn init_network() {
 - seL4 fork maintained by Trustworthy Systems
 - GPL v2/v3 licensed
 
+## Component Layout
+
+- `rpi4-network` — Network PD binary (drivers + ring-buffer server)
+- `rpi4-network-protocol` — shared IPC protocol crate used by the Network
+  PD and clients (mirrors the `rpi4-input-protocol` pattern)
+- `rpi4-graphics` `network` feature — client that drains the RX ring and
+  reads link state (enabled automatically when `NET_DRIVER` is set)
+
 ## Implementation Roadmap
 
-### Phase 1: Ethernet Driver (Recommended First)
-1. Implement BCM54213PE PHY initialization
-2. Implement GENET controller driver
-3. Integrate with lwIP
-4. Create Network PD with IPC interface
+### Phase 1: Ethernet Driver (done, pending hardware validation)
+1. ~~Implement BCM54213PE PHY initialization~~
+2. ~~Implement GENET controller driver (DMA rings, INTRL2 interrupts)~~
+3. ~~Create Network PD with IPC interface~~
+4. Integrate an IP stack (lwIP/picoTCP/smoltcp) — not yet implemented
+5. Validate on real RPi4 hardware
 
 ### Phase 2: WiFi Driver (Optional)
 1. Implement SDIO bus driver (Arasan)

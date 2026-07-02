@@ -94,6 +94,16 @@ ifndef ISOLATED
 $(error NET_DRIVER=$(NET_DRIVER) on tvdemo requires ISOLATED=1 (three-PD system))
 endif
 SYSTEM_DESC := $(PRODUCT_SRC_DIR)/tvdemo-network.system
+# Build the Graphics PD with its network client enabled
+# (networking.mk is included after tvdemo.mk; recipe variables expand at
+# execution time, so the graphics PD build rule picks this up)
+GRAPHICS_PD_FEATURES := --features network
+# The generic $(PD_ELF) recipe in include/rust.mk overrides the graphics PD
+# recipe in tvdemo.mk (make uses the last recipe defined for a target), so
+# also inject the feature flags into that recipe via a target-specific
+# variable. CARGO_BUILD_STD is simply-expanded, so this expands here, after
+# GRAPHICS_PD_FEATURES is set.
+$(GRAPHICS_PD_ELF): CARGO_BUILD_STD += $(GRAPHICS_PD_FEATURES)
 else
 $(error NET_DRIVER is currently only supported for PRODUCT=tvdemo)
 endif

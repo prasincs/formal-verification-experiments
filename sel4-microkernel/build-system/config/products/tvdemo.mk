@@ -83,6 +83,7 @@ $(GRAPHICS_PD_ELF): $(PRODUCT_SOURCES) | $(BUILD_DIR)
 		--release \
 		--target $(TARGET_SPEC) \
 		--bin $(GRAPHICS_PD_NAME) \
+		$(GRAPHICS_PD_FEATURES) \
 		$(CARGO_BUILD_STD)
 	cp $(CARGO_TARGET_DIR)/$(CARGO_TARGET)/release/$(GRAPHICS_PD_NAME).elf $@
 	@echo "Built: $@"
@@ -92,4 +93,5 @@ $(GRAPHICS_PD_ELF): $(PRODUCT_SOURCES) | $(BUILD_DIR)
 build-isolated-pds: $(INPUT_PD_ELF) $(GRAPHICS_PD_ELF)
 
 $(LOADER_ELF): build-isolated-pds
+$(SYSTEM_IMAGE): build-isolated-pds
 endif
