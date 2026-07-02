@@ -36,6 +36,11 @@ else
 endif
 CARGO_BUILD_STD := -Z build-std=core,alloc,compiler_builtins -Z build-std-features=compiler-builtins-mem
 
+# Newer nightlies (>= 2026-06) require an explicit opt-in for .json target
+# specs. Probe the toolchain so older nightlies keep working.
+JSON_TARGET_SPEC_FLAG := $(shell $(CARGO) build -Zjson-target-spec --help >/dev/null 2>&1 && echo -Zjson-target-spec)
+CARGO_BUILD_STD += $(JSON_TARGET_SPEC_FLAG)
+
 # Default Microkit configuration
 MICROKIT_CONFIG ?= debug
 
