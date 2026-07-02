@@ -111,9 +111,6 @@ pub fn secure_decode_into(
         ImageType::Png => decoder::decode_png(data, output),
         ImageType::Bmp => decoder::decode_bmp(data, output),
         ImageType::Qoi => decoder::decode_qoi(data, output),
-        // TGA has no magic bytes, so validate_auto never yields it; handle for
-        // completeness in case a caller validates by extension instead.
-        ImageType::Tga => decoder::decode_tga(data, output),
         ImageType::Unknown => Err(DecodeError::UnsupportedFormat),
     };
 

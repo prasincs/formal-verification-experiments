@@ -40,8 +40,6 @@ pub struct BoundedBumpAllocator<const N: usize> {
     offset: AtomicUsize,
     /// Peak usage (high water mark)
     peak: AtomicUsize,
-    /// Number of allocation failures
-    failures: AtomicUsize,
     /// Whether any allocation has failed
     oom_occurred: AtomicBool,
 }
@@ -58,7 +56,6 @@ impl<const N: usize> BoundedBumpAllocator<N> {
             pool: UnsafeCell::new([0; N]),
             offset: AtomicUsize::new(0),
             peak: AtomicUsize::new(0),
-            failures: AtomicUsize::new(0),
             oom_occurred: AtomicBool::new(false),
         }
     }
@@ -87,22 +84,10 @@ impl<const N: usize> BoundedBumpAllocator<N> {
         self.peak.load(Ordering::Acquire)
     }
 
-    /// Get remaining available memory in bytes.
-    #[inline]
-    pub fn remaining(&self) -> usize {
-        N.saturating_sub(self.used())
-    }
-
     /// Get total capacity in bytes.
     #[inline]
     pub const fn capacity(&self) -> usize {
         N
-    }
-
-    /// Get number of failed allocation attempts.
-    #[inline]
-    pub fn failure_count(&self) -> usize {
-        self.failures.load(Ordering::Acquire)
     }
 
     /// Check if any allocation has failed since last reset.
@@ -111,17 +96,10 @@ impl<const N: usize> BoundedBumpAllocator<N> {
         self.oom_occurred.load(Ordering::Acquire)
     }
 
-    /// Get usage as a percentage (0-100).
-    #[inline]
-    pub fn usage_percent(&self) -> u8 {
-        ((self.used() as u64 * 100) / N as u64) as u8
-    }
-
     /// Record an allocation failure and return null. Shared by the OOM and
     /// integer-overflow paths in `alloc`.
     #[inline]
     fn fail(&self) -> *mut u8 {
-        self.failures.fetch_add(1, Ordering::Relaxed);
         self.oom_occurred.store(true, Ordering::Release);
         null_mut()
     }
@@ -205,49 +183,6 @@ unsafe impl<const N: usize> GlobalAlloc for BoundedBumpAllocator<N> {
 }
 
 // ============================================================================
-// PRESET ALLOCATOR SIZES
-// ============================================================================
-
-/// 4 MB allocator - suitable for small photos (up to ~1000x1000)
-pub type SmallAllocator = BoundedBumpAllocator<{ 4 * 1024 * 1024 }>;
-
-/// 8 MB allocator - suitable for HD photos (up to 1920x1080)
-pub type MediumAllocator = BoundedBumpAllocator<{ 8 * 1024 * 1024 }>;
-
-/// 16 MB allocator - suitable for 4K photos (up to 3840x2160)
-pub type LargeAllocator = BoundedBumpAllocator<{ 16 * 1024 * 1024 }>;
-
-/// 32 MB allocator - suitable for large photos with complex decoding
-pub type XLargeAllocator = BoundedBumpAllocator<{ 32 * 1024 * 1024 }>;
-
-// ============================================================================
-// STATISTICS FOR DEBUGGING
-// ============================================================================
-
-/// Allocator statistics snapshot
-#[derive(Debug, Clone, Copy)]
-pub struct AllocStats {
-    pub used: usize,
-    pub peak: usize,
-    pub capacity: usize,
-    pub failures: usize,
-    pub oom_occurred: bool,
-}
-
-impl<const N: usize> BoundedBumpAllocator<N> {
-    /// Get a snapshot of allocator statistics.
-    pub fn stats(&self) -> AllocStats {
-        AllocStats {
-            used: self.used(),
-            peak: self.peak(),
-            capacity: N,
-            failures: self.failure_count(),
-            oom_occurred: self.oom_occurred(),
-        }
-    }
-}
-
-// ============================================================================
 // HEAP CONTROL TRAIT
 // ============================================================================
 
@@ -322,7 +257,6 @@ mod tests {
             let ptr = alloc.alloc(layout);
             assert!(ptr.is_null());
             assert!(alloc.oom_occurred());
-            assert_eq!(alloc.failure_count(), 1);
         }
     }
 

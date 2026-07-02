@@ -37,11 +37,12 @@ SYSTEM_DESC := $(PRODUCT_SRC_DIR)/photoframe.system
 # Source files for dependency tracking
 PRODUCT_SOURCES := $(wildcard $(PRODUCT_SRC_DIR)/src/*.rs) \
                    $(PRODUCT_SRC_DIR)/Cargo.toml \
+                   $(wildcard $(PRODUCT_SRC_DIR)/photos/*) \
                    $(wildcard $(INPUT_PD_SRC_DIR)/src/*.rs) \
                    $(INPUT_PD_SRC_DIR)/Cargo.toml \
+                   $(wildcard $(ROOT_DIR)/rpi4-graphics/src/*.rs) \
                    $(wildcard $(ROOT_DIR)/rpi4-input/src/*.rs) \
-                   $(wildcard $(ROOT_DIR)/rpi4-input-protocol/src/*.rs) \
-                   $(wildcard $(ROOT_DIR)/rpi4-photo-protocol/src/*.rs)
+                   $(wildcard $(ROOT_DIR)/rpi4-input-protocol/src/*.rs)
 
 # Output files
 SYSTEM_IMAGE := $(BUILD_DIR)/loader.img

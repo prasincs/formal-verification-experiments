@@ -2,7 +2,6 @@
 //!
 //! Supports multiple image formats without heap allocation:
 //! - **BMP** - Uncompressed bitmap (tinybmp)
-//! - **TGA** - Targa with RLE compression (tinytga)
 //! - **QOI** - Quite OK Image format (inline implementation)
 //!
 //! ## Security Note
@@ -17,37 +16,6 @@
 //! - 3-4x faster to decode than PNG
 //! - Simple format (100 lines to implement)
 //! - No heap allocation needed
-
-/// Supported image formats
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ImageFormat {
-    Bmp,
-    Tga,
-    Qoi,
-    Unknown,
-}
-
-impl ImageFormat {
-    /// Detect format from magic bytes
-    pub fn detect(data: &[u8]) -> Self {
-        if data.len() < 4 {
-            return ImageFormat::Unknown;
-        }
-
-        // BMP: starts with "BM"
-        if data[0] == b'B' && data[1] == b'M' {
-            return ImageFormat::Bmp;
-        }
-
-        // QOI: starts with "qoif"
-        if &data[0..4] == b"qoif" {
-            return ImageFormat::Qoi;
-        }
-
-        // TGA has no reliable magic bytes
-        ImageFormat::Unknown
-    }
-}
 
 /// Error types for decoding
 #[derive(Debug, Clone, Copy)]
@@ -81,43 +49,6 @@ pub fn decode_bmp(data: &[u8], output: &mut [u32]) -> Result<(u32, u32), DecodeE
     }
 
     for pixel in bmp.pixels() {
-        let x = pixel.0.x as u32;
-        let y = pixel.0.y as u32;
-        let color = pixel.1;
-
-        if x < width && y < height {
-            let idx = (y * width + x) as usize;
-            output[idx] = 0xFF000000
-                | ((color.r() as u32) << 16)
-                | ((color.g() as u32) << 8)
-                | (color.b() as u32);
-        }
-    }
-
-    Ok((width, height))
-}
-
-// ============================================================================
-// TGA DECODER (using tinytga)
-// ============================================================================
-
-/// Decode a TGA image to ARGB32 pixels
-pub fn decode_tga(data: &[u8], output: &mut [u32]) -> Result<(u32, u32), DecodeError> {
-    use tinytga::Tga;
-    use embedded_graphics_core::pixelcolor::Rgb888;
-    use embedded_graphics_core::prelude::*;
-
-    let tga = Tga::<Rgb888>::from_slice(data)
-        .map_err(|_| DecodeError::InvalidFormat)?;
-
-    let width = tga.size().width;
-    let height = tga.size().height;
-
-    if output.len() < (width * height) as usize {
-        return Err(DecodeError::BufferTooSmall);
-    }
-
-    for pixel in tga.pixels() {
         let x = pixel.0.x as u32;
         let y = pixel.0.y as u32;
         let color = pixel.1;
@@ -434,69 +365,3 @@ pub fn decode_qoi(data: &[u8], output: &mut [u32]) -> Result<(u32, u32), DecodeE
 
     Ok((width, height))
 }
-
-// ============================================================================
-// AUTO-DETECT DECODER
-// ============================================================================
-
-/// Decode any supported image format (auto-detect)
-pub fn decode_auto(data: &[u8], output: &mut [u32]) -> Result<(u32, u32, ImageFormat), DecodeError> {
-    let format = ImageFormat::detect(data);
-
-    match format {
-        ImageFormat::Bmp => {
-            let (w, h) = decode_bmp(data, output)?;
-            Ok((w, h, ImageFormat::Bmp))
-        }
-        ImageFormat::Qoi => {
-            let (w, h) = decode_qoi(data, output)?;
-            Ok((w, h, ImageFormat::Qoi))
-        }
-        ImageFormat::Tga | ImageFormat::Unknown => {
-            // Try TGA (no magic bytes)
-            if let Ok((w, h)) = decode_tga(data, output) {
-                return Ok((w, h, ImageFormat::Tga));
-            }
-            // Try BMP as fallback
-            if let Ok((w, h)) = decode_bmp(data, output) {
-                return Ok((w, h, ImageFormat::Bmp));
-            }
-            Err(DecodeError::UnsupportedFormat)
-        }
-    }
-}
-
-/// Decode with explicit format specification
-pub fn decode_format(
-    data: &[u8],
-    format: ImageFormat,
-    output: &mut [u32],
-) -> Result<(u32, u32), DecodeError> {
-    match format {
-        ImageFormat::Bmp => decode_bmp(data, output),
-        ImageFormat::Tga => decode_tga(data, output),
-        ImageFormat::Qoi => decode_qoi(data, output),
-        ImageFormat::Unknown => Err(DecodeError::UnsupportedFormat),
-    }
-}
-
-// ============================================================================
-// FORMAT COMPARISON
-// ============================================================================
-
-/// Comparison of supported formats for the photo frame:
-///
-/// | Format | Compression | Decode Speed | File Size | Alloc? | Best For |
-/// |--------|-------------|--------------|-----------|--------|----------|
-/// | BMP    | None        | Very Fast    | Largest   | No     | Simple images |
-/// | TGA    | RLE         | Fast         | Large     | No     | Graphics with runs |
-/// | QOI    | LZ-like     | Fast         | ~30% BMP  | No     | Photos, general use |
-/// | PNG*   | Deflate     | Slow         | Small     | Yes    | (not supported) |
-/// | JPEG*  | DCT         | Medium       | Smallest  | Yes    | (not supported) |
-///
-/// *Requires heap allocation, not included
-///
-/// **Recommendation:** Use QOI for best balance of size and speed.
-/// Convert existing images with: `qoiconv input.png output.qoi`
-#[allow(dead_code)]
-mod format_info {}

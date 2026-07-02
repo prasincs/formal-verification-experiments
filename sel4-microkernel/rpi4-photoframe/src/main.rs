@@ -421,7 +421,6 @@ enum PhotoStatus {
 enum AppMode {
     Slideshow,
     Paused,
-    Manual,
 }
 
 struct PhotoFrameHandler {
@@ -482,7 +481,7 @@ impl PhotoFrameHandler {
                         self.mode = AppMode::Paused;
                         debug_println!("Paused");
                     }
-                    AppMode::Paused | AppMode::Manual => {
+                    AppMode::Paused => {
                         self.mode = AppMode::Slideshow;
                         self.slideshow_timer = 0;
                         debug_println!("Slideshow resumed");
@@ -611,7 +610,6 @@ impl PhotoFrameHandler {
                 let status = match self.mode {
                     AppMode::Slideshow => ">",
                     AppMode::Paused => "||",
-                    AppMode::Manual => "M",
                 };
                 draw_text(ptr, pitch, WIDTH as usize / 2 - 20, 12, status, 2, 0xFF00FF00);
 
@@ -700,7 +698,6 @@ fn image_type_str(t: validate::ImageType) -> &'static str {
         validate::ImageType::Jpeg => "JPEG",
         validate::ImageType::Png => "PNG",
         validate::ImageType::Bmp => "BMP",
-        validate::ImageType::Tga => "TGA",
         validate::ImageType::Qoi => "QOI",
         validate::ImageType::Unknown => "UNKNOWN",
     }

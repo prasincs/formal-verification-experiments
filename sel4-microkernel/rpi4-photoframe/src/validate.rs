@@ -48,7 +48,6 @@ pub enum ImageType {
     Jpeg,
     Png,
     Bmp,
-    Tga,
     Qoi,
     Unknown,
 }

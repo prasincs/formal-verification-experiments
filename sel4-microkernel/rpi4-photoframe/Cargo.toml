@@ -21,12 +21,9 @@ rpi4-graphics = { path = "../rpi4-graphics" }
 rpi4-input = { path = "../rpi4-input" }
 rpi4-input-protocol = { path = "../rpi4-input-protocol" }
 
-# Photo protocol (verified)
-rpi4-photo-protocol = { path = "../rpi4-photo-protocol" }
-
 # Image decoding - no-allocation formats (parsed without heap)
-tinybmp = "0.6"      # BMP - uncompressed, simple
-tinytga = "0.5"      # TGA - common in graphics, simple RLE
+tinybmp = "0.6"                   # BMP - uncompressed, simple
+embedded-graphics-core = "0.4"    # pixel traits used by the tinybmp decoder
 # QOI decoder is implemented inline (~100 lines, no dependencies needed)
 
 # Image decoding - allocation-based formats (decoded under a bounded heap)
