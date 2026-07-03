@@ -1,16 +1,20 @@
-# Secure Agent OS — Execution Spec for Parallel Agents
+# High-Assurance Agent Appliance — Execution Spec for Parallel Agents
 
-Companion to [secure-agent-os.md](secure-agent-os.md) (the design; read
-it first). This document decomposes the design into **work packages
-(WPs)** that independent agents can execute concurrently. It fixes the
-interface contracts, file ownership, and acceptance criteria up front so
-that parallel work composes without coordination.
+Companion to [secure-agent-os.md](secure-agent-os.md) (the design RFC;
+read it first). This document decomposes the design into **work
+packages (WPs)** that independent agents can execute concurrently. It
+fixes the interface contracts, file ownership, and acceptance criteria
+up front so that parallel work composes without coordination.
 
 Execution model: one agent per WP, each on its own branch
 (`agent/wp<N>-<slug>`), each landing as its own PR to `main`. Wave 1
-WPs have **zero dependencies on each other**. Wave 2 WPs consume Wave 1
-artifacts through the contracts in this file — not through reading Wave
-1 branches.
+WPs are **parallelizable with controlled merge sequencing** — no WP
+blocks another's *start*, but there are two acknowledged couplings:
+WP-4 merges before WP-11 (both touch `rpi4-network-protocol`,
+additively), and WP-3 consumes IC-1 by crate version bump (it ships in
+legacy generation-0 mode if WP-4 is late). Wave 2 WPs consume Wave 1
+artifacts through the contracts in this file — not through reading
+Wave 1 branches.
 
 ---
 
@@ -63,19 +67,37 @@ The existing ring header (`docs/device-isolation-architecture.md`) is:
 0x000  u32  write_idx    (atomic, producer-owned)
 0x004  u32  read_idx     (atomic, consumer-owned)
 0x008  u32  capacity
-0x00C  u32  padding      ← becomes `epoch`
+0x00C  u32  padding      ← becomes `generation`
 0x010  ...  entries[]
 ```
 
-- Offset `0x00C` becomes `epoch: u32` (atomic). Value `0` means
+- Offset `0x00C` becomes `generation: u32` (atomic). Value `0` means
   "legacy/no supervisor" — existing images remain layout-compatible.
-- Only the **supervisor** writes `epoch` (increments before restarting
-  either endpoint, after zeroing `write_idx`/`read_idx`).
-- Endpoints cache `last_seen_epoch`; on mismatch they reset local
-  cursors/in-flight state, adopt the new epoch, and continue. Entries
-  written under an older epoch are never consumed.
-- New API surface (added, not replacing): `epoch()`, `check_epoch(&mut
-  cached) -> EpochStatus { Unchanged, Reset }`.
+- **Seqlock discipline (normative — a plain reset races, per review):**
+  only the supervisor/lifecycle PD writes `generation`. A reset is:
+  publish `generation = odd` (release ordering) → zero
+  `write_idx`/`read_idx` → publish `generation = next even` (release).
+  Because the indices are separate atomics, the intermediate state is
+  only ever observed under an odd generation.
+- Endpoints **acquire-read `generation` before and after every ring
+  operation**. If either read is odd, or the two differ, the operation
+  is abandoned (writes: the entry is not published — the index
+  increment is the publish step and must be skipped; reads: the entry
+  is discarded) and the endpoint re-syncs its local cursors from the
+  shared indices under the new even generation.
+- Live generations are even; entries have no embedded generation —
+  the invariant is that no operation *completes* across a generation
+  change.
+- Quiescent alternative: if the supervisor stops **both** endpoints
+  before resetting (fine for `supdemo`, where the supervisor is the
+  peer), the odd window is never observable; the protocol above still
+  must be implemented, since production rings connect two children.
+- New API surface (added, not replacing): `generation()`,
+  `RingGuard::begin(...) -> Option<Guard>` / `Guard::commit(...) ->
+  Result<(), Retry>` encapsulating the double-read.
+- Verus obligation (WP-4): model supervisor/producer/consumer
+  interleavings including the odd window and the acquire/release
+  pairs — not merely "different numbers reject."
 
 ### IC-2: Update capsule format (WP-8 ⇄ WP-3 ⇄ WP-6)
 
@@ -97,24 +119,48 @@ unintended slot or under an incompatible interface:
 0x18  u64     payload_len
 0x20  u64     load_vaddr      (slot-region base the blob is linked for; 0 = PIC)
 0x28  u64     entry_offset    (entry point relative to load_vaddr)
-0x30  u64     not_after       (unix seconds; 0 = no expiry)
-0x38  [u8;8]  reserved (zero)
+0x30  u64     not_after       (unix seconds; MUST be 0 until a trusted
+                               time source is specified — the device
+                               has monotonic counters, not wall time;
+                               verifiers MUST reject nonzero values
+                               they cannot check)
+0x38  u32     signer_key_id   (which pinned public key signed this)
+0x3C  u32     key_epoch       (key-rotation epoch; capsules signed
+                               under a revoked epoch are rejected)
 0x40  [u8;32] payload_sha256
 0x60  [u8;32] deps_sha256     (digest of dependency/config manifest; zero = none)
 0x80  [u8;64] ed25519 signature over bytes [0x00..0x80) ++ payload
 0xC0  ...     payload
 ```
 
+Additional normative semantics:
+
+- **Rollback state is scoped per `(target_slot, payload_type)`** — one
+  TPM NV counter per scope, not a single ambiguous global version (a
+  model update must not burn the code-slot rollback counter).
+- All reserved/zero fields MUST be validated as zero (unknown-field
+  smuggling).
+- PIC entry: when `load_vaddr == 0`, the entry address is
+  `actual slot region base + entry_offset`; when nonzero, the
+  installer MUST check `load_vaddr` equals the slot's declared base.
+
 Verification order (normative): parse header (totality — reject, never
 trust) → check `payload_len` bounds against buffer → check
-`target_platform`, `target_slot`+`payload_type`, `abi_version` against
-the running system → check `not_after` → hash payload → compare
-`payload_sha256` (constant-time) → verify signature → check
-`monotonic_version > stored version` (TPM NV). Only then is the
-payload readable by anyone, and the verifier's sole output is a
-**one-shot install authorization** naming
-`{payload_sha256, target_slot, monotonic_version}` — the installer
-acts only on that object (see design doc, Tier 2 decomposition).
+`target_platform`, `target_slot`+`payload_type`, `abi_version`,
+`signer_key_id`+`key_epoch` against the running system → check
+`not_after` (see above) → hash payload → compare `payload_sha256`
+(constant-time) → verify signature → check `monotonic_version` against
+the scoped NV counter. Only then is the payload **eligible for
+installation** (not "readable" — static mappings can't retroactively
+hide a shared buffer), and the verifier's sole output is a **one-shot
+install authorization**
+`{auth_id (fresh nonce), payload_sha256, target_slot, slot_generation,
+monotonic_version}`, delivered over the verifier→installer private
+channel (channel identity is the authenticity mechanism). The
+installer tracks consumed `auth_id`s and rejects reuse; it re-hashes
+its own private staging copy against `payload_sha256` before any write
+(see design doc Tier-2 for the full handoff — the digest is the
+authority, not the buffer).
 
 ### IC-3: TPM transport trait (WP-7 ⇄ future keystore)
 
@@ -129,7 +175,11 @@ pub trait TpmTransport {
 `rpi4-tpm-pd`'s existing IPC command surface (`Init`, `PcrExtend`,
 `PcrRead`, `GetRandom`, …) is frozen; the trait sits *below* it. The
 SLB9670/SPI code becomes the first impl; a TIS/CRB MMIO impl is a
-future second.
+future second. Scope note (review): this trait is for things that
+speak TPM 2.0 command streams — crypto engines like NXP CAAM do
+**not** qualify; a non-TPM backend would enter via a future
+higher-level `AttestationBackend` (measure/seal/counter/quote), not by
+stretching this trait.
 
 ### IC-4: Supervisor demo system topology (WP-3)
 
@@ -154,14 +204,14 @@ input: a specific ring entry value causes a deliberate fault.
 | WP-10 | `formal/ab-update/` (new) | yes |
 | WP-11 | `rpi4-network-protocol/` (proof additions only) | yes |
 
-WP-4 and WP-11 both touch `rpi4-network-protocol`: WP-4 adds the epoch
-field/API, WP-11 adds proofs to *existing* code. Both are additive;
-merge order WP-4 → WP-11 preferred, and WP-11 must not assume epoch
-exists.
+WP-4 and WP-11 both touch `rpi4-network-protocol`: WP-4 adds the
+generation field/API, WP-11 adds proofs to *existing* code. Both are
+additive; merge order WP-4 → WP-11 preferred, and WP-11 must not
+assume the generation field exists.
 
 ---
 
-## Wave 1 — fully parallel, no cross-dependencies
+## Wave 1 — parallelizable with controlled merge sequencing
 
 ### WP-0: Substrate evaluation (LionsOS / sDDF) — timeboxed
 
@@ -209,7 +259,9 @@ on child PDs, `fault` entry point, `microkit_pd_stop/restart`;
 `rpi4-input-pd/src/main.rs` for the PD runtime pattern.
 **Deliverables:**
 - `rpi4-supervisor/`: supervisor PD implementing IC-4 — fault handler
-  logs fault info, zeroes ring indices, bumps epoch (IC-1), restarts
+  logs fault info, runs the IC-1 generation reset (publish odd →
+  zero indices → publish even; the quiescent variant is acceptable here
+  since the supervisor is itself the ring peer), restarts
   the worker at its entry point; plus a heartbeat watchdog (worker
   writes a counter entry every N iterations; supervisor restarts on
   stall).
@@ -226,7 +278,7 @@ one child, Verus proofs of the supervisor (that's a follow-on once WP-8
 lands).
 **Structure note (review-driven):** the demo runs as one supervisor
 binary, but lay the crate out as distinct modules mirroring the design
-doc's decomposition — `lifecycle` (faults/stop/restart/epochs),
+doc's decomposition — `lifecycle` (faults/stop/restart/generation resets),
 `verifier` (stub here), `installer` (stub here) — so Wave 2 can split
 them into separate PDs without a rewrite. `lifecycle` must never gain
 an rw mapping to any executable region.
@@ -236,19 +288,25 @@ an rw mapping to any executable region.
 **Goal:** restart-safe rings per IC-1, proven.
 **Read first:** `rpi4-input-protocol/src/lib.rs` (the house proof
 style), design doc "Tier 1".
-**Deliverables:** epoch field + API in `rpi4-input-protocol` (additive;
-offset `0x00C` per IC-1), mirrored in `rpi4-network-protocol`. Verus
-invariants: index bounds preserved (existing), *entries consumed only
-under matching epochs*, epoch adoption resets cursors, no
-entry written under epoch N is readable under epoch M>N. Host unit
-tests simulating producer/consumer/supervisor interleavings.
+**Deliverables:** generation field + seqlock API in
+`rpi4-input-protocol` (additive; offset `0x00C`, odd/even discipline
+and acquire/release ordering per IC-1 — the naive "zero indices, bump
+epoch" reset races and is explicitly rejected), mirrored in
+`rpi4-network-protocol`. Verus invariants: index bounds preserved
+(existing), *no ring operation completes across an odd or changed
+generation*, no entry written under generation N is consumable under
+M>N, endpoints converge on the new even generation. The proof must
+model supervisor/producer/consumer **interleavings and the
+acquire/release pairs**, not merely that mismatched numbers reject.
+Host unit tests simulating those interleavings, including a peer
+running concurrently with a reset.
 **Acceptance:** `cargo build` clean (macro strips), Verus verification
 passes via the `verus/` harness, host tests cover: restart of producer,
-restart of consumer, restart of both, epoch wraparound behavior
-(document the chosen wrap policy).
+restart of consumer, restart of both, reset-while-peer-active, and
+generation wraparound behavior (document the chosen wrap policy).
 **Non-goals:** changing existing entry formats; touching PD binaries
 (WP-3 consumes this by crate bump, and ships even if WP-4 is late —
-epoch 0 = legacy mode).
+generation 0 = legacy mode).
 
 ### WP-5: `.system` topology checker
 
@@ -259,9 +317,21 @@ epoch 0 = legacy mode).
 `microkit-hello/hello.system`), the isolation tables in
 `docs/device-isolation-architecture.md`.
 **Deliverables:** `tools/system-check/` (host Rust, std allowed):
-parses a `.system` file into an access graph (PD → {region, perms,
-kind}), then checks a sidecar `<name>.system.props.toml` declaring
-properties:
+parses a `.system` file into a full authority graph — **not just
+memory mappings** (review finding: mappings alone cannot establish the
+design doc's non-bypassability claim). The graph must cover:
+
+1. memory maps: PD → {region, perms, kind (device phys_addr vs RAM)},
+2. channel endpoints and their PD pairs/ids,
+3. protected-procedure direction (`pp="true"` — who may call whom),
+4. IRQ ownership,
+5. parent/child (nested PD) relationships.
+
+(Scope note: in Microkit the `.system` file fully determines the
+generated CSpaces, so checking it *is* checking the capability
+distribution — no separate CSpace input exists at this layer.)
+
+Sidecar `<name>.system.props.toml` property language:
 ```toml
 [[shared_only]]           # exactly this set of regions shared between these PDs
 pds = ["input", "graphics"]
@@ -271,16 +341,32 @@ regions = ["input_ring"]
 region = "uart_regs"
 pd = "input"
 
-[[no_device_mmio]]        # PD maps no region with phys_addr
+[[no_device_mmio]]        # PD maps no region with phys_addr, owns no IRQ
 pd = "worker"
+
+[[only_channels]]         # PD's complete channel set — nothing else
+pd = "agent_core"
+peers = ["policy"]
+
+[[no_pp_to]]              # PD may not call this PD via protected procedure
+pd = "worker"
+target = "keystore"
+
+[[dma_capable]]           # PD owns a DMA-capable device: distinguished
+pd = "network"            # trust class, must be explicitly declared
 ```
 Write sidecars for every existing `.system` file, encoding the claims
-the docs already make in prose.
+the docs already make in prose (including declaring `network` as
+`dma_capable` — the checker fails on undeclared DMA-device ownership).
 **Acceptance (CI):** new job runs the checker over every
-`.system`+sidecar pair; deliberately-broken fixture test proves the
-checker fails when a mapping is widened. Checker itself has unit tests.
-**Non-goals:** channel/IRQ policy language (v2), Verus-verifying the
-checker (nice-to-have, not required).
+`.system`+sidecar pair; deliberately-broken fixtures prove the checker
+fails when (a) a mapping is widened, (b) a channel is added to a PD
+with `only_channels`, (c) a device/IRQ appears on a `no_device_mmio`
+PD. Checker itself has unit tests.
+**Non-goals:** notification *direction* enforcement (Microkit channels
+are bidirectional at the kernel level; direction is a protocol
+convention — document this honestly in the checker README), scheduling
+policy, Verus-verifying the checker (nice-to-have, not required).
 
 ### WP-6: Verified-substrate local inference (Route B core)
 
@@ -306,13 +392,18 @@ how decoders integrate.
   `versions.mk` style), generates N tokens from a fixed prompt+seed.
 - Host fuzz target for the loader (`cargo-fuzz`, run bounded in CI).
 - **Signed execution receipts** (per review — this is what makes the
-  artifact publishable): the PD emits
-  `{nonce, input_digest, weights_digest (loader-computed),
-  config+sampling params, output_digest}`; a receipt module signs it
-  with a device key (build-injected test key in QEMU; TPM-backed key is
-  Wave 2). Ship a host-side verifier (`llm-receipt-verify`) that checks
-  the signature AND re-executes the model to confirm the output digest
-  — determinism upgraded from tested property to *challenge protocol*.
+  artifact publishable): a **canonically encoded, versioned** structure
+  `{receipt_version, verifier_nonce, input_digest, weights_digest
+  (loader-computed), config+sampling params, output_digest}` with the
+  **output bytes carried alongside** (a digest alone verifies
+  nothing); a receipt module signs it with a build-injected test key in
+  QEMU. The production key hierarchy (application receipt key,
+  certified by the TPM AK, sealed to PCR policy, domain-separated from
+  update/TLS/identity keys) is Wave 2 — do not sign receipts with an
+  attestation key directly. Ship a host-side verifier
+  (`llm-receipt-verify`) that checks the signature AND re-executes the
+  model to confirm the output digest — determinism upgraded from
+  tested property to *challenge protocol*.
 **Acceptance (CI):** `qemu-llmdemo` job boots, generates ≥32 tokens,
 prints `TOKENS SHA256 <hash>` — hash asserted in CI (determinism is a
 *tested property*; the design doc enumerates what it's conditional on:
@@ -383,8 +474,10 @@ configuration (e.g. 2 slots, 3 crash budget) with both properties
 holding; at least one *seeded bug* variant (flip flag before verify) is
 shown to violate `NeverBricked` in the README, proving the model has
 teeth.
-**Non-goals:** modeling Tier-2 hot updates (separate model later),
-U-Boot scripting.
+**Non-goals:** modeling Tier-2 hot updates — but note (review): a
+second crash model covering the Tier-2 ordering (TPM NV increment, PCR
+extension, staging, slot write, restart) is a **blocking prerequisite
+for WP-12**, not optional polish; U-Boot scripting.
 
 ### WP-11: Verus proofs for the network ring protocol
 
@@ -394,7 +487,7 @@ U-Boot scripting.
 **Deliverables:** proofs on the *existing* TX/RX ring code: index
 bounds, SPSC ownership discipline, no entry reuse before release; kill
 or justify the unused `ring_flags::IN_USE` (roadmap Phase 8 item) as
-part of specifying ownership. Must not assume WP-4's epoch field.
+part of specifying ownership. Must not assume WP-4's generation field.
 **Acceptance:** Verus passes; `cargo build` unchanged; roadmap Phase 7
 box checked.
 **Non-goals:** packet parser proofs (needs WP-1's stack to exist),
@@ -463,9 +556,11 @@ folded into WP-1 and WP-13 respectively.)
 
 ## Orchestrator notes
 
-- Wave 1 is 10 agents wide with no shared mutable files except the two
-  protocol crates (WP-4/WP-11, both additive, merge order WP-4 first)
-  and additive CI/build entries. Merge conflicts should be near-zero by
+- Wave 1 is 10 agents wide; all can *start* immediately. Shared mutable
+  files are limited to the two protocol crates (WP-4/WP-11, both
+  additive, merge order WP-4 first) and additive CI/build entries;
+  WP-3 additionally consumes IC-1 by crate bump (legacy generation-0
+  mode until WP-4 merges). Merge conflicts should be near-zero by
   construction; if an agent hits one, the ownership matrix (IC-5)
   decides who yields.
 - Review order that de-risks fastest: WP-5 (cheap, guards everyone

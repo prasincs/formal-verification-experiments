@@ -7,8 +7,10 @@ This revision incorporates an external design review (2026-07) whose
 central criticism is accepted in full: the original draft slid between
 four distinct guarantees — (1) formally verified isolation, (2)
 memory-safe/verified component code, (3) measured/attested software
-identity, and (4) semantically correct agent behavior — of which only
-the first is substantially inherited from seL4; the rest require
+identity, and (4) semantically correct agent behavior — of which even
+the first is only *partially* inherited today: Microkit deploys the
+seL4 MCS kernel, whose code-conformance proofs are still in progress
+for our configurations (see the scope section). The rest require
 additional proofs, trusted components, protocols, and explicit
 threat-model assumptions. The defensible framing, used throughout this
 revision, is: **a capability-secure, attestable agent appliance with
@@ -28,8 +30,9 @@ story is "each agent group runs in its own Docker container, and
 credentials are brokered by a vault so agents never hold raw API keys."
 That is exactly the shape of system this codebase can build with far
 stronger guarantees: container isolation becomes capability-enforced PD
-isolation on a formally verified kernel, and the vault becomes a
-TPM-backed keystore PD.
+isolation on a kernel from seL4's machine-checked proof lineage (with
+the important MCS-configuration caveat stated in the scope section),
+and the vault becomes a TPM-backed keystore PD.
 
 ## Why seL4 — and what containers still do better
 
@@ -41,8 +44,8 @@ TCB — which is a narrower statement than "better on every axis":
 
 | Property | nanoclaw (Docker) | This project (seL4 Microkit) |
 |---|---|---|
-| Isolation mechanism | Linux namespaces/cgroups (~30M LOC TCB) | Capabilities on a ~10K LOC kernel with machine-checked proofs |
-| Escape surface | Kernel syscall surface, container runtime CVEs | Proven integrity/confidentiality; a PD *cannot* address memory it wasn't granted |
+| Isolation mechanism | Linux namespaces/cgroups (~30M LOC TCB) | Capabilities on a ~10K LOC kernel from a machine-checked proof lineage (see scope: code conformance for our MCS config is in progress, not complete) |
+| Escape surface | Kernel syscall surface, container runtime CVEs | Design-proven integrity/confidentiality; a PD *cannot* address memory it wasn't granted — code-level proof pending for the deployed configuration |
 | Credential brokering | App-level vault process | Keystore PD; keys sealed to TPM PCRs, unmapped from every other PD |
 | Least authority | Mount allowlists | Per-PD memory maps and channels declared in the `.system` file, enforced by the kernel |
 | Supply-chain / update trust | `docker pull` | Signed update capsules, TPM-measured before activation |
@@ -57,7 +60,22 @@ your credentials — a small explicit TCB beats a rich ecosystem.
 
 ### Scope of the seL4 guarantee (read before quoting the table)
 
-What seL4's proofs give us is **verified kernel-mediated spatial
+**P0 correction (review finding): the kernel we actually deploy is not
+currently covered by a completed functional-correctness proof.**
+Microkit always uses the seL4 **MCS** kernel, and per the pinned
+Microkit 2.1.0 / current
+[Microkit manual](https://github.com/seL4/microkit/blob/main/docs/manual.md),
+code-conformance verification for MCS is still underway (AArch64
+completion targeted around 2027), and a release build is not
+necessarily a verified configuration. The defensible claim today is:
+**the architecture is built on seL4's verified design lineage and
+capability model, but the pinned Microkit MCS/AArch64 kernel binary is
+not yet covered by a completed code-level functional-correctness
+proof.** When the MCS proofs complete, the claim upgrades without any
+architectural change — that is the bet — but this document must not
+predate it.
+
+Even once they do, what the proofs give us is **kernel-mediated spatial
 isolation, under the selected proof assumptions and configuration** —
 not a verified appliance. Outside the proofs and therefore inside our
 trust-by-other-means budget: the Microkit tool and loader, boot
@@ -107,20 +125,24 @@ strongly — within the scope stated above.
 
 ```
                  ┌────────────────────────────────────────────────┐
-                 │                seL4 (verified)                 │
+                 │   seL4/MCS — verification status               │
+                 │   configuration-dependent (see scope section)  │
                  └────────────────────────────────────────────────┘
    trusted ──────────────────────────────────────────────────────────────
                  ┌────────────┐      ┌───────────────┐
-                 │ supervisor │──────│  keystore PD  │── SPI ── TPM 9670
-                 │ PD (parent)│ PPC  │ (TPM broker + │
-                 │ lifecycle, │      │  vault proxy) │
-                 │ updates,   │      └───────┬───────┘
-                 │ faults     │              │ inject Authorization
-                 └─────┬──────┘              │ header, seal/unseal
-        stop/restart/  │              ┌──────┴───────┐
-        reload children│              │  https PD    │── ring ──┐
-   ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┼ ─ ─ ─ ─ ─ ─ ─│ (smoltcp +   │          │
-   semi-trusted        │              │  TLS client) │   ┌──────┴─────┐
+                 │ lifecycle/ │──────│  keystore PD  │── SPI ── TPM 9670
+                 │ verifier/  │ PPC  │ (credential-  │
+                 │ installer  │      │  use policy + │
+                 │ PDs (see   │      │  TPM broker)  │
+                 │ Tier 2)    │      └───────┬───────┘
+                 └─────┬──────┘              │ policy-checked TLS
+        stop/restart/  │                     │ to credentialed APIs,
+        reload children│                     │ seal/unseal
+                       │              ┌──────┴───────┐
+                       │              │  https PD    │── ring ──┐
+                       │              │ (uncredent'd │          │
+   ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┼ ─ ─ ─ ─ ─ ─ ─│  fetches:    │          │
+   semi-trusted        │              │  capsules…)  │   ┌──────┴─────┐
                  ┌─────┴──────┐       └──────────────┘   │ network PD │─ GENET/
                  │ agent-core │  rings   ▲               │ (existing) │  virtio
                  │ PD (conv.  │──────────┘               └────────────┘
@@ -129,7 +151,7 @@ strongly — within the scope stated above.
                  └────────────┘           │             │             │
    ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─│─ ─ ─ ─ ─ ─ ─│─ ─ ─ ─ ─ ─ ─│─ ─
    untrusted / restartable         ┌──────┴─────┐ ┌─────┴─────┐ ┌─────┴─────┐
-   (child PDs of supervisor)       │ tool slot  │ │ tool slot │ │ channel   │
+   (children of lifecycle PD)      │ tool slot  │ │ tool slot │ │ channel   │
                                    │ PD #1      │ │ PD #2     │ │ PD (e.g.  │
                                    └────────────┘ └───────────┘ │ email)    │
                                                                 └───────────┘
@@ -173,9 +195,13 @@ previously granted, and the keystore enforces, per request:
 3. maximum request size,
 4. rate and cumulative-cost limits (token budget as a hard ceiling),
 5. model allowlist,
-6. data-classification restrictions (e.g. entries tagged
-   local-only by the provenance labels in the control-plane section
-   never leave the device), and
+6. data-classification restrictions — stated narrowly (review
+   finding): the policy prevents **direct use of labeled objects in
+   remote requests**; it does not prevent a compromised agent-core
+   from *copying* labeled text into a fresh unlabeled request, which
+   is a real information-flow-control problem the assurance table
+   correctly marks absent (mitigations: labels bound to opaque handles
+   the agent can reference but not read, where feasible), and
 7. an owner-auditable log entry per credential use.
 
 This policy check is a small deterministic state machine over typed
@@ -214,16 +240,31 @@ plane**:
   owner keyboard vs. WhatsApp stranger vs. fetched web content),
   information-flow labels on data the action would touch, per-action
   authorization policy, and explicit declassification rules.
-- **High-impact actions require human confirmation** on the trusted
-  I/O path — the input and graphics PDs, which no other PD can forge
-  or overdraw, are exactly the trusted-display/trusted-input primitive
-  this needs. That's a genuinely nice consequence of the existing
-  architecture: the confirmation dialog is rendered by a PD the agent
-  cannot touch.
-- **Non-bypassability is a capability-topology fact, not a promise:**
-  agent-core's `.system` entry has channels to the policy PD and
-  nothing else consequential — a property the topology checker
-  (verification section) machine-checks on every commit.
+- **High-impact actions require human confirmation on a *designed*
+  trusted path — isolation alone doesn't provide one** (review
+  finding: the agent must ordinarily be able to submit content for
+  display, so a compromised agent-core could render a pixel-perfect
+  fake dialog through the normal graphics API). The graphics and input
+  PDs must therefore implement an explicit **confirmation mode** as an
+  interface contract: (1) the mode is entered only via the policy PD's
+  dedicated channel — unforgeable, because kernel channel identity
+  says who's calling; (2) a reserved chrome region (border/banner) is
+  *never* writable through the agent-facing content API, in any mode;
+  (3) while confirmation is active, the input PD routes events
+  exclusively to the policy PD; (4) a secure-attention gesture (a key
+  chord the input PD consumes before any forwarding) lets the owner
+  summon trusted UI unilaterally. What the existing isolation *does*
+  give us is that these four properties, once implemented in the two
+  I/O PDs, cannot be subverted from outside them.
+- **Non-bypassability is a capability-topology fact, not a promise —
+  provided the checker covers authority, not just memory:** agent-core
+  has channels to the policy PD and nothing else consequential, the
+  policy PD alone can invoke tool brokers and the graphics
+  confirmation mode. Machine-checking this needs the `.system` checker
+  to model channels, protected-procedure direction, IRQ ownership, and
+  PD hierarchy in addition to mappings (workplan WP-5 is specified
+  accordingly; until it lands this property is *proposed*, not
+  guaranteed).
 
 The policy engine's state machine — authority delegation, approval
 flows, budget accounting, declassification — is the single most
@@ -264,13 +305,25 @@ producer that re-inits `write_idx = 0` while its peer holds
 `read_idx = 700` silently corrupts the stream. So restartability needs a
 small protocol extension, which is also a natural next Verus target:
 
-- add an **epoch/generation counter** to the ring header, bumped by the
-  supervisor on every restart of either endpoint;
-- peers snapshot the epoch on each operation; on mismatch they reset
-  their local index and drop in-flight entries;
-- Verus invariant: entries are only consumed when producer and consumer
-  epochs agree (extends the existing verified SPSC discipline in
-  `rpi4-input-protocol/src/lib.rs`).
+- a **generation counter** in the ring header with a seqlock-style
+  odd/even discipline (review finding: a plain "zero indices then bump
+  epoch" reset races against a still-running peer, because the indices
+  are separate atomics and the multi-field reset is not transactional).
+  The lifecycle PD publishes an **odd** generation ("reset in
+  progress", release ordering), resets the indices, then publishes the
+  next **even** generation; endpoints acquire-read the generation
+  before *and after* each ring operation and discard the operation's
+  effects if it was odd or changed;
+- alternatively, where the lifecycle PD can afford to briefly stop
+  *both* endpoints (true in the first demo, where it is itself the
+  peer), a quiescent reset — stop both, reset, publish, restart both —
+  is an acceptable simplification;
+- Verus target: model the supervisor/producer/consumer *interleavings
+  and memory ordering*, not merely "mismatched epochs are rejected" —
+  no entry written under generation N is consumable under M>N, no
+  operation completes across an odd generation, and both endpoints
+  converge on the new even generation (extends the verified SPSC
+  discipline in `rpi4-input-protocol/src/lib.rs`).
 
 This makes "kill any PD at any time" a safe operation — which is worth
 having even before agents exist (network driver watchdog, decoder PD
@@ -313,16 +366,38 @@ concrete attack):
    expiry — otherwise a validly signed artifact can be replayed into
    the wrong slot or under an incompatible interface (workplan IC-2 is
    the normative encoding).
-3. Verifier PD: totality-parse header → verify signature over
-   header+payload from a **private staging buffer** (no other PD maps
-   it — no TOCTOU) → check monotonic version against TPM NV → emit
-   one-shot authorization; keystore extends the PCR (the event-log
-   machinery in `rpi4-tpm-boot/src/boot_chain.rs`/`attestation.rs`).
-4. Lifecycle PD: `microkit_pd_stop(slot)`. Installer: copy staged blob
-   to the slot region, **clean D-cache and invalidate I-cache** for the
-   range (skipping this is a real correctness/security bug on ARM),
-   validate the entry point against the capsule header. Lifecycle PD:
-   zero ring indices, bump epochs, `microkit_pd_restart(slot, entry)`.
+3. Verifier PD: totality-parse header and verify the signature reading
+   from the (untrusted, shared) transport buffer — no privacy needed
+   here, because the **digest is the authority**, not the buffer: the
+   verifier's sole output is a one-shot install authorization
+   `{auth_id (fresh nonce), payload_sha256, target_slot, slot
+   generation, monotonic_version}`, delivered to the installer over
+   their kernel-enforced private channel (the channel *is* the
+   authenticity mechanism; nothing else can send on it). Review
+   finding fixed here: an earlier draft claimed the verifier reads
+   from a buffer "no other PD maps" *and* that the installer copies
+   from it — impossible under static mappings.
+4. Installer PD: copy the payload from the transport buffer into its
+   **installer-private staging region** → hash that exact private copy
+   → constant-time compare against the authorized digest (a mismatch
+   means the transport buffer changed after verification — the TOCTOU
+   caught, by construction, no matter when it happened) → mark
+   `auth_id` consumed. Keystore extends the PCR with the *authorized*
+   digest — the measurement log records exactly the bytes eligible to
+   execute (event-log machinery:
+   `rpi4-tpm-boot/src/boot_chain.rs`/`attestation.rs`).
+5. Lifecycle PD: `microkit_pd_stop(slot)`. Installer: write the staged
+   copy to the slot region, optionally re-hash the destination,
+   **clean D-cache and invalidate I-cache** for the range (skipping
+   this is a real correctness/security bug on ARM), validate the entry
+   point against the capsule header. Lifecycle PD: run the ring
+   generation reset protocol, `microkit_pd_restart(slot, entry)`.
+
+Crash ordering across TPM NV increment, PCR extension, slot write, and
+restart is **deliberately unspecified here and must not be improvised
+in code**: it needs its own crash-recovery model (a second TLA+ model
+alongside the Tier-3 A/B one) before Tier 2 ships. The failure to
+model this is exactly how update systems brick.
 
 Honest limitation: Microkit's static mappings mean the installer's
 `rw` alias **cannot be revoked at runtime** — per-address-space W⊕X
@@ -374,7 +449,7 @@ macro strips to plain Rust under `cargo build` (the trick documented in
 | `.system` capability topology | access-graph matches the documented isolation claims | small checker tool in CI | turns the docs' hand-written tables into machine-checked facts |
 | A/B update + watchdog protocol | crash anywhere → boots old or new image, never bricked | TLA+ | power-loss interleavings exceed what testing finds |
 | ed25519, SHA-256 | correctness, constant time | consume HACL\*/libcrux, fiat-crypto | never hand-verify crypto |
-| seL4 kernel | integrity/confidentiality | already proven (Isabelle/HOL) | the foundation everything above stands on |
+| seL4 kernel | integrity/confidentiality | design proofs complete (Isabelle/HOL); code conformance for the MCS config Microkit uses is in progress (see scope) | the foundation everything above stands on — currently a design-level guarantee for our binary |
 
 ### 1. The supervisor's update state machine (highest value)
 
@@ -382,12 +457,14 @@ The Tier-2 flow — stop → verify → measure → write → restart — is a
 small state machine where every wrong transition is a security failure.
 Verus proofs worth writing, in the style of the existing ring proofs:
 
-- **Verify-before-write:** code bytes reach a slot's executable region
-  only from a PD-private staging buffer whose digest was
-  signature-checked, with no mutation between hash and copy (kills the
-  TOCTOU where a peer PD rewrites the blob after verification — provable
-  because the staging buffer is *not* shared, which the `.system`
-  checker below confirms independently).
+- **Authorize-before-write:** code bytes reach a slot's executable
+  region only from the installer's private staging copy, whose hash the
+  installer itself computed and constant-time-compared against a fresh,
+  unconsumed one-shot authorization from the verifier (the Tier-2
+  protocol). The TOCTOU is killed by the installer-side re-hash of its
+  private copy, not by any claim about the transport buffer — and the
+  privacy of the staging region is a `.system` fact the checker below
+  confirms independently.
 - **Measure-before-execute:** `microkit_pd_restart` is unreachable in
   any execution path where the PCR-extend for that blob hasn't
   completed. The attestation story is only as good as this invariant.
@@ -401,9 +478,11 @@ Verus proofs worth writing, in the style of the existing ring proofs:
 ### 2. Restart-safe rings (direct extension of existing work)
 
 `rpi4-input-protocol` already proves index bounds and SPSC discipline.
-The epoch extension adds one invariant family: *an entry is consumed
-only when producer and consumer epochs agree*, so a restarted endpoint
-can never cause its peer to read stale or uninitialized slots. Same
+The generation extension (seqlock discipline per Tier 1 — the naive
+epoch-bump reset races and was rejected in review) adds one invariant
+family: *no ring operation completes across an odd or changed
+generation*, so a restarted endpoint can never cause its peer to read
+stale or uninitialized slots even while the peer keeps running. Same
 proof style, same crate layout — and it should land for the network and
 photo protocol crates at the same time (both are currently unverified
 copies of the input crate's shape; `docs/networking-roadmap.md` Phase 7
@@ -442,17 +521,23 @@ decomposes into two independently checkable halves:
 ### 5. Check the `.system` files, not just the code
 
 Every isolation argument in this repo ultimately rests on hand-written
-XML — which PD maps which region with which perms. Today those claims
-live in doc tables. A small CI tool (plain Rust, or Verus-verified for
-sport) should parse each `.system` file, build the access graph, and
-assert the security-critical facts: *the only region shared between
-input and graphics is `input_ring`; the keystore key region has exactly
-one mapping; no slot PD maps any device MMIO; supervisor staging
-buffers are unshared.* This is a lightweight, Microkit-scale version of
-what CapDL does for full seL4 systems, it costs a day, and it converts
-the architecture docs from prose into regression-checked properties.
-It also guards the failure mode most likely in practice: a future
-`.system` edit quietly widening a mapping.
+XML. Today those claims live in doc tables. A CI tool should parse each
+`.system` file into a full **authority graph** — memory maps *and*
+channel endpoints, protected-procedure direction, IRQ ownership, and
+parent/child relationships (mappings alone can't establish the
+control-plane's non-bypassability claim; in Microkit the `.system`
+file fully determines the generated CSpaces, so checking it is
+checking the capability distribution) — and assert the
+security-critical facts: *the only region shared between input and
+graphics is `input_ring`; the keystore key region has exactly one
+mapping; no slot PD maps any device MMIO or owns an IRQ; the
+installer's staging region is unshared; agent-core's only channel peer
+is the policy PD; every DMA-capable device owner is explicitly
+declared as such.* This is a lightweight, Microkit-scale version of
+what CapDL does for full seL4 systems, it converts the architecture
+docs from prose into regression-checked properties, and it guards the
+failure mode most likely in practice: a future `.system` edit quietly
+widening a mapping or adding a channel.
 
 ### 6. Crash safety of A/B updates: model checking, not proof
 
@@ -484,9 +569,9 @@ document's real thesis:
 
 | Claim | Mechanism | Proof / validation status |
 |---|---|---|
-| PD memory isolation | seL4 capabilities | inherited **only** for the verified configuration/architecture; see scope + DMA caveats |
+| PD memory isolation | seL4 capabilities | **planned/conditional** — design proofs + verified lineage today; the pinned Microkit MCS/AArch64 kernel is not yet covered by completed code conformance (see scope); DMA caveat applies regardless |
 | Capability topology matches docs | `.system` checker in CI | proposed |
-| Ring safety incl. restart | Verus | input ring: verified today; epoch extension: proposed |
+| Ring safety incl. restart | Verus | input ring: verified today; generation/seqlock extension: proposed |
 | Update authorization (verify-before-write, measure-before-execute, anti-rollback) | Verus on verifier/installer | proposed |
 | Update crash-atomicity | TLA+ model | proposed |
 | Model parser / memory envelope safety | Verus | proposed |
@@ -497,8 +582,10 @@ document's real thesis:
 | Safe tool behavior | capability mediation + per-tool reasoning | **absent**; mediation bounds blast radius only |
 | Timing/covert channels, physical attacks | — | out of scope, stated |
 
-The composed *conditional* claim: if seL4's proofs hold for our
-configuration, the topology checker passes, the DMA caveat is respected
+The composed *conditional* claim: once seL4's MCS code-conformance
+proofs complete for our configuration (until then, substitute "verified
+design lineage" for "proofs" in what follows), if the topology checker
+passes, the DMA caveat is respected
 (no claim of DMA-immunity on Pi-class hardware), and the
 verifier/installer/keystore/ring proofs discharge, then a fully
 compromised agent, tool, or channel PD cannot read credentials, corrupt
@@ -605,20 +692,26 @@ flow. This is the "same architecture, better silicon" move:
 - Port cost: new platform `.mk` + device drivers (UART, ENET instead of
   GENET, eMMC); the PD architecture, protocols, and supervisor design
   carry over unchanged. AArch64 target JSON already exists.
-- The CAAM crypto engine can complement or replace the discrete SPI
-  TPM; keeping the `rpi4-tpm-pd` broker interface stable means client
-  PDs don't care which backend signs quotes.
+- Keep the discrete SPI TPM on i.MX8M. CAAM is a crypto engine, not a
+  TPM — it does not speak TPM 2.0 command streams, so it is *not* a
+  drop-in `TpmTransport` impl (review finding). If CAAM ever replaces
+  the TPM, that happens behind a higher-level `AttestationBackend`
+  abstraction (measure, seal, monotonic counters, quote) — a deliberate
+  second seam above the transport trait, not a stretched version of it.
 
 ### 3. RISC-V: PolarFire SoC Icicle (strongest end-to-end story)
 
-seL4's functional-correctness proofs cover RV64, and the
+seL4's functional-correctness proofs cover RV64 (for the non-MCS
+kernel; the MCS configuration Microkit uses carries the same
+code-conformance caveat as AArch64 — see the scope section), and the
 [Microchip PolarFire SoC Icicle Kit is a supported seL4 platform](https://docs.sel4.systems/Hardware/polarfire.html)
 with an ecosystem already using it for exactly this trusted-base role
 ([DornerWorks](https://www.dornerworks.com/blog/sel4-on-polarfire-soc/)).
 PolarFire SoC brings its own hardware root of trust: immutable boot
 ROM-equivalent secure boot, device certificates, and tamper features —
 no closed application-processor firmware in the chain at all. Combined
-with the verified kernel this is the maximal "provable stack" target.
+with the seL4 proof lineage this is the maximal "provable stack"
+target.
 
 - The repo already builds and CI-tests `qemu-riscv64`
   (`microkit-hello`), so the toolchain path exists today; porting means
@@ -667,7 +760,7 @@ code changes, and the A/B update design slots straight into signed
 exercises secure boot + TPM logic on every commit. Mid-term, **i.MX8MM**
 if the project wants deployable ARM hardware with serious provisioning,
 or **PolarFire Icicle** if the goal is the maximal formal story
-(verified kernel on RV64 + open hardware root of trust). Cloud is the
+(seL4 proof lineage on RV64 + open hardware root of trust). Cloud is the
 low-friction way to run the agent 24/7 once the x86_64 or
 virtio-AArch64 path lands.
 
@@ -720,10 +813,17 @@ are precisely the classes this repo's toolchain eliminates:
   challenge/re-execute pattern of
   [EigenAI](https://arxiv.org/abs/2602.00182). It does *not* make a
   TPM quote a proof of inference.
-- **Signed execution receipts** are the per-response artifact: the
-  model PD emits, and a device-held attestation key signs,
-  `{nonce/session, input digest, weights + runtime measurements,
-  config + sampling params, output digest}`. A receipt
+- **Signed execution receipts** are the per-response artifact: a
+  canonically encoded, versioned structure
+  `{protocol version, verifier-supplied nonce/session, input digest,
+  weights + runtime measurements, config + sampling params, output
+  digest}` — with the output bytes supplied alongside, since a digest
+  alone verifies nothing. **Key hierarchy (per review):** receipts are
+  signed by a dedicated **application receipt key** that is (1)
+  certified by the TPM attestation key, (2) sealed to the approved
+  boot/runtime PCR policy, and (3) domain-separated from the update,
+  TLS, and device-identity keys — a restricted TPM AK must not sign
+  arbitrary application structures directly. A receipt
   cryptographically *binds* an answer to a measured model and input —
   making the claim challengeable by re-execution — but attested
   execution still doesn't establish the model behaved well
@@ -821,7 +921,7 @@ What's missing, roughly in dependency order:
    reach `api.anthropic.com`; cert pinning keeps the trust store tiny.
 3. **Supervisor PD + child-PD conversion** — first use of Microkit
    hierarchical PDs in the repo; restart demo killable in QEMU CI.
-4. **Ring epoch protocol** — restart-safe rings, Verus-verified.
+4. **Ring generation protocol** — restart-safe rings, Verus-verified.
 5. **Storage PD** — SD/eMMC driver (needed for photos anyway, per the
    photoframe 5-PD target design).
 6. **Update pipeline** — capsule format, ed25519 verify, A/B images,
@@ -847,17 +947,19 @@ existing `qemu-netdemo` job is the template):
   ICMP echo against QEMU slirp in CI.
 - **Phase B — supervised PDs:** supervisor parent PD; convert netclient
   to a child; CI test that force-faults the child and asserts recovery
-  with epoch-reset rings. *(Independent of Phase A; can run first.)*
-- **Phase C — talk to Claude:** https PD, keystore header-injection
-  proxy (software keys first, TPM sealing later); minimal agent-core
-  PD; end-to-end demo: prompt typed on UART/keyboard → response on
-  HDMI. This is the "it's alive" milestone.
+  with generation-reset rings. *(Independent of Phase A; can run first.)*
+- **Phase C — talk to Claude:** https PD, keystore as credential-use
+  service (policy-enforced request capabilities; software keys first,
+  TPM sealing later); minimal agent-core PD; end-to-end demo: prompt
+  typed on UART/keyboard → response on HDMI. This is the "it's alive"
+  milestone.
 - **Phase D — secure updates:** A/B image update with signature check;
   then Tier-2 signed hot-swap of one tool slot PD, measured into a PCR.
 - **Phase E — agent surface:** storage PD (conversation memory),
   scheduler in supervisor, first real tool slots and a channel PD.
 - **Verification thread (continuous):** Verus on the network ring, the
-  epoch protocol, capsule parsing, and the supervisor's lifecycle state
+  generation protocol, capsule parsing, and the lifecycle/verifier/
+  installer state
   machine (a small state machine over stop/verify/measure/write/restart
   is an ideal Verus target — a bug there is exactly a "load unsigned
   code" bug).
