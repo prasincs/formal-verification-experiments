@@ -59,7 +59,7 @@ These are fixed. An agent who believes a contract is wrong stops and
 reports rather than unilaterally changing it, because another agent is
 building against it.
 
-### IC-1: Epoch ring header (WP-3 ⇄ WP-4 ⇄ everything using rings)
+### IC-1: Ring generation header + quiescent reset (WP-3 ⇄ WP-4 ⇄ everything using rings)
 
 The existing ring header (`docs/device-isolation-architecture.md`) is:
 
@@ -73,31 +73,43 @@ The existing ring header (`docs/device-isolation-architecture.md`) is:
 
 - Offset `0x00C` becomes `generation: u32` (atomic). Value `0` means
   "legacy/no supervisor" — existing images remain layout-compatible.
-- **Seqlock discipline (normative — a plain reset races, per review):**
-  only the supervisor/lifecycle PD writes `generation`. A reset is:
-  publish `generation = odd` (release ordering) → zero
-  `write_idx`/`read_idx` → publish `generation = next even` (release).
-  Because the indices are separate atomics, the intermediate state is
-  only ever observed under an odd generation.
-- Endpoints **acquire-read `generation` before and after every ring
-  operation**. If either read is odd, or the two differ, the operation
-  is abandoned (writes: the entry is not published — the index
-  increment is the publish step and must be skipped; reads: the entry
-  is discarded) and the endpoint re-syncs its local cursors from the
-  shared indices under the new even generation.
-- Live generations are even; entries have no embedded generation —
-  the invariant is that no operation *completes* across a generation
-  change.
-- Quiescent alternative: if the supervisor stops **both** endpoints
-  before resetting (fine for `supdemo`, where the supervisor is the
-  peer), the odd window is never observable; the protocol above still
-  must be implemented, since production rings connect two children.
-- New API surface (added, not replacing): `generation()`,
-  `RingGuard::begin(...) -> Option<Guard>` / `Guard::commit(...) ->
-  Result<(), Retry>` encapsulating the double-read.
-- Verus obligation (WP-4): model supervisor/producer/consumer
-  interleavings including the odd window and the acquire/release
-  pairs — not merely "different numbers reject."
+- **Quiescent reset (normative — review round 2):** a seqlock-style
+  double-read was specified here previously and is **rejected**:
+  endpoints are *writers* into the state being reset, so the index
+  publication necessarily follows the second generation read and the
+  reset can land in between — no double-read couples validation to
+  publication atomically. Correctness comes from removing concurrency,
+  not detecting it. Reset sequence, executed only by the lifecycle PD:
+
+  1. `microkit_pd_stop(producer)`;
+  2. `microkit_pd_stop(consumer)` (skip whichever endpoint is the
+     lifecycle PD itself);
+  3. publish `generation = odd` (release);
+  4. zero `write_idx`/`read_idx` and any endpoint-visible ring state;
+  5. publish `generation = next even` (release);
+  6. restart both endpoints.
+
+- **Endpoint obligations:** on (re)start, acquire-read `generation`;
+  if odd, park and raise a fault — that is a lifecycle bug, never a
+  retry; record the value and re-derive local cursors from the shared
+  indices *before any publication*. During normal operation endpoints
+  do **not** need generation checks for correctness (they are stopped
+  during resets); a debug-build assertion that the generation is
+  unchanged is welcome defense-in-depth, but nothing may rely on it.
+- **Topology precondition (checked by WP-5):** both endpoints of every
+  restartable ring are children of — or otherwise stoppable by — the
+  same lifecycle PD. Rings that cannot satisfy this must not be marked
+  restartable; a future acknowledge-quiesce-release handshake protocol
+  is out of scope until a concrete ring needs it.
+- New API surface (added, not replacing): `generation()` and
+  `resync() -> Result<Generation, OddGeneration>` for the (re)start
+  path.
+- Verus obligation (WP-4): with endpoint-quiescence as an explicit
+  precondition of reset, prove reset re-establishes the ring
+  invariants and that a restarted endpoint's first publication is
+  preceded by `resync`; the lifecycle-side state machine (reset
+  unreachable while either endpoint is running) is proven in the
+  supervisor work, not assumed.
 
 ### IC-2: Update capsule format (WP-8 ⇄ WP-3 ⇄ WP-6)
 
@@ -259,9 +271,9 @@ on child PDs, `fault` entry point, `microkit_pd_stop/restart`;
 `rpi4-input-pd/src/main.rs` for the PD runtime pattern.
 **Deliverables:**
 - `rpi4-supervisor/`: supervisor PD implementing IC-4 — fault handler
-  logs fault info, runs the IC-1 generation reset (publish odd →
-  zero indices → publish even; the quiescent variant is acceptable here
-  since the supervisor is itself the ring peer), restarts
+  logs fault info, runs the IC-1 quiescent reset (the worker is
+  stopped by the fault, and the supervisor is itself the other ring
+  endpoint, so both ends are quiesced by construction), restarts
   the worker at its entry point; plus a heartbeat watchdog (worker
   writes a counter entry every N iterations; supervisor restarts on
   stall).
@@ -288,22 +300,25 @@ an rw mapping to any executable region.
 **Goal:** restart-safe rings per IC-1, proven.
 **Read first:** `rpi4-input-protocol/src/lib.rs` (the house proof
 style), design doc "Tier 1".
-**Deliverables:** generation field + seqlock API in
-`rpi4-input-protocol` (additive; offset `0x00C`, odd/even discipline
-and acquire/release ordering per IC-1 — the naive "zero indices, bump
-epoch" reset races and is explicitly rejected), mirrored in
-`rpi4-network-protocol`. Verus invariants: index bounds preserved
-(existing), *no ring operation completes across an odd or changed
-generation*, no entry written under generation N is consumable under
-M>N, endpoints converge on the new even generation. The proof must
-model supervisor/producer/consumer **interleavings and the
-acquire/release pairs**, not merely that mismatched numbers reject.
-Host unit tests simulating those interleavings, including a peer
-running concurrently with a reset.
+**Deliverables:** generation field + quiescent-reset API in
+`rpi4-input-protocol` (additive; offset `0x00C` per IC-1 — note both
+prior designs are explicitly rejected: the naive "zero indices, bump
+epoch" races, and the seqlock double-read races too, because endpoints
+publish *after* the second read), mirrored in `rpi4-network-protocol`.
+API: `generation()`, `resync()`, and a reset entry point whose
+contract (documented + Verus precondition) is "callable only with both
+endpoints stopped." Verus invariants: index bounds preserved
+(existing), reset re-establishes ring validity, a (re)started
+endpoint's first publication is preceded by `resync`, `resync` on an
+odd generation returns the fatal error and permits no subsequent
+operation. Host unit tests: restart of producer, restart of consumer,
+restart of both, resync-before-publish enforcement, odd-generation
+fatality, and generation wraparound behavior (document the chosen wrap
+policy). Include a test documenting the *rejected* concurrent-reset
+interleaving (debug assertion fires / API cannot express it) so the
+race that killed two spec revisions stays dead.
 **Acceptance:** `cargo build` clean (macro strips), Verus verification
-passes via the `verus/` harness, host tests cover: restart of producer,
-restart of consumer, restart of both, reset-while-peer-active, and
-generation wraparound behavior (document the chosen wrap policy).
+passes via the `verus/` harness, all host tests above pass.
 **Non-goals:** changing existing entry formats; touching PD binaries
 (WP-3 consumes this by crate bump, and ships even if WP-4 is late —
 generation 0 = legacy mode).
@@ -354,6 +369,11 @@ target = "keystore"
 
 [[dma_capable]]           # PD owns a DMA-capable device: distinguished
 pd = "network"            # trust class, must be explicitly declared
+
+[[restartable_ring]]      # IC-1 quiescent-reset precondition: both
+region = "work_ring"      # endpoints are children of (or are) the
+lifecycle_pd = "supervisor"  # same lifecycle PD
+endpoints = ["supervisor", "worker"]
 ```
 Write sidecars for every existing `.system` file, encoding the claims
 the docs already make in prose (including declaring `network` as
@@ -362,7 +382,8 @@ the docs already make in prose (including declaring `network` as
 `.system`+sidecar pair; deliberately-broken fixtures prove the checker
 fails when (a) a mapping is widened, (b) a channel is added to a PD
 with `only_channels`, (c) a device/IRQ appears on a `no_device_mmio`
-PD. Checker itself has unit tests.
+PD, (d) a `restartable_ring` endpoint is not a child of (or identical
+to) the declared lifecycle PD. Checker itself has unit tests.
 **Non-goals:** notification *direction* enforcement (Microkit channels
 are bidirectional at the kernel level; direction is a protocol
 convention — document this honestly in the checker README), scheduling

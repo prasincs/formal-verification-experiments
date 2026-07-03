@@ -305,30 +305,45 @@ producer that re-inits `write_idx = 0` while its peer holds
 `read_idx = 700` silently corrupts the stream. So restartability needs a
 small protocol extension, which is also a natural next Verus target:
 
-- a **generation counter** in the ring header with a seqlock-style
-  odd/even discipline (review finding: a plain "zero indices then bump
-  epoch" reset races against a still-running peer, because the indices
-  are separate atomics and the multi-field reset is not transactional).
-  The lifecycle PD publishes an **odd** generation ("reset in
-  progress", release ordering), resets the indices, then publishes the
-  next **even** generation; endpoints acquire-read the generation
-  before *and after* each ring operation and discard the operation's
-  effects if it was odd or changed;
-- alternatively, where the lifecycle PD can afford to briefly stop
-  *both* endpoints (true in the first demo, where it is itself the
-  peer), a quiescent reset — stop both, reset, publish, restart both —
-  is an acceptable simplification;
-- Verus target: model the supervisor/producer/consumer *interleavings
-  and memory ordering*, not merely "mismatched epochs are rejected" —
-  no entry written under generation N is consumable under M>N, no
-  operation completes across an odd generation, and both endpoints
-  converge on the new even generation (extends the verified SPSC
-  discipline in `rpi4-input-protocol/src/lib.rs`).
+- **Quiescent reset (normative — it took two review rounds to get
+  here, and the failed attempts are instructive).** Round one's "zero
+  the indices, bump an epoch" races against a still-running peer.
+  Round two's seqlock-style double-read (check generation before and
+  after the operation, publish only on match) *also* races: a seqlock
+  protects **readers**, but ring endpoints are **writers** into the
+  very state the reset replaces — the index store necessarily happens
+  *after* the second generation read, so the reset can land in the gap
+  between validation and publication, and no number of generation
+  reads can atomically couple the check to the store. The only simple
+  correct design: the lifecycle PD **stops the producer, stops the
+  consumer, publishes an odd generation, resets the indices, publishes
+  the next even generation, then restarts both endpoints.** Concurrency
+  is removed, not synchronized against.
+- The generation counter's role is accordingly demoted from lock-free
+  primitive to **stale-state detector**: a (re)started endpoint
+  acquire-reads it to re-sync local cursors and to detect that a reset
+  happened while it was down; observing an odd generation means a
+  lifecycle bug and is treated as fatal, not retried.
+- **Architectural constraint this imposes:** both endpoints of every
+  restartable ring must be children of — or otherwise stoppable by —
+  the *same* lifecycle authority. This is a `.system`-checkable
+  topology property (added to the checker's obligations below). Rings
+  whose endpoints cannot both be quiesced would need an explicit
+  reset-handshake protocol (acknowledge-quiesce-release), which is
+  deliberately out of scope until something needs it.
+- Verus target: with quiescence as a precondition, prove reset
+  re-establishes the ring invariants and that a restarted endpoint
+  re-syncs before its first publication — plus the lifecycle-side
+  obligation that reset is unreachable while either endpoint runs
+  (extends the verified SPSC discipline in
+  `rpi4-input-protocol/src/lib.rs`).
 
-This makes "kill any PD at any time" a safe operation — which is worth
+Once implemented and proven, this makes "restart any PD" a safe
+operation *for rings under a common lifecycle authority* — worth
 having even before agents exist (network driver watchdog, decoder PD
 crash containment for photoframe, which its `.system` file already
-anticipates).
+anticipates). It is a proposed protocol, not a property the system has
+today.
 
 ### Tier 2: hot code update (per-PD, signed + measured)
 
@@ -342,7 +357,9 @@ compromise defeats every property at once. The role decomposes into:
   epochs; touches no update bytes;
 - **update-verifier PD** — parses capsules, checks signatures and
   anti-rollback; its only output is a **one-shot install authorization**
-  (a signed token naming blob digest + target slot + generation) sent
+  (an *authenticated* one-shot authorization — authenticity comes from
+  the kernel-enforced private channel it arrives on, not a signature —
+  naming blob digest + target slot + generation) sent
   to the installer;
 - **installer PD** — tiny, holds the `rw` mapping to slot code regions,
   and writes *only* what a fresh one-shot authorization names;
@@ -478,11 +495,13 @@ Verus proofs worth writing, in the style of the existing ring proofs:
 ### 2. Restart-safe rings (direct extension of existing work)
 
 `rpi4-input-protocol` already proves index bounds and SPSC discipline.
-The generation extension (seqlock discipline per Tier 1 — the naive
-epoch-bump reset races and was rejected in review) adds one invariant
-family: *no ring operation completes across an odd or changed
-generation*, so a restarted endpoint can never cause its peer to read
-stale or uninitialized slots even while the peer keeps running. Same
+The generation extension (quiescent-reset discipline per Tier 1 — both
+the naive epoch-bump *and* a seqlock double-read were rejected across
+two review rounds, because endpoints write into the state being reset)
+adds one invariant family: *resets happen only while both endpoints are
+stopped, and a restarted endpoint re-syncs from the shared state before
+its first publication* — so a restart can never cause a peer to read
+stale or uninitialized slots. Same
 proof style, same crate layout — and it should land for the network and
 photo protocol crates at the same time (both are currently unverified
 copies of the input crate's shape; `docs/networking-roadmap.md` Phase 7
@@ -533,7 +552,8 @@ graphics is `input_ring`; the keystore key region has exactly one
 mapping; no slot PD maps any device MMIO or owns an IRQ; the
 installer's staging region is unshared; agent-core's only channel peer
 is the policy PD; every DMA-capable device owner is explicitly
-declared as such.* This is a lightweight, Microkit-scale version of
+declared as such; both endpoints of every restartable ring are
+children of the same lifecycle PD (the quiescent-reset precondition).* This is a lightweight, Microkit-scale version of
 what CapDL does for full seL4 systems, it converts the architecture
 docs from prose into regression-checked properties, and it guards the
 failure mode most likely in practice: a future `.system` edit quietly
@@ -571,7 +591,7 @@ document's real thesis:
 |---|---|---|
 | PD memory isolation | seL4 capabilities | **planned/conditional** — design proofs + verified lineage today; the pinned Microkit MCS/AArch64 kernel is not yet covered by completed code conformance (see scope); DMA caveat applies regardless |
 | Capability topology matches docs | `.system` checker in CI | proposed |
-| Ring safety incl. restart | Verus | input ring: verified today; generation/seqlock extension: proposed |
+| Ring safety incl. restart | Verus | input ring: verified today; generation/quiescent-reset extension: proposed |
 | Update authorization (verify-before-write, measure-before-execute, anti-rollback) | Verus on verifier/installer | proposed |
 | Update crash-atomicity | TLA+ model | proposed |
 | Model parser / memory envelope safety | Verus | proposed |
