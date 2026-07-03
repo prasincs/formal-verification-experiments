@@ -209,7 +209,23 @@ optimization on top of it.
 
 The update/attestation design above assumes the platform can anchor a
 chain of trust. Four realistic paths, in increasing order of porting
-effort:
+effort.
+
+**The repo's existing TPM stack is the portable layer across all of
+them.** `rpi4-tpm-boot` already separates concerns cleanly: `pcr.rs`,
+`boot_chain.rs`, and `attestation.rs` (PCR banks, measurement chain,
+quote/event-log structures) are pure TPM 2.0 logic with no platform
+dependency; only `spi.rs` + `slb9670.rs` are transport/chip-specific.
+Likewise `rpi4-tpm-pd`'s IPC surface (`Init`, `PcrExtend`, `PcrRead`,
+`GetRandom`, …) is what client PDs program against, not the chip. So
+each target below keeps the measurement/attestation/keystore design
+unchanged and swaps at most the transport. Secure boot doesn't replace
+this work — it **completes** it: verified boot prevents tampered images
+from running at all, while the existing measured-boot chain (PCR0
+firmware … PCR3 PD images … PCR7 policy, per the `rpi4-tpm-boot`
+README) is what proves the running state to a remote party and gates
+unsealing of the API keys. Prevention and attestation are different
+jobs; we need both, and we already have half.
 
 ### 1. Stay on Pi: RPi4 / CM4 with OTP-fused signed boot
 
@@ -223,7 +239,8 @@ config or `boot.img` not signed with that key
 `loader.img` — i.e. the whole Microkit image rides inside the signed
 artifact with **zero code changes** to this repo.
 
-- Fit: keeps the existing BCM2711 drivers, SLB9670 TPM, and build
+- Fit: keeps the existing BCM2711 drivers, the SLB9670 SPI TPM (same
+  GPIO 7–11 wiring, `spi.rs`/`slb9670.rs` unchanged), and the build
   system. The Tier-3 A/B update flips between two *signed* `boot.img`
   files; the supervisor's capsule signature check stays as the Tier-2
   layer.
@@ -264,6 +281,9 @@ with the verified kernel this is the maximal "provable stack" target.
   (`microkit-hello`), so the toolchain path exists today; porting means
   platform bring-up (HSS boot handoff, UART, MACB Ethernet) rather than
   new architecture work.
+- The Icicle Kit exposes SPI on its Pi-compatible header, so the
+  discrete SLB9670 and the existing driver stack carry over here too —
+  attestation code identical across ARM and RISC-V deployments.
 - Cheaper RISC-V boards (Star64/VisionFive 2, JH7110) are
   seL4-supported but have a much weaker/poorly documented secure-boot
   story — fine for development, not for the trust anchor.
