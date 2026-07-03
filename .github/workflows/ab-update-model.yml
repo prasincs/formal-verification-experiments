@@ -1,0 +1,29 @@
+name: A/B Update Model
+
+on:
+  push:
+    branches: [main, "agent/*", "claude/*"]
+    paths:
+      - "sel4-microkernel/formal/ab-update/**"
+      - ".github/workflows/ab-update-model.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "sel4-microkernel/formal/ab-update/**"
+      - ".github/workflows/ab-update-model.yml"
+
+jobs:
+  tlc:
+    name: Check crash safety
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download TLC
+        run: curl --fail --location --retry 3 --output /tmp/tla2tools.jar https://github.com/tlaplus/tlaplus/releases/latest/download/tla2tools.jar
+
+      - name: Run model checks
+        working-directory: sel4-microkernel/formal/ab-update
+        env:
+          TLA_JAR: /tmp/tla2tools.jar
+        run: bash check.sh
