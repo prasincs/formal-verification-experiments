@@ -39,7 +39,6 @@ if [ -z "$MICROKIT_SDK" ]; then
 fi
 
 export MICROKIT_SDK
-export SEL4_INCLUDE_DIRS="$MICROKIT_SDK/board/qemu_virt_aarch64/debug/include"
 
 echo "=== Building Microkit System ==="
 echo "SDK: $MICROKIT_SDK"
@@ -47,31 +46,7 @@ echo ""
 
 cd "$REPO_ROOT/sel4-microkernel/microkit-hello"
 
-# Build the Rust protection domain
-echo "Building Rust protection domain..."
-cargo +nightly build \
-    --release \
-    --target aarch64-sel4-microkit \
-    -Z build-std=core,alloc \
-    -Z build-std-features=compiler-builtins-mem
-
-# Create output directory and copy ELF
-mkdir -p build/aarch64
-cp target/aarch64-sel4-microkit/release/hello.elf build/aarch64/
-
-# Build system image with Microkit tool
-echo ""
-echo "Building system image..."
-"$MICROKIT_SDK/bin/microkit" \
-    hello.system \
-    --search-path build/aarch64 \
-    --board qemu_virt_aarch64 \
-    --config debug \
-    -o build/aarch64/loader.img \
-    -r build/aarch64/report.txt
-
-echo ""
-echo "Build complete!"
-echo "  System image: build/aarch64/loader.img"
-echo "  ELF: build/aarch64/hello.elf"
-echo "  Report: build/aarch64/report.txt"
+# Delegate to the Makefile so there is exactly one build path. It handles
+# SEL4_INCLUDE_DIRS, the .json target spec, and the nightly target-spec
+# opt-in flags (which change across nightlies), then runs the Microkit tool.
+make ARCH=aarch64 MICROKIT_SDK="$MICROKIT_SDK"

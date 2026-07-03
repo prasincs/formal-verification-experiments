@@ -140,7 +140,10 @@ ring protocol is not.
 - [ ] Modern (non-legacy) virtio-mmio support, `VIRTIO_NET_F_STATUS`
       link detection
 - [ ] Pin the nightly toolchain (`rust-toolchain.toml` tracks moving
-      `nightly`; drift has broken CI twice — see `633d433`, `dc4fa57`)
+      `nightly`; drift has broken CI three times — `633d433`, `dc4fa57`,
+      and `build-microkit.sh` on the 2026-07 nightly. Requires updating
+      the `dtolnay/rust-toolchain@nightly` workflow steps and the
+      `cargo +nightly` Makefile invocations together)
 - [ ] ARM64 GitHub runners (`ubuntu-24.04-arm`) for KVM-speed QEMU tests
       if boot tests grow beyond smoke checks
 
