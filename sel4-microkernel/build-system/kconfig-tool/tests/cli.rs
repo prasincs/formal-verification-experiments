@@ -110,10 +110,7 @@ CONFIG_BETA=y
 
 fn config_value(config_path: &Path, name: &str) -> String {
     let text = fs::read_to_string(config_path).unwrap();
-    if text
-        .lines()
-        .any(|l| l == format!("CONFIG_{name}=y"))
-    {
+    if text.lines().any(|l| l == format!("CONFIG_{name}=y")) {
         "y".to_string()
     } else if text
         .lines()
@@ -145,9 +142,21 @@ fn resolve_layering_and_config_mk() {
         "--out-mk",
         out_mk.to_str().unwrap(),
     ]);
-    assert!(out.status.success(), "resolve with defaults only: {}", stderr(&out));
-    assert_eq!(config_value(&out_config, "ALPHA"), "y", "default y is applied");
-    assert_eq!(config_value(&out_config, "BETA"), "n", "default n is applied");
+    assert!(
+        out.status.success(),
+        "resolve with defaults only: {}",
+        stderr(&out)
+    );
+    assert_eq!(
+        config_value(&out_config, "ALPHA"),
+        "y",
+        "default y is applied"
+    );
+    assert_eq!(
+        config_value(&out_config, "BETA"),
+        "n",
+        "default n is applied"
+    );
 
     // Defconfig layered on top.
     let out = run(&[
@@ -161,8 +170,16 @@ fn resolve_layering_and_config_mk() {
         "--out-mk",
         out_mk.to_str().unwrap(),
     ]);
-    assert!(out.status.success(), "resolve with defconfig: {}", stderr(&out));
-    assert_eq!(config_value(&out_config, "BETA"), "y", "defconfig =y overrides default");
+    assert!(
+        out.status.success(),
+        "resolve with defconfig: {}",
+        stderr(&out)
+    );
+    assert_eq!(
+        config_value(&out_config, "BETA"),
+        "y",
+        "defconfig =y overrides default"
+    );
     assert_eq!(
         config_value(&out_config, "ALPHA"),
         "n",
@@ -185,13 +202,31 @@ fn resolve_layering_and_config_mk() {
         "--out-mk",
         out_mk.to_str().unwrap(),
     ]);
-    assert!(out.status.success(), "resolve with overrides: {}", stderr(&out));
-    assert_eq!(config_value(&out_config, "BETA"), "n", "--set overrides defconfig (to n)");
-    assert_eq!(config_value(&out_config, "ALPHA"), "y", "--set overrides defconfig (to y)");
+    assert!(
+        out.status.success(),
+        "resolve with overrides: {}",
+        stderr(&out)
+    );
+    assert_eq!(
+        config_value(&out_config, "BETA"),
+        "n",
+        "--set overrides defconfig (to n)"
+    );
+    assert_eq!(
+        config_value(&out_config, "ALPHA"),
+        "y",
+        "--set overrides defconfig (to y)"
+    );
 
     let mk = fs::read_to_string(&out_mk).unwrap();
-    assert!(mk.lines().any(|l| l == "CONFIG_ALPHA := y"), "config.mk contains y value");
-    assert!(mk.lines().any(|l| l == "CONFIG_BETA := n"), "config.mk contains n value");
+    assert!(
+        mk.lines().any(|l| l == "CONFIG_ALPHA := y"),
+        "config.mk contains y value"
+    );
+    assert!(
+        mk.lines().any(|l| l == "CONFIG_BETA := n"),
+        "config.mk contains n value"
+    );
 }
 
 #[test]
@@ -259,7 +294,11 @@ fn resolve_validation_errors() {
     assert_kconfig_error(&out, "non-bool defconfig value is rejected");
 
     let dup_kconfig = tmp.path("dup_kconfig");
-    fs::write(&dup_kconfig, "config DUP\n\tbool \"a\"\nconfig DUP\n\tbool \"b\"\n").unwrap();
+    fs::write(
+        &dup_kconfig,
+        "config DUP\n\tbool \"a\"\nconfig DUP\n\tbool \"b\"\n",
+    )
+    .unwrap();
     let out = run(&[
         "resolve",
         "--kconfig",
@@ -297,7 +336,11 @@ fn resolve_validation_errors() {
         "--out-mk",
         out_mk.to_str().unwrap(),
     ]);
-    assert!(out.status.success(), "satisfied depends is accepted: {}", stderr(&out));
+    assert!(
+        out.status.success(),
+        "satisfied depends is accepted: {}",
+        stderr(&out)
+    );
 
     let out = run(&[
         "resolve",
@@ -359,14 +402,22 @@ fn resolve_output_mtime_stability() {
     ];
 
     let out = run(&resolve_args);
-    assert!(out.status.success(), "resolve for mtime test: {}", stderr(&out));
+    assert!(
+        out.status.success(),
+        "resolve for mtime test: {}",
+        stderr(&out)
+    );
     let before = fs::metadata(&out_config).unwrap().modified().unwrap();
 
     // Ensure a coarse filesystem clock can't accidentally show "unchanged".
     std::thread::sleep(std::time::Duration::from_millis(20));
 
     let out = run(&resolve_args);
-    assert!(out.status.success(), "re-resolve for mtime test: {}", stderr(&out));
+    assert!(
+        out.status.success(),
+        "re-resolve for mtime test: {}",
+        stderr(&out)
+    );
     let after = fs::metadata(&out_config).unwrap().modified().unwrap();
 
     assert_eq!(before, after, "unchanged .config is not rewritten");
@@ -410,7 +461,11 @@ fn gensystem_marker_semantics() {
         "--out-mk",
         out_mk.to_str().unwrap(),
     ]);
-    assert!(out.status.success(), "resolve for gensystem: {}", stderr(&out));
+    assert!(
+        out.status.success(),
+        "resolve for gensystem: {}",
+        stderr(&out)
+    );
 
     let out_system = tmp.path("out.system");
     let out = run(&[
@@ -425,9 +480,18 @@ fn gensystem_marker_semantics() {
     assert!(out.status.success(), "gensystem runs: {}", stderr(&out));
     let generated = fs::read_to_string(&out_system).unwrap();
     assert!(generated.contains("<beta-only />"), "enabled block kept");
-    assert!(generated.contains("<alpha-and-beta />"), "nested enabled block kept");
-    assert!(!generated.contains("<no-alpha />"), "negated block stripped");
-    assert!(!generated.contains("@if") && !generated.contains("@endif"), "markers removed");
+    assert!(
+        generated.contains("<alpha-and-beta />"),
+        "nested enabled block kept"
+    );
+    assert!(
+        !generated.contains("<no-alpha />"),
+        "negated block stripped"
+    );
+    assert!(
+        !generated.contains("@if") && !generated.contains("@endif"),
+        "markers removed"
+    );
 
     let out = run(&[
         "resolve",
@@ -442,7 +506,11 @@ fn gensystem_marker_semantics() {
         "--out-mk",
         out_mk.to_str().unwrap(),
     ]);
-    assert!(out.status.success(), "resolve for gensystem (off): {}", stderr(&out));
+    assert!(
+        out.status.success(),
+        "resolve for gensystem (off): {}",
+        stderr(&out)
+    );
 
     let out_system2 = tmp.path("out2.system");
     let out = run(&[
@@ -454,13 +522,20 @@ fn gensystem_marker_semantics() {
         "--out",
         out_system2.to_str().unwrap(),
     ]);
-    assert!(out.status.success(), "gensystem runs (off): {}", stderr(&out));
+    assert!(
+        out.status.success(),
+        "gensystem runs (off): {}",
+        stderr(&out)
+    );
     let generated2 = fs::read_to_string(&out_system2).unwrap();
     assert!(
         !generated2.contains("beta-only") && !generated2.contains("alpha-and-beta"),
         "disabled blocks stripped"
     );
-    assert!(generated2.contains("<no-alpha />"), "negated block kept when option off");
+    assert!(
+        generated2.contains("<no-alpha />"),
+        "negated block kept when option off"
+    );
     assert!(generated2.contains("<always />"), "unguarded content kept");
 
     let badref = tmp.path("badref.system");
@@ -537,7 +612,10 @@ fn repo_defconfigs_resolve() {
             stderr(&out)
         );
     }
-    assert!(found_any, "expected at least one *_defconfig under {configs_dir:?}");
+    assert!(
+        found_any,
+        "expected at least one *_defconfig under {configs_dir:?}"
+    );
 }
 
 #[test]
@@ -591,9 +669,18 @@ fn repo_system_templates_gensystem() {
             let generated = fs::read_to_string(&out_system).unwrap();
             let usb_count = generated.matches("mr=\"usb_").count();
             if usb == "y" {
-                assert!(usb_count > 0, "{:?} maps USB when enabled", sys.file_name().unwrap());
+                assert!(
+                    usb_count > 0,
+                    "{:?} maps USB when enabled",
+                    sys.file_name().unwrap()
+                );
             } else {
-                assert_eq!(usb_count, 0, "{:?} omits USB when disabled", sys.file_name().unwrap());
+                assert_eq!(
+                    usb_count,
+                    0,
+                    "{:?} omits USB when disabled",
+                    sys.file_name().unwrap()
+                );
             }
             assert!(
                 !generated.contains("@if") && !generated.contains("@endif"),

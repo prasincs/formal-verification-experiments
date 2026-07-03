@@ -18,7 +18,7 @@ fn is_name_char(c: char) -> bool {
 }
 
 fn trim_ws_prefix(s: &str) -> &str {
-    s.trim_start_matches(|c| c == ' ' || c == '\t')
+    s.trim_start_matches([' ', '\t'])
 }
 
 fn strip_leading_ws(line: &str) -> Option<&str> {
@@ -56,7 +56,7 @@ pub struct Kconfig {
 fn match_config_decl(line: &str) -> Option<String> {
     let rest = line.strip_prefix("config")?;
     let rest = strip_leading_ws(rest)?;
-    let trimmed = rest.trim_end_matches(|c| c == ' ' || c == '\t');
+    let trimmed = rest.trim_end_matches([' ', '\t']);
     if !trimmed.is_empty() && trimmed.chars().all(is_name_char) {
         Some(trimmed.to_string())
     } else {
@@ -272,9 +272,8 @@ pub fn resolve(
         if spec.is_empty() {
             continue;
         }
-        let (name, value) = parse_override(spec).ok_or_else(|| {
-            format!("override '{spec}' is not of the form CONFIG_NAME=y|n")
-        })?;
+        let (name, value) = parse_override(spec)
+            .ok_or_else(|| format!("override '{spec}' is not of the form CONFIG_NAME=y|n"))?;
         assign(&mut values, &declared, &name, &value, "command line")?;
     }
 
@@ -401,7 +400,7 @@ fn match_dot_config_yes(line: &str) -> Option<String> {
         return None;
     }
     let value = remainder.strip_prefix('=')?;
-    let value = value.trim_end_matches(|c| c == ' ' || c == '\t');
+    let value = value.trim_end_matches([' ', '\t']);
     if value == "y" {
         Some(name.to_string())
     } else {
@@ -443,7 +442,11 @@ fn parse_dot_config(text: &str) -> HashMap<String, bool> {
 /// Preprocesses a `.system` template, keeping/dropping `@if`-guarded blocks
 /// per the resolved `.config`. `template_name` is used in error messages
 /// (`name:line: ...`), matching the original awk `FILENAME:FNR`.
-pub fn gensystem(config_text: &str, template_text: &str, template_name: &str) -> Result<String, String> {
+pub fn gensystem(
+    config_text: &str,
+    template_text: &str,
+    template_name: &str,
+) -> Result<String, String> {
     let cfg = parse_dot_config(config_text);
 
     let mut depth: i32 = 0;
@@ -469,7 +472,9 @@ pub fn gensystem(config_text: &str, template_text: &str, template_name: &str) ->
             }
             Marker::EndIf => {
                 if depth == 0 {
-                    return Err(format!("{template_name}:{lineno}: @endif without matching @if"));
+                    return Err(format!(
+                        "{template_name}:{lineno}: @endif without matching @if"
+                    ));
                 }
                 if suppress == depth {
                     suppress = 0;
@@ -589,7 +594,12 @@ CONFIG_BETA=y
 
     #[test]
     fn unknown_option_in_defconfig_is_rejected() {
-        let err = resolve(TEST_KCONFIG, Some(("bad_defconfig", "CONFIG_NOPE=y\n")), &[]).unwrap_err();
+        let err = resolve(
+            TEST_KCONFIG,
+            Some(("bad_defconfig", "CONFIG_NOPE=y\n")),
+            &[],
+        )
+        .unwrap_err();
         assert!(err.contains("unknown option CONFIG_NOPE"));
     }
 

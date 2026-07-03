@@ -148,10 +148,10 @@ fn cmd_gensystem(args: &[String]) -> ExitCode {
     let config = config.unwrap();
     let infile = infile.unwrap();
 
-    let config_text =
-        fs::read_to_string(&config).unwrap_or_else(|e| die(&format!("gensystem: cannot read {config}: {e}")));
-    let template_text =
-        fs::read_to_string(&infile).unwrap_or_else(|e| die(&format!("gensystem: cannot read {infile}: {e}")));
+    let config_text = fs::read_to_string(&config)
+        .unwrap_or_else(|e| die(&format!("gensystem: cannot read {config}: {e}")));
+    let template_text = fs::read_to_string(&infile)
+        .unwrap_or_else(|e| die(&format!("gensystem: cannot read {infile}: {e}")));
 
     let output = match kconfig_tool::gensystem(&config_text, &template_text, &infile) {
         Ok(o) => o,
