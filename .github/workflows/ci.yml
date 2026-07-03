@@ -101,6 +101,37 @@ jobs:
       - name: Build Microkit system
         run: ./scripts/build-microkit.sh
 
+  # Kconfig-style build configuration tool
+  kconfig:
+    name: Kconfig Tool
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Test kconfig-tool
+        working-directory: sel4-microkernel/build-system/kconfig-tool
+        run: cargo test
+
+  # Input drivers library (host-testable logic incl. USB HID)
+  input-library:
+    name: Input Drivers
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Test (all features)
+        working-directory: sel4-microkernel/rpi4-input
+        run: |
+          cargo test --all-features
+          cargo build --no-default-features
+          cargo build --features usb
+
   # Lint check
   clippy:
     name: Clippy

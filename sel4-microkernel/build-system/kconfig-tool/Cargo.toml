@@ -1,0 +1,16 @@
+[package]
+name = "kconfig-tool"
+version = "0.1.0"
+edition = "2021"
+description = "Kconfig-style build configuration resolver and .system preprocessor"
+publish = false
+
+[[bin]]
+name = "kconfig-tool"
+path = "src/main.rs"
+
+[lib]
+name = "kconfig_tool"
+path = "src/lib.rs"
+
+[dependencies]

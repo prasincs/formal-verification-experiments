@@ -354,10 +354,22 @@ pub fn entry_address(base: usize, idx: u32) -> (addr: usize)
 pub const INPUT_PD_UART_BASE: usize = 0x5_0300_0000;
 pub const INPUT_PD_UART_SIZE: usize = 0x1000;
 
+/// USB controller MMIO window mapped into the Input PD (DWC2 host).
+pub const INPUT_PD_USB_REGS_BASE: usize = 0x5_0500_0000;
+pub const INPUT_PD_USB_REGS_SIZE: usize = 0x10000;
+
+/// USB DMA buffer mapped into the Input PD.
+pub const INPUT_PD_USB_DMA_BASE: usize = 0x5_0600_0000;
+pub const INPUT_PD_USB_DMA_SIZE: usize = 0x1000;
+
 /// Specification: can Input PD access this address?
 pub open spec fn input_pd_can_access(addr: usize) -> bool {
     // UART registers
     (addr >= INPUT_PD_UART_BASE && addr < INPUT_PD_UART_BASE + INPUT_PD_UART_SIZE) ||
+    // USB controller registers
+    (addr >= INPUT_PD_USB_REGS_BASE && addr < INPUT_PD_USB_REGS_BASE + INPUT_PD_USB_REGS_SIZE) ||
+    // USB DMA buffer
+    (addr >= INPUT_PD_USB_DMA_BASE && addr < INPUT_PD_USB_DMA_BASE + INPUT_PD_USB_DMA_SIZE) ||
     // Shared ring buffer
     in_ring_buffer_region(addr)
 }

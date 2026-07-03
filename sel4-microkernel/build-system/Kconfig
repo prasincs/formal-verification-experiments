@@ -1,0 +1,51 @@
+# Kconfig — build configuration options for the seL4 Microkit products
+#
+# This file declares every CONFIG_* option the build system understands,
+# in a subset of the Linux Kconfig language:
+#
+#   config NAME
+#       bool "prompt"
+#       default y|n
+#       depends on OTHER [&& OTHER2 ...]
+#       help
+#           Indented help text (ends at the next non-indented line).
+#
+#   menu "title" / endmenu    - grouping only, no semantics
+#   comment "text"            - ignored
+#
+# Option values are resolved by scripts/kconfig.sh from three layers
+# (later wins): `default` lines here, the product defconfig in configs/,
+# and CONFIG_*=y|n overrides on the make command line. The resolved
+# configuration is written to $(BUILD_DIR)/.config and included into make
+# as $(BUILD_DIR)/config.mk.
+#
+# Consumers:
+#   - config/kconfig.mk maps CONFIG_INPUT_* to input_pd cargo features
+#   - kconfig.sh gensystem strips `<!-- @if CONFIG_X -->` blocks from
+#     .system descriptions, so device MMIO is only mapped when the code
+#     that uses it is compiled in (least privilege).
+
+menu "Input sources"
+
+config INPUT_UART
+	bool "UART serial input"
+	default y
+	help
+	  Poll the mini-UART for serial console input in the Input PD.
+	  Arrow keys / WASD / numbers are decoded into key events. This is
+	  the development input path (works over a USB-serial adapter) and
+	  the only input that works under QEMU.
+
+config INPUT_USB_KEYBOARD
+	bool "USB HID keyboard (DWC2)"
+	default n
+	help
+	  Drive the BCM2711 DWC2 USB OTG controller from the Input PD and
+	  read boot-protocol reports from a USB HID keyboard on the root
+	  port. Compiles the `usb` feature into input_pd and maps the DWC2
+	  MMIO window plus a 4KB DMA buffer into the Input PD.
+
+	  Split transactions (keyboard behind a high-speed hub) and the
+	  VL805 xHCI controller (the Pi 4's USB-A ports) are not supported.
+
+endmenu

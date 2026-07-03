@@ -1,0 +1,5 @@
+# This tool is std-only and needs nothing the pinned nightly provides, so it
+# overrides the repo-wide nightly pin (../../rust-toolchain.toml) with stable.
+# Kept independent so bumping the nightly pin never touches the build system.
+[toolchain]
+channel = "stable"

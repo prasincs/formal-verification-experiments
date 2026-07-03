@@ -23,7 +23,11 @@
 use sel4_microkit::{debug_println, protection_domain, Handler, ChannelSet, Channel};
 use core::fmt;
 
-use rpi4_input::{Uart, KeyCode, KeyState};
+use rpi4_input::{KeyCode, KeyState};
+#[cfg(feature = "uart")]
+use rpi4_input::Uart;
+#[cfg(feature = "usb")]
+use rpi4_input::{usb::DmaRegion, UsbKeyboard};
 use rpi4_input_protocol::{
     InputRingHeader, InputRingEntry, KeyState as ProtoKeyState,
     INPUT_CHANNEL_ID, header_ptr, entries_ptr,
@@ -31,17 +35,36 @@ use rpi4_input_protocol::{
 
 /// UART virtual address (mapped by Microkit)
 /// Physical: 0xFE215000 (page), mini-UART at +0x40
+#[cfg(feature = "uart")]
 const UART_VADDR: usize = 0x5_0300_0000 + 0x40;
 
 /// Shared ring buffer virtual address (mapped by Microkit)
 const RING_BUFFER_VADDR: usize = 0x5_0400_0000;
+
+/// DWC2 USB controller MMIO virtual address (mapped by Microkit).
+/// Physical: 0xFE98_0000 (BCM2711 USB OTG core).
+#[cfg(feature = "usb")]
+const USB_REGS_VADDR: usize = 0x5_0500_0000;
+
+/// USB DMA buffer virtual address (mapped uncached by Microkit).
+#[cfg(feature = "usb")]
+const USB_DMA_VADDR: usize = 0x5_0600_0000;
+/// USB DMA buffer physical address (device-visible, declared in the .system).
+#[cfg(feature = "usb")]
+const USB_DMA_PADDR: usize = 0x3e86_0000;
+/// USB DMA buffer size (one 4KB page is plenty for boot-keyboard transfers).
+#[cfg(feature = "usb")]
+const USB_DMA_SIZE: usize = 0x1000;
 
 /// Graphics PD channel for notifications
 const GRAPHICS_CHANNEL: Channel = Channel::new(INPUT_CHANNEL_ID);
 
 /// Input PD handler
 struct InputPdHandler {
+    #[cfg(feature = "uart")]
     uart: Uart,
+    #[cfg(feature = "usb")]
+    usb: Option<UsbKeyboard>,
     ring_base: *mut u8,
 }
 
@@ -51,8 +74,34 @@ impl InputPdHandler {
     /// # Safety
     /// The virtual addresses must be properly mapped by Microkit.
     unsafe fn new() -> Self {
+        // Bring up the USB host controller best-effort: if the core does not
+        // reach host mode (e.g. running under QEMU without a USB model), keep
+        // the keyboard disabled and fall back to UART input.
+        #[cfg(feature = "usb")]
+        let usb = {
+            let dma = DmaRegion {
+                vaddr: USB_DMA_VADDR,
+                paddr: USB_DMA_PADDR,
+                size: USB_DMA_SIZE,
+            };
+            let mut usb = UsbKeyboard::new(USB_REGS_VADDR, dma);
+            match usb.init() {
+                Ok(()) => {
+                    debug_println!("Input PD: USB host controller initialized");
+                    Some(usb)
+                }
+                Err(e) => {
+                    debug_println!("Input PD: USB init failed ({:?}), USB input disabled", e);
+                    None
+                }
+            }
+        };
+
         Self {
+            #[cfg(feature = "uart")]
             uart: Uart::with_base(UART_VADDR),
+            #[cfg(feature = "usb")]
+            usb,
             ring_base: RING_BUFFER_VADDR as *mut u8,
         }
     }
@@ -108,8 +157,24 @@ impl InputPdHandler {
         true
     }
 
-    /// Poll UART and forward events to ring buffer
+    /// Poll all input sources and forward events to the ring buffer.
     fn poll_and_forward(&mut self) {
+        // USB HID keyboard (real hardware input path). Poll first so the
+        // mutable borrow of `self.usb` is released before `write_event`.
+        #[cfg(feature = "usb")]
+        {
+            let usb_event = self.usb.as_mut().and_then(|usb| usb.poll());
+            if let Some(event) = usb_event {
+                unsafe {
+                    if self.write_event(event.key, event.state) {
+                        GRAPHICS_CHANNEL.notify();
+                    }
+                }
+            }
+        }
+
+        // UART serial input (development / fallback path).
+        #[cfg(feature = "uart")]
         if let Some(event) = self.uart.poll() {
             unsafe {
                 if self.write_event(event.key, event.state) {
@@ -164,7 +229,10 @@ fn init() -> InputPdHandler {
     debug_println!("  Input Protection Domain Starting");
     debug_println!("========================================");
     debug_println!("");
+    #[cfg(feature = "uart")]
     debug_println!("Input PD: UART at 0x{:x}", UART_VADDR);
+    #[cfg(feature = "usb")]
+    debug_println!("Input PD: USB controller at 0x{:x}", USB_REGS_VADDR);
     debug_println!("Input PD: Ring buffer at 0x{:x}", RING_BUFFER_VADDR);
 
     let handler = unsafe { InputPdHandler::new() };

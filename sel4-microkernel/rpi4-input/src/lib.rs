@@ -30,11 +30,15 @@ pub mod keyboard;
 pub mod ir_remote;
 pub mod touch;
 pub mod uart;
+#[cfg(feature = "usb")]
+pub mod usb;
 
 pub use keyboard::{Keyboard, KeyCode, KeyEvent, KeyState, KeyModifiers};
 pub use ir_remote::{IrRemote, IrButton, IrEvent, IrProtocol, ButtonMap};
 pub use touch::{TouchEvent, TouchPoint};
 pub use uart::Uart;
+#[cfg(feature = "usb")]
+pub use usb::{UsbKeyboard, UsbError, UsbSpeed};
 
 /// Unified input event that can come from any input source
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -182,6 +186,8 @@ pub struct InputManager {
     keyboard: Option<Keyboard>,
     ir_remote: Option<IrRemote>,
     uart: Option<Uart>,
+    #[cfg(feature = "usb")]
+    usb_keyboard: Option<UsbKeyboard>,
 }
 
 impl InputManager {
@@ -204,7 +210,22 @@ impl InputManager {
             } else {
                 None
             },
+            // A real USB HID keyboard needs mapped MMIO + DMA regions that only
+            // the protection domain knows, so it is attached explicitly via
+            // [`attach_usb_keyboard`] rather than constructed from options.
+            #[cfg(feature = "usb")]
+            usb_keyboard: None,
         }
+    }
+
+    /// Attach an initialized DWC2 USB HID keyboard as an input source.
+    ///
+    /// The caller constructs and initializes the [`UsbKeyboard`] with the
+    /// PD-mapped MMIO and DMA regions, then hands it over here so `poll()`
+    /// includes it in the input sweep.
+    #[cfg(feature = "usb")]
+    pub fn attach_usb_keyboard(&mut self, keyboard: UsbKeyboard) {
+        self.usb_keyboard = Some(keyboard);
     }
 
     /// Poll all enabled input sources for events
@@ -212,6 +233,14 @@ impl InputManager {
         // Check UART first (most common for serial console development)
         if let Some(ref mut uart) = self.uart {
             if let Some(event) = uart.poll() {
+                return Some(InputEvent::Key(event));
+            }
+        }
+
+        // Check the USB HID keyboard (real hardware input path)
+        #[cfg(feature = "usb")]
+        if let Some(ref mut usb) = self.usb_keyboard {
+            if let Some(event) = usb.poll() {
                 return Some(InputEvent::Key(event));
             }
         }
@@ -274,5 +303,11 @@ impl InputManager {
     /// Get mutable access to UART driver
     pub fn uart_mut(&mut self) -> Option<&mut Uart> {
         self.uart.as_mut()
+    }
+
+    /// Get mutable access to the attached USB HID keyboard, if any
+    #[cfg(feature = "usb")]
+    pub fn usb_keyboard_mut(&mut self) -> Option<&mut UsbKeyboard> {
+        self.usb_keyboard.as_mut()
     }
 }

@@ -1,0 +1,4 @@
+# tvdemo: interactive TV demo.
+# UART for serial-console control, USB keyboard for real hardware.
+CONFIG_INPUT_UART=y
+CONFIG_INPUT_USB_KEYBOARD=y
