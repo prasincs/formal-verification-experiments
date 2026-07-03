@@ -134,7 +134,8 @@ fn pattern_circles(x: u32, y: u32) -> u32 {
     let cy = HEIGHT / 2;
     let dx = (x as i32 - cx as i32).unsigned_abs();
     let dy = (y as i32 - cy as i32).unsigned_abs();
-    let dist = ((dx * dx + dy * dy) as f32).sqrt() as u32;
+    // Integer sqrt: `f32::sqrt` is a std-only method, unavailable in no_std.
+    let dist = (dx * dx + dy * dy).isqrt();
     let ring = (dist / 40) % 2;
     if ring == 0 {
         0xFF2060A0 // Blue
