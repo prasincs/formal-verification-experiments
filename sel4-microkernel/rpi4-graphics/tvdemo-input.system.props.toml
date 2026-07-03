@@ -1,0 +1,19 @@
+version = 1
+
+[[shared_only]]
+pds = ["input", "graphics"]
+regions = ["input_ring"]
+
+[[only_channels]]
+pd = "input"
+peers = ["graphics"]
+
+[[only_channels]]
+pd = "graphics"
+peers = ["input"]
+
+[[dma_capable]]
+pd = "input"
+
+[[dma_capable]]
+pd = "graphics"
