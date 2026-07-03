@@ -1,0 +1,111 @@
+name: Photo Frame
+
+# Coverage for the secure photo frame (rpi4-photoframe):
+#   - host-tests:  fast, SDK-free correctness tests for the decode / validation
+#                  / bounded-allocator logic (the code untrusted images hit)
+#   - cross-build: compiles the protection-domain binary for the real
+#                  aarch64-sel4-microkit target (catches missing deps, no_std
+#                  breakage, and seL4 API drift that host tests cannot see)
+
+on:
+  push:
+    branches: [main, "claude/**"]
+    paths:
+      - 'sel4-microkernel/rpi4-photoframe/**'
+      - 'sel4-microkernel/rpi4-photoframe-tests/**'
+      - 'sel4-microkernel/rpi4-input/**'
+      - 'sel4-microkernel/rpi4-input-protocol/**'
+      - 'sel4-microkernel/rpi4-graphics/**'
+      - 'sel4-microkernel/build-system/targets/**'
+      - '.github/workflows/photoframe.yml'
+  pull_request:
+    paths:
+      - 'sel4-microkernel/rpi4-photoframe/**'
+      - 'sel4-microkernel/rpi4-photoframe-tests/**'
+      - '.github/workflows/photoframe.yml'
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  MICROKIT_VERSION: "2.1.0"
+  MICROKIT_SDK_SHA256: "faff1b6d6b546cbb0bfea134588499533130d406ae2a5e533e791ddf23ac7599"
+
+jobs:
+  # Fast, deterministic correctness tests. No Microkit SDK required: the
+  # target-independent modules are pulled into a host crate and run under std.
+  host-tests:
+    name: Decoder + pipeline tests (host)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            sel4-microkernel/rpi4-photoframe-tests/target/
+          key: ${{ runner.os }}-cargo-photoframe-tests-${{ hashFiles('sel4-microkernel/rpi4-photoframe-tests/Cargo.toml') }}
+
+      - name: Run host tests
+        working-directory: sel4-microkernel/rpi4-photoframe-tests
+        run: cargo test
+
+  # Real target compile: the only check that validates the crate's Cargo.toml
+  # dependencies, no_std correctness, and sel4-microkit integration.
+  cross-build:
+    name: Cross-compile PD (aarch64-sel4-microkit)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+
+      - name: Install Rust nightly
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rust-src
+
+      - name: Cache Microkit SDK
+        id: cache-microkit
+        uses: actions/cache@v4
+        with:
+          path: /opt/microkit-sdk
+          key: microkit-sdk-${{ env.MICROKIT_VERSION }}-linux-x86-64
+
+      - name: Download Microkit SDK
+        if: steps.cache-microkit.outputs.cache-hit != 'true'
+        run: |
+          curl -L -o /tmp/microkit-sdk.tar.gz \
+            "https://github.com/seL4/microkit/releases/download/${{ env.MICROKIT_VERSION }}/microkit-sdk-${{ env.MICROKIT_VERSION }}-linux-x86-64.tar.gz"
+          echo "${{ env.MICROKIT_SDK_SHA256 }}  /tmp/microkit-sdk.tar.gz" | sha256sum -c -
+          sudo mkdir -p /opt/microkit-sdk
+          sudo tar -xzf /tmp/microkit-sdk.tar.gz -C /opt/microkit-sdk --strip-components=1
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            sel4-microkernel/rpi4-photoframe/target/
+          key: ${{ runner.os }}-cargo-photoframe-build-${{ hashFiles('sel4-microkernel/rpi4-photoframe/Cargo.toml') }}
+
+      - name: Build photoframe protection domain
+        working-directory: sel4-microkernel/rpi4-photoframe
+        run: |
+          export MICROKIT_SDK=/opt/microkit-sdk
+          export SEL4_INCLUDE_DIRS="$MICROKIT_SDK/board/rpi4b_4gb/debug/include"
+          cargo +nightly build --release \
+            --target ../build-system/targets/aarch64-sel4-microkit.json \
+            -Z build-std=core,alloc,compiler_builtins \
+            -Z build-std-features=compiler-builtins-mem

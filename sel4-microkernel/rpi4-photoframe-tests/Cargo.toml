@@ -1,0 +1,22 @@
+[package]
+name = "rpi4-photoframe-tests"
+version = "0.1.0"
+edition = "2021"
+description = "Host-side test harness for the rpi4-photoframe decode/validate/allocator logic"
+publish = false
+
+# This is a host (std) test-only crate. It pulls the target-independent modules
+# of `rpi4-photoframe` in via `#[path]` and exercises them with `cargo test`.
+# The photoframe PD binary itself cannot build on a host (it depends on
+# `sel4-microkit` and a bare-metal target), but its image-decoding, header
+# validation and bounded-allocator logic is platform-independent — this crate
+# gives CI fast, deterministic coverage of exactly the code untrusted images hit.
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+# Same decode dependencies the pulled-in modules use, resolved for the host.
+tinybmp = "0.6"
+embedded-graphics-core = "0.4"
+zune-jpeg = { version = "0.4", default-features = false }
+zune-png = { version = "0.4", default-features = false }
