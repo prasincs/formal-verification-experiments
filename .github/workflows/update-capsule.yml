@@ -1,0 +1,38 @@
+name: Update Capsule
+
+on:
+  push:
+    branches: [main, "agent/*", "claude/*"]
+    paths:
+      - "sel4-microkernel/update-capsule/**"
+      - ".github/workflows/update-capsule.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "sel4-microkernel/update-capsule/**"
+      - ".github/workflows/update-capsule.yml"
+
+jobs:
+  capsule:
+    name: Parse, verify, and fuzz capsules
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pinned Rust nightly
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-07-02
+
+      - name: Build and test
+        run: |
+          cargo build --manifest-path sel4-microkernel/update-capsule/Cargo.toml --no-default-features
+          cargo test --manifest-path sel4-microkernel/update-capsule/Cargo.toml --all-features
+
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz --locked
+
+      - name: Fuzz parser for 60 seconds
+        run: |
+          cargo fuzz run --manifest-path sel4-microkernel/update-capsule/fuzz/Cargo.toml \
+            parse -- -max_total_time=60
