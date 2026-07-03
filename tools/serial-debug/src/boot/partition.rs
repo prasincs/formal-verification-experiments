@@ -43,22 +43,12 @@ const KERNEL_PATTERNS: &[&str] = &[
     "vmlinuz*",
 ];
 
-/// Device tree patterns for Pi 4
-const DTB_PATTERNS: &[&str] = &[
-    "bcm2711-rpi-4-b.dtb",
-    "bcm2711-rpi-400.dtb",
-    "bcm2711-rpi-cm4.dtb",
-    "bcm2711-rpi-cm4s.dtb",
-    "*.dtb",
-];
-
 /// Overlay patterns
 const OVERLAY_DIR: &str = "overlays";
 
-/// File information with size and checksum
+/// File information for a boot file check
 #[derive(Debug, Clone)]
 pub struct FileInfo {
-    pub path: PathBuf,
     pub size: u64,
     pub exists: bool,
     pub description: String,
@@ -118,11 +108,9 @@ impl BootPartition {
         // Get partition space info
         partition.get_space_info()?;
 
-        // Scan required files
-        partition.scan_required_files()?;
-
-        // Scan optional files
-        partition.scan_optional_files()?;
+        // Scan required and optional boot files
+        partition.scan_files(REQUIRED_BOOT_FILES);
+        partition.scan_files(OPTIONAL_BOOT_FILES);
 
         // Find kernel images
         partition.find_kernel_images()?;
@@ -163,7 +151,7 @@ impl BootPartition {
                 let mut stat: MaybeUninit<libc::statvfs> = MaybeUninit::uninit();
                 if libc::statvfs(path_cstr.as_ptr(), stat.as_mut_ptr()) == 0 {
                     let stat = stat.assume_init();
-                    self.free_space = stat.f_bfree as u64 * stat.f_bsize as u64;
+                    self.free_space = stat.f_bfree * stat.f_bsize;
                 }
             }
         }
@@ -171,15 +159,13 @@ impl BootPartition {
         Ok(())
     }
 
-    /// Scan for required boot files
-    fn scan_required_files(&mut self) -> Result<()> {
-        for (filename, description) in REQUIRED_BOOT_FILES {
+    /// Record presence and size for a set of boot files
+    fn scan_files(&mut self, file_list: &[(&str, &str)]) {
+        for (filename, description) in file_list {
             let file_path = self.path.join(filename);
             let exists = file_path.exists();
             let size = if exists {
-                fs::metadata(&file_path)
-                    .map(|m| m.len())
-                    .unwrap_or(0)
+                fs::metadata(&file_path).map(|m| m.len()).unwrap_or(0)
             } else {
                 0
             };
@@ -187,42 +173,12 @@ impl BootPartition {
             self.files.insert(
                 filename.to_string(),
                 FileInfo {
-                    path: file_path,
                     size,
                     exists,
                     description: description.to_string(),
                 },
             );
         }
-
-        Ok(())
-    }
-
-    /// Scan for optional boot files
-    fn scan_optional_files(&mut self) -> Result<()> {
-        for (filename, description) in OPTIONAL_BOOT_FILES {
-            let file_path = self.path.join(filename);
-            let exists = file_path.exists();
-            let size = if exists {
-                fs::metadata(&file_path)
-                    .map(|m| m.len())
-                    .unwrap_or(0)
-            } else {
-                0
-            };
-
-            self.files.insert(
-                filename.to_string(),
-                FileInfo {
-                    path: file_path,
-                    size,
-                    exists,
-                    description: description.to_string(),
-                },
-            );
-        }
-
-        Ok(())
     }
 
     /// Find kernel images in the boot partition
@@ -496,7 +452,6 @@ fn format_size(bytes: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::tempdir;
 
     #[test]
     fn test_pattern_matching() {

@@ -24,18 +24,11 @@ serialport = { version = "4.5", optional = true }
 # CLI interface
 clap = { version = "4.5", features = ["derive"] }
 
-# Async runtime for serial monitoring
-tokio = { version = "1.41", features = ["full"] }
-
 # Error handling
 anyhow = "1.0"
-thiserror = "1.0"
 
 # Colored terminal output
 colored = "2.1"
-
-# Hex dump formatting
-hexdump = "0.1"
 
 # Time handling
 chrono = "0.4"
@@ -43,19 +36,11 @@ chrono = "0.4"
 # File system operations
 walkdir = "2.5"
 
-# Binary parsing
-byteorder = "1.5"
-
 # Logging
-log = "0.4"
 env_logger = "0.11"
 
-# CRC calculations for boot image verification
-crc = "3.2"
-
-# Configuration file parsing
+# Device profile serialization
 serde = { version = "1.0", features = ["derive"] }
-toml = "0.8"
 
 # Lazy initialization for device profiles
 once_cell = "1.19"

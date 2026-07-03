@@ -8,19 +8,6 @@ use serialport::{DataBits, FlowControl, Parity, SerialPort, StopBits};
 use std::io::{Read, Write};
 use std::time::Duration;
 
-/// Common baud rates for Raspberry Pi serial console
-pub const COMMON_BAUD_RATES: &[u32] = &[
-    9600,    // Legacy
-    19200,   // Legacy
-    38400,   // Legacy
-    57600,   // Common for older devices
-    115200,  // Default for Raspberry Pi
-    230400,  // High speed
-    460800,  // High speed
-    921600,  // Very high speed
-    1000000, // 1 Mbps
-];
-
 /// Default Raspberry Pi 4 serial configuration
 pub const RPI4_DEFAULT_BAUD: u32 = 115200;
 
@@ -79,10 +66,9 @@ impl PortConfig {
     }
 }
 
-/// Wrapper around a serial port connection with RPi4-specific functionality
+/// Wrapper around a serial port connection
 pub struct SerialConnection {
     port: Box<dyn SerialPort>,
-    config: PortConfig,
 }
 
 impl SerialConnection {
@@ -97,19 +83,7 @@ impl SerialConnection {
             .open()
             .with_context(|| format!("Failed to open serial port: {}", config.port_path))?;
 
-        Ok(Self { port, config })
-    }
-
-    /// Get the port configuration
-    pub fn config(&self) -> &PortConfig {
-        &self.config
-    }
-
-    /// Read bytes from the serial port
-    pub fn read(&mut self, buffer: &mut [u8]) -> Result<usize> {
-        self.port
-            .read(buffer)
-            .with_context(|| "Failed to read from serial port")
+        Ok(Self { port })
     }
 
     /// Read a line from the serial port (until newline)
@@ -163,44 +137,11 @@ impl SerialConnection {
         Ok(())
     }
 
-    /// Send a break signal (useful for entering debug mode on some bootloaders)
-    pub fn send_break(&mut self) -> Result<()> {
-        self.port
-            .set_break()
-            .with_context(|| "Failed to set break")?;
-        std::thread::sleep(Duration::from_millis(100));
-        self.port
-            .clear_break()
-            .with_context(|| "Failed to clear break")?;
-        Ok(())
-    }
-
     /// Flush output buffer
     pub fn flush(&mut self) -> Result<()> {
         self.port
             .flush()
             .with_context(|| "Failed to flush serial port")
-    }
-
-    /// Clear input and output buffers
-    pub fn clear_buffers(&mut self) -> Result<()> {
-        self.port
-            .clear(serialport::ClearBuffer::All)
-            .with_context(|| "Failed to clear serial buffers")
-    }
-
-    /// Set DTR (Data Terminal Ready) signal
-    pub fn set_dtr(&mut self, level: bool) -> Result<()> {
-        self.port
-            .write_data_terminal_ready(level)
-            .with_context(|| "Failed to set DTR")
-    }
-
-    /// Set RTS (Request To Send) signal
-    pub fn set_rts(&mut self, level: bool) -> Result<()> {
-        self.port
-            .write_request_to_send(level)
-            .with_context(|| "Failed to set RTS")
     }
 }
 
@@ -315,9 +256,7 @@ pub fn print_ports() -> Result<()> {
     println!("\n{}", "=".repeat(60));
     println!(
         "{}",
-        format!(
-            "Use: rpi4-debug serial monitor -p <PORT> to start monitoring",
-        )
+        "Use: serial-debug serial monitor -p <PORT> to start monitoring".to_string()
         .yellow()
     );
 

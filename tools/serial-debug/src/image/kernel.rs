@@ -3,7 +3,6 @@
 //! Analyzes kernel image format, architecture, and potential issues.
 
 use anyhow::{Context, Result};
-use byteorder::{LittleEndian, ReadBytesExt};
 use colored::Colorize;
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
@@ -85,7 +84,6 @@ pub struct KernelIssue {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum IssueSeverity {
-    Error,
     Warning,
     Info,
 }
@@ -320,19 +318,12 @@ impl KernelImage {
         if !self.issues.is_empty() {
             println!("\n{}", "Analysis Notes:".white().bold());
             for issue in &self.issues {
-                let (marker, color) = match issue.severity {
-                    IssueSeverity::Error => ("[ERROR]", "red"),
-                    IssueSeverity::Warning => ("[WARNING]", "yellow"),
-                    IssueSeverity::Info => ("[INFO]", "cyan"),
+                let marker = match issue.severity {
+                    IssueSeverity::Warning => "[WARNING]".yellow().bold(),
+                    IssueSeverity::Info => "[INFO]".cyan().bold(),
                 };
 
-                let marker_colored = match color {
-                    "red" => marker.red().bold(),
-                    "yellow" => marker.yellow().bold(),
-                    _ => marker.cyan().bold(),
-                };
-
-                println!("  {} {}", marker_colored, issue.message);
+                println!("  {} {}", marker, issue.message);
             }
         }
 

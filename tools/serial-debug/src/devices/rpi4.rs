@@ -8,7 +8,9 @@ use once_cell::sync::Lazy;
 
 /// Raspberry Pi 4 device profile
 pub static RPI4_PROFILE: Lazy<DeviceProfile> = Lazy::new(|| {
-    let mut profile = DeviceProfile {
+    
+
+    DeviceProfile {
         name: "Raspberry Pi 4".to_string(),
         id: "rpi4".to_string(),
         description: "Raspberry Pi 4 Model B (BCM2711)".to_string(),
@@ -76,14 +78,12 @@ pub static RPI4_PROFILE: Lazy<DeviceProfile> = Lazy::new(|| {
             // SD Card errors
             ErrorPattern {
                 pattern: "mmc0: error".to_string(),
-                is_regex: false,
                 severity: "error".to_string(),
                 description: "SD card read error".to_string(),
                 suggestion: Some("Check SD card connection or try a different card".to_string()),
             },
             ErrorPattern {
                 pattern: "mmc0: timeout".to_string(),
-                is_regex: false,
                 severity: "error".to_string(),
                 description: "SD card timeout".to_string(),
                 suggestion: Some("SD card may be corrupted or incompatible".to_string()),
@@ -91,14 +91,12 @@ pub static RPI4_PROFILE: Lazy<DeviceProfile> = Lazy::new(|| {
             // Kernel panics
             ErrorPattern {
                 pattern: "kernel panic".to_string(),
-                is_regex: false,
                 severity: "error".to_string(),
                 description: "Kernel panic".to_string(),
                 suggestion: Some("Check kernel image and device tree compatibility".to_string()),
             },
             ErrorPattern {
                 pattern: "Kernel panic - not syncing".to_string(),
-                is_regex: false,
                 severity: "error".to_string(),
                 description: "Fatal kernel panic".to_string(),
                 suggestion: Some("Check kernel command line and root filesystem".to_string()),
@@ -106,14 +104,12 @@ pub static RPI4_PROFILE: Lazy<DeviceProfile> = Lazy::new(|| {
             // Filesystem errors
             ErrorPattern {
                 pattern: "VFS: Cannot open root device".to_string(),
-                is_regex: false,
                 severity: "error".to_string(),
                 description: "Root filesystem not found".to_string(),
                 suggestion: Some("Check boot config root= parameter and partition table".to_string()),
             },
             ErrorPattern {
                 pattern: "Kernel image is corrupt".to_string(),
-                is_regex: false,
                 severity: "error".to_string(),
                 description: "Corrupted kernel image".to_string(),
                 suggestion: Some("Re-flash the SD card with a fresh image".to_string()),
@@ -121,21 +117,18 @@ pub static RPI4_PROFILE: Lazy<DeviceProfile> = Lazy::new(|| {
             // Boot file errors
             ErrorPattern {
                 pattern: "start.elf not found".to_string(),
-                is_regex: false,
                 severity: "error".to_string(),
                 description: "Boot files missing".to_string(),
                 suggestion: Some("Copy boot files from Raspberry Pi firmware repository".to_string()),
             },
             ErrorPattern {
                 pattern: "fixup.dat not found".to_string(),
-                is_regex: false,
                 severity: "error".to_string(),
                 description: "GPU memory config missing".to_string(),
                 suggestion: Some("Copy fixup4.dat to boot partition".to_string()),
             },
             ErrorPattern {
                 pattern: "device tree not found".to_string(),
-                is_regex: false,
                 severity: "error".to_string(),
                 description: "Device tree blob missing".to_string(),
                 suggestion: Some("Copy bcm2711-rpi-4-b.dtb to boot partition".to_string()),
@@ -143,14 +136,12 @@ pub static RPI4_PROFILE: Lazy<DeviceProfile> = Lazy::new(|| {
             // Memory errors
             ErrorPattern {
                 pattern: "RAMDISK: incomplete write".to_string(),
-                is_regex: false,
                 severity: "error".to_string(),
                 description: "Initramfs load error".to_string(),
                 suggestion: Some("Check initrd image or increase memory allocation".to_string()),
             },
             ErrorPattern {
                 pattern: "Unable to handle kernel paging".to_string(),
-                is_regex: false,
                 severity: "error".to_string(),
                 description: "Memory management fault".to_string(),
                 suggestion: Some("Check kernel and device tree memory settings".to_string()),
@@ -158,21 +149,18 @@ pub static RPI4_PROFILE: Lazy<DeviceProfile> = Lazy::new(|| {
             // seL4 specific errors
             ErrorPattern {
                 pattern: "seL4: cap fault".to_string(),
-                is_regex: false,
                 severity: "error".to_string(),
                 description: "seL4 capability fault".to_string(),
                 suggestion: Some("Check seL4 system configuration and capability setup".to_string()),
             },
             ErrorPattern {
                 pattern: "seL4: vaddr".to_string(),
-                is_regex: false,
                 severity: "error".to_string(),
                 description: "seL4 virtual address error".to_string(),
                 suggestion: Some("Check memory mappings in system description".to_string()),
             },
             ErrorPattern {
                 pattern: "seL4: invalid invocation".to_string(),
-                is_regex: false,
                 severity: "error".to_string(),
                 description: "seL4 invalid syscall".to_string(),
                 suggestion: Some("Check IPC setup between protection domains".to_string()),
@@ -180,21 +168,18 @@ pub static RPI4_PROFILE: Lazy<DeviceProfile> = Lazy::new(|| {
             // Generic errors
             ErrorPattern {
                 pattern: "error".to_string(),
-                is_regex: false,
                 severity: "warning".to_string(),
                 description: "Error detected".to_string(),
                 suggestion: None,
             },
             ErrorPattern {
                 pattern: "fail".to_string(),
-                is_regex: false,
                 severity: "warning".to_string(),
                 description: "Failure detected".to_string(),
                 suggestion: None,
             },
             ErrorPattern {
                 pattern: "timeout".to_string(),
-                is_regex: false,
                 severity: "warning".to_string(),
                 description: "Timeout occurred".to_string(),
                 suggestion: None,
@@ -255,9 +240,7 @@ pub static RPI4_PROFILE: Lazy<DeviceProfile> = Lazy::new(|| {
                 description: "Device tree overlays directory".to_string(),
             },
         ],
-    };
-
-    profile
+    }
 });
 
 /// Generate debug-friendly config.txt for RPi4

@@ -47,13 +47,11 @@ pub struct BootStage {
     pub expected_duration_secs: u32,
 }
 
-/// Error pattern for detection
+/// Error pattern for detection (case-insensitive substring match)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ErrorPattern {
-    /// Pattern to match (substring or regex)
+    /// Substring to match (matched case-insensitively)
     pub pattern: String,
-    /// Whether this is a regex pattern
-    pub is_regex: bool,
     /// Severity: "error", "warning", "info"
     pub severity: String,
     /// Description or suggestion when this error is detected
@@ -102,88 +100,28 @@ pub struct BootFileCheck {
     pub description: String,
 }
 
+// Matching methods are only exercised by the serial monitor, which is
+// behind the `serial` feature; keep them available on default builds too.
+#[cfg_attr(not(feature = "serial"), allow(dead_code))]
 impl DeviceProfile {
-    /// Create a new empty profile
-    pub fn new(id: &str, name: &str) -> Self {
-        Self {
-            name: name.to_string(),
-            id: id.to_string(),
-            description: String::new(),
-            manufacturer: String::new(),
-            serial: SerialSettings::default(),
-            boot_stages: Vec::new(),
-            error_patterns: Vec::new(),
-            success_patterns: Vec::new(),
-            usb_vendor_ids: Vec::new(),
-            usb_product_ids: Vec::new(),
-            boot_files: Vec::new(),
-            architecture: "unknown".to_string(),
-        }
-    }
-
-    /// Add a boot stage
-    pub fn add_boot_stage(&mut self, name: &str, patterns: Vec<&str>, description: &str) {
-        self.boot_stages.push(BootStage {
-            name: name.to_string(),
-            patterns: patterns.iter().map(|s| s.to_string()).collect(),
-            description: description.to_string(),
-            expected_duration_secs: 0,
-        });
-    }
-
-    /// Add an error pattern
-    pub fn add_error_pattern(&mut self, pattern: &str, severity: &str, description: &str, suggestion: Option<&str>) {
-        self.error_patterns.push(ErrorPattern {
-            pattern: pattern.to_string(),
-            is_regex: false,
-            severity: severity.to_string(),
-            description: description.to_string(),
-            suggestion: suggestion.map(|s| s.to_string()),
-        });
-    }
-
-    /// Check if a line matches any boot stage
+    /// Check if a line matches any boot stage (case-sensitive substring match)
     pub fn match_boot_stage(&self, line: &str) -> Option<&BootStage> {
         self.boot_stages.iter().find(|stage| {
             stage.patterns.iter().any(|p| line.contains(p))
         })
     }
 
-    /// Check if a line matches any error pattern
+    /// Check if a line matches any error pattern (case-insensitive substring match)
     pub fn match_error(&self, line: &str) -> Option<&ErrorPattern> {
-        self.error_patterns.iter().find(|err| {
-            if err.is_regex {
-                regex::Regex::new(&err.pattern)
-                    .map(|re| re.is_match(line))
-                    .unwrap_or(false)
-            } else {
-                line.to_lowercase().contains(&err.pattern.to_lowercase())
-            }
-        })
+        let line_lower = line.to_lowercase();
+        self.error_patterns
+            .iter()
+            .find(|err| line_lower.contains(&err.pattern.to_lowercase()))
     }
 
     /// Check if a line indicates success
     pub fn is_success(&self, line: &str) -> bool {
         self.success_patterns.iter().any(|p| line.contains(p))
-    }
-}
-
-// Add regex dependency for pattern matching
-mod regex {
-    pub struct Regex {
-        pattern: String,
-    }
-
-    impl Regex {
-        pub fn new(pattern: &str) -> Result<Self, ()> {
-            Ok(Self { pattern: pattern.to_string() })
-        }
-
-        pub fn is_match(&self, text: &str) -> bool {
-            // Simple substring match for now
-            // Full regex would require the regex crate
-            text.contains(&self.pattern)
-        }
     }
 }
 
@@ -199,12 +137,28 @@ mod tests {
     }
 
     #[test]
-    fn test_profile_creation() {
-        let mut profile = DeviceProfile::new("test", "Test Device");
-        profile.add_boot_stage("Boot", vec!["Starting"], "Initial boot");
-        profile.add_error_pattern("error", "error", "An error occurred", Some("Check logs"));
+    fn test_error_matching_is_case_insensitive() {
+        let profile = DeviceProfile {
+            name: "Test".to_string(),
+            id: "test".to_string(),
+            description: String::new(),
+            manufacturer: String::new(),
+            serial: SerialSettings::default(),
+            boot_stages: vec![],
+            error_patterns: vec![ErrorPattern {
+                pattern: "Kernel Panic".to_string(),
+                severity: "error".to_string(),
+                description: "panic".to_string(),
+                suggestion: None,
+            }],
+            success_patterns: vec![],
+            usb_vendor_ids: vec![],
+            usb_product_ids: vec![],
+            boot_files: vec![],
+            architecture: "unknown".to_string(),
+        };
 
-        assert_eq!(profile.boot_stages.len(), 1);
-        assert_eq!(profile.error_patterns.len(), 1);
+        assert!(profile.match_error("kernel panic - not syncing").is_some());
+        assert!(profile.match_error("all good").is_none());
     }
 }

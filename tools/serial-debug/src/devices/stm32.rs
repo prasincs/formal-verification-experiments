@@ -2,7 +2,7 @@
 //!
 //! Device profile for STM32 microcontrollers serial debugging.
 
-use super::profile::{DeviceProfile, SerialSettings, BootStage, ErrorPattern, BootFileCheck};
+use super::profile::{BootStage, DeviceProfile, ErrorPattern, SerialSettings};
 use once_cell::sync::Lazy;
 
 /// STM32 device profile
@@ -50,63 +50,54 @@ pub static STM32_PROFILE: Lazy<DeviceProfile> = Lazy::new(|| {
         error_patterns: vec![
             ErrorPattern {
                 pattern: "Hard Fault".to_string(),
-                is_regex: false,
                 severity: "error".to_string(),
                 description: "Hard fault exception".to_string(),
                 suggestion: Some("Check stack overflow, null pointer access, or memory corruption".to_string()),
             },
             ErrorPattern {
                 pattern: "HardFault_Handler".to_string(),
-                is_regex: false,
                 severity: "error".to_string(),
                 description: "Hard fault handler invoked".to_string(),
                 suggestion: Some("Enable fault handlers for detailed diagnostics".to_string()),
             },
             ErrorPattern {
                 pattern: "MemManage Fault".to_string(),
-                is_regex: false,
                 severity: "error".to_string(),
                 description: "Memory management fault".to_string(),
                 suggestion: Some("Check MPU configuration and memory access permissions".to_string()),
             },
             ErrorPattern {
                 pattern: "Bus Fault".to_string(),
-                is_regex: false,
                 severity: "error".to_string(),
                 description: "Bus fault on memory access".to_string(),
                 suggestion: Some("Check peripheral addresses and bus configuration".to_string()),
             },
             ErrorPattern {
                 pattern: "Usage Fault".to_string(),
-                is_regex: false,
                 severity: "error".to_string(),
                 description: "Usage fault (invalid instruction)".to_string(),
                 suggestion: Some("Check for undefined instructions or unaligned access".to_string()),
             },
             ErrorPattern {
                 pattern: "assert failed".to_string(),
-                is_regex: false,
                 severity: "error".to_string(),
                 description: "Assertion failure".to_string(),
                 suggestion: Some("Check assertion conditions in the firmware".to_string()),
             },
             ErrorPattern {
                 pattern: "Error_Handler".to_string(),
-                is_regex: false,
                 severity: "error".to_string(),
                 description: "Error handler called".to_string(),
                 suggestion: Some("Check HAL initialization and peripheral configuration".to_string()),
             },
             ErrorPattern {
                 pattern: "HAL_ERROR".to_string(),
-                is_regex: false,
                 severity: "error".to_string(),
                 description: "HAL function returned error".to_string(),
                 suggestion: Some("Check peripheral initialization parameters".to_string()),
             },
             ErrorPattern {
                 pattern: "HAL_TIMEOUT".to_string(),
-                is_regex: false,
                 severity: "warning".to_string(),
                 description: "HAL timeout".to_string(),
                 suggestion: Some("Check peripheral clock and initialization".to_string()),

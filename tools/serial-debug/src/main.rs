@@ -420,15 +420,14 @@ fn handle_serial(cmd: SerialCommands) -> Result<()> {
 
             let config = MonitorConfig {
                 port_config,
+                profile,
                 show_timestamps: !no_timestamps,
                 detect_boot_stages: !no_stages,
                 highlight_errors: !no_highlight,
                 log_file: log,
-                hex_dump: false,
-                auto_baud: false,
             };
 
-            serial::monitor::run_monitor(config)?;
+            serial::run_monitor(config)?;
         }
 
         SerialCommands::Detect { device } => {

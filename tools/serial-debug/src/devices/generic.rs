@@ -3,7 +3,7 @@
 //! A generic device profile for unknown or unsupported devices.
 //! Uses common serial settings and basic error pattern detection.
 
-use super::profile::{DeviceProfile, SerialSettings, BootStage, ErrorPattern, BootFileCheck};
+use super::profile::{BootStage, DeviceProfile, ErrorPattern, SerialSettings};
 use once_cell::sync::Lazy;
 
 /// Generic device profile
@@ -54,98 +54,84 @@ pub static GENERIC_PROFILE: Lazy<DeviceProfile> = Lazy::new(|| {
         error_patterns: vec![
             ErrorPattern {
                 pattern: "error".to_string(),
-                is_regex: false,
                 severity: "error".to_string(),
                 description: "Error detected".to_string(),
                 suggestion: None,
             },
             ErrorPattern {
                 pattern: "Error".to_string(),
-                is_regex: false,
                 severity: "error".to_string(),
                 description: "Error detected".to_string(),
                 suggestion: None,
             },
             ErrorPattern {
                 pattern: "ERROR".to_string(),
-                is_regex: false,
                 severity: "error".to_string(),
                 description: "Error detected".to_string(),
                 suggestion: None,
             },
             ErrorPattern {
                 pattern: "fail".to_string(),
-                is_regex: false,
                 severity: "error".to_string(),
                 description: "Failure detected".to_string(),
                 suggestion: None,
             },
             ErrorPattern {
                 pattern: "Fail".to_string(),
-                is_regex: false,
                 severity: "error".to_string(),
                 description: "Failure detected".to_string(),
                 suggestion: None,
             },
             ErrorPattern {
                 pattern: "FAIL".to_string(),
-                is_regex: false,
                 severity: "error".to_string(),
                 description: "Failure detected".to_string(),
                 suggestion: None,
             },
             ErrorPattern {
                 pattern: "panic".to_string(),
-                is_regex: false,
                 severity: "error".to_string(),
                 description: "Panic detected".to_string(),
                 suggestion: None,
             },
             ErrorPattern {
                 pattern: "Panic".to_string(),
-                is_regex: false,
                 severity: "error".to_string(),
                 description: "Panic detected".to_string(),
                 suggestion: None,
             },
             ErrorPattern {
                 pattern: "PANIC".to_string(),
-                is_regex: false,
                 severity: "error".to_string(),
                 description: "Panic detected".to_string(),
                 suggestion: None,
             },
             ErrorPattern {
                 pattern: "warning".to_string(),
-                is_regex: false,
                 severity: "warning".to_string(),
                 description: "Warning detected".to_string(),
                 suggestion: None,
             },
             ErrorPattern {
                 pattern: "Warning".to_string(),
-                is_regex: false,
                 severity: "warning".to_string(),
                 description: "Warning detected".to_string(),
                 suggestion: None,
             },
             ErrorPattern {
                 pattern: "WARNING".to_string(),
-                is_regex: false,
                 severity: "warning".to_string(),
                 description: "Warning detected".to_string(),
                 suggestion: None,
             },
             ErrorPattern {
                 pattern: "timeout".to_string(),
-                is_regex: false,
                 severity: "warning".to_string(),
                 description: "Timeout detected".to_string(),
                 suggestion: None,
             },
             ErrorPattern {
                 pattern: "Timeout".to_string(),
-                is_regex: false,
                 severity: "warning".to_string(),
                 description: "Timeout detected".to_string(),
                 suggestion: None,

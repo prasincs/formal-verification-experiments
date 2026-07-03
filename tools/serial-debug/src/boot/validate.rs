@@ -15,7 +15,6 @@ pub struct ValidationResult {
     pub checks: Vec<ValidationCheck>,
     pub critical_failures: Vec<String>,
     pub warnings: Vec<String>,
-    pub info: Vec<String>,
 }
 
 /// Individual validation check
@@ -86,18 +85,11 @@ impl BootValidator {
             .map(|c| c.message.clone())
             .collect();
 
-        let info: Vec<String> = self.checks
-            .iter()
-            .filter(|c| c.severity == CheckSeverity::Info)
-            .map(|c| c.message.clone())
-            .collect();
-
         Ok(ValidationResult {
             passed: critical_failures.is_empty(),
             checks: std::mem::take(&mut self.checks),
             critical_failures,
             warnings,
-            info,
         })
     }
 
@@ -492,7 +484,7 @@ impl BootValidator {
             println!("  1. Ensure all required boot files are present");
             println!("  2. Check config.txt for correct settings");
             println!("  3. Verify kernel image is compatible with Pi 4");
-            println!("  4. Use 'rpi4-debug serial monitor' to capture boot output");
+            println!("  4. Use 'serial-debug serial monitor' to capture boot output");
         }
 
         println!("\n{}", "=".repeat(70));
@@ -503,8 +495,6 @@ impl BootValidator {
 mod tests {
     use super::*;
     use tempfile::tempdir;
-    use std::fs::File;
-    use std::io::Write;
 
     #[test]
     fn test_validator_missing_partition() {

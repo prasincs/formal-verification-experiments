@@ -2,7 +2,7 @@
 //!
 //! Device profile for ESP32 microcontrollers serial debugging.
 
-use super::profile::{DeviceProfile, SerialSettings, BootStage, ErrorPattern, BootFileCheck};
+use super::profile::{BootStage, DeviceProfile, ErrorPattern, SerialSettings};
 use once_cell::sync::Lazy;
 
 /// ESP32 device profile
@@ -51,21 +51,18 @@ pub static ESP32_PROFILE: Lazy<DeviceProfile> = Lazy::new(|| {
             // Reset reasons
             ErrorPattern {
                 pattern: "rst:0x1 (POWERON_RESET)".to_string(),
-                is_regex: false,
                 severity: "info".to_string(),
                 description: "Power-on reset".to_string(),
                 suggestion: None,
             },
             ErrorPattern {
                 pattern: "rst:0x3 (SW_RESET)".to_string(),
-                is_regex: false,
                 severity: "info".to_string(),
                 description: "Software reset".to_string(),
                 suggestion: None,
             },
             ErrorPattern {
                 pattern: "rst:0xc (SW_CPU_RESET)".to_string(),
-                is_regex: false,
                 severity: "warning".to_string(),
                 description: "Software CPU reset (often from exception)".to_string(),
                 suggestion: Some("Check for stack overflow or panic".to_string()),
@@ -73,42 +70,36 @@ pub static ESP32_PROFILE: Lazy<DeviceProfile> = Lazy::new(|| {
             // Panics and exceptions
             ErrorPattern {
                 pattern: "Guru Meditation Error".to_string(),
-                is_regex: false,
                 severity: "error".to_string(),
                 description: "ESP-IDF panic".to_string(),
                 suggestion: Some("Check backtrace for crash location".to_string()),
             },
             ErrorPattern {
                 pattern: "abort()".to_string(),
-                is_regex: false,
                 severity: "error".to_string(),
                 description: "Program abort".to_string(),
                 suggestion: Some("Check assertion failures or panic calls".to_string()),
             },
             ErrorPattern {
                 pattern: "Stack overflow".to_string(),
-                is_regex: false,
                 severity: "error".to_string(),
                 description: "Task stack overflow".to_string(),
                 suggestion: Some("Increase task stack size in xTaskCreate".to_string()),
             },
             ErrorPattern {
                 pattern: "LoadProhibited".to_string(),
-                is_regex: false,
                 severity: "error".to_string(),
                 description: "Invalid memory read".to_string(),
                 suggestion: Some("Check for null pointer access".to_string()),
             },
             ErrorPattern {
                 pattern: "StoreProhibited".to_string(),
-                is_regex: false,
                 severity: "error".to_string(),
                 description: "Invalid memory write".to_string(),
                 suggestion: Some("Check for null pointer or const memory write".to_string()),
             },
             ErrorPattern {
                 pattern: "InstrFetchProhibited".to_string(),
-                is_regex: false,
                 severity: "error".to_string(),
                 description: "Invalid instruction fetch".to_string(),
                 suggestion: Some("Check for corrupted function pointers".to_string()),
@@ -116,14 +107,12 @@ pub static ESP32_PROFILE: Lazy<DeviceProfile> = Lazy::new(|| {
             // Flash errors
             ErrorPattern {
                 pattern: "flash read err".to_string(),
-                is_regex: false,
                 severity: "error".to_string(),
                 description: "Flash read error".to_string(),
                 suggestion: Some("Check flash connection or re-flash firmware".to_string()),
             },
             ErrorPattern {
                 pattern: "invalid header".to_string(),
-                is_regex: false,
                 severity: "error".to_string(),
                 description: "Invalid app header".to_string(),
                 suggestion: Some("Flash may be corrupted, try erasing and re-flashing".to_string()),
@@ -131,14 +120,12 @@ pub static ESP32_PROFILE: Lazy<DeviceProfile> = Lazy::new(|| {
             // Watchdog
             ErrorPattern {
                 pattern: "Task watchdog got triggered".to_string(),
-                is_regex: false,
                 severity: "error".to_string(),
                 description: "Task watchdog timeout".to_string(),
                 suggestion: Some("Check for blocking operations in task or increase timeout".to_string()),
             },
             ErrorPattern {
                 pattern: "Interrupt wdt timeout".to_string(),
-                is_regex: false,
                 severity: "error".to_string(),
                 description: "Interrupt watchdog timeout".to_string(),
                 suggestion: Some("Check for long-running interrupt handlers".to_string()),
@@ -146,7 +133,6 @@ pub static ESP32_PROFILE: Lazy<DeviceProfile> = Lazy::new(|| {
             // WiFi/Network
             ErrorPattern {
                 pattern: "E (wifi".to_string(),
-                is_regex: false,
                 severity: "warning".to_string(),
                 description: "WiFi error".to_string(),
                 suggestion: Some("Check WiFi configuration and signal strength".to_string()),
@@ -154,7 +140,6 @@ pub static ESP32_PROFILE: Lazy<DeviceProfile> = Lazy::new(|| {
             // Brownout
             ErrorPattern {
                 pattern: "Brownout detector".to_string(),
-                is_regex: false,
                 severity: "error".to_string(),
                 description: "Power supply brownout".to_string(),
                 suggestion: Some("Check power supply voltage and stability".to_string()),

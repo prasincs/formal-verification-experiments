@@ -10,7 +10,7 @@ pub mod stm32;
 pub mod esp32;
 pub mod generic;
 
-pub use profile::{DeviceProfile, BootStage, ErrorPattern, SerialSettings};
+pub use profile::DeviceProfile;
 pub use rpi4::RPI4_PROFILE;
 pub use stm32::STM32_PROFILE;
 pub use esp32::ESP32_PROFILE;
@@ -36,14 +36,6 @@ pub static DEVICE_PROFILES: Lazy<HashMap<&'static str, &'static DeviceProfile>> 
 /// Get a device profile by name
 pub fn get_profile(name: &str) -> Option<&'static DeviceProfile> {
     DEVICE_PROFILES.get(name.to_lowercase().as_str()).copied()
-}
-
-/// List all available device profiles
-pub fn list_profiles() -> Vec<(&'static str, &'static DeviceProfile)> {
-    DEVICE_PROFILES
-        .iter()
-        .map(|(k, v)| (*k, *v))
-        .collect()
 }
 
 /// Get profile names only (deduplicated)
