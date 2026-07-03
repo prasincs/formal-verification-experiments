@@ -183,6 +183,142 @@ the flag flips, and a boot-success watchdog flips it back on failure.
 This is boring, robust, and should land *first* — Tier 2 is an
 optimization on top of it.
 
+## Where formal verification pays off
+
+The repo's layered model (seL4 proofs = runtime enforcement, Verus =
+compile-time protocol correctness, specs = design intent —
+`docs/device-isolation-architecture.md`) extends directly to the agent
+OS. The discipline: **verify the components where one bug defeats the
+whole design; consume already-verified artifacts for crypto; model-check
+the distributed/crash behavior; test everything else.** Verus's `verus!`
+macro strips to plain Rust under `cargo build` (the trick documented in
+`verus/README.md`), so verified code costs nothing at runtime.
+
+| Component | Property | Tool | Why it's worth it |
+|---|---|---|---|
+| Supervisor lifecycle state machine | verify-before-write, measure-before-execute, anti-rollback, no TOCTOU | Verus | a bug here *is* "run unsigned code" |
+| Epoch ring protocol | SPSC + restart safety | Verus (extends `rpi4-input-protocol`) | a bug here corrupts IPC on every restart |
+| Update capsule / TPM / HTTP parsers | total parsing, no OOB/overflow | Verus + fuzzing | trust-boundary input, classic exploit surface |
+| Keystore buffer discipline | key bytes never written to shared regions | Verus ghost-taint + seL4 mappings | the credential-isolation claim, made checkable |
+| `.system` capability topology | access-graph matches the documented isolation claims | small checker tool in CI | turns the docs' hand-written tables into machine-checked facts |
+| A/B update + watchdog protocol | crash anywhere → boots old or new image, never bricked | TLA+ | power-loss interleavings exceed what testing finds |
+| ed25519, SHA-256 | correctness, constant time | consume HACL\*/libcrux, fiat-crypto | never hand-verify crypto |
+| seL4 kernel | integrity/confidentiality | already proven (Isabelle/HOL) | the foundation everything above stands on |
+
+### 1. The supervisor's update state machine (highest value)
+
+The Tier-2 flow — stop → verify → measure → write → restart — is a
+small state machine where every wrong transition is a security failure.
+Verus proofs worth writing, in the style of the existing ring proofs:
+
+- **Verify-before-write:** code bytes reach a slot's executable region
+  only from a PD-private staging buffer whose digest was
+  signature-checked, with no mutation between hash and copy (kills the
+  TOCTOU where a peer PD rewrites the blob after verification — provable
+  because the staging buffer is *not* shared, which the `.system`
+  checker below confirms independently).
+- **Measure-before-execute:** `microkit_pd_restart` is unreachable in
+  any execution path where the PCR-extend for that blob hasn't
+  completed. The attestation story is only as good as this invariant.
+- **Anti-rollback monotonicity:** accepted version numbers strictly
+  increase, matching the TPM NV counter.
+- **Panic-freedom** of the whole supervisor: a panicking supervisor
+  orphans every child PD, so proving absence of panics (Verus does this
+  naturally — all `unwrap`/index sites discharge or fail the build) is
+  an availability property, not a nicety.
+
+### 2. Restart-safe rings (direct extension of existing work)
+
+`rpi4-input-protocol` already proves index bounds and SPSC discipline.
+The epoch extension adds one invariant family: *an entry is consumed
+only when producer and consumer epochs agree*, so a restarted endpoint
+can never cause its peer to read stale or uninitialized slots. Same
+proof style, same crate layout — and it should land for the network and
+photo protocol crates at the same time (both are currently unverified
+copies of the input crate's shape; `docs/networking-roadmap.md` Phase 7
+already calls for this).
+
+### 3. Parsers at trust boundaries
+
+Everything that parses bytes from a less-trusted domain gets the
+decoder-PD treatment the photoframe docs already argue for
+(`docs/secure-photo-frame-architecture.md`), plus Verus totality proofs:
+update capsule headers (length fields, offsets — reject, never trust),
+TPM 2.0 command/response marshalling in the keystore PD, and the
+HTTP/SSE chunking layer in the https PD. Verus proves no
+out-of-bounds, no integer overflow, and that every input is either
+fully parsed or cleanly rejected. Complement with `cargo-fuzz` on the
+host builds (the `rpi4-photoframe-tests` pattern) — proofs rule out
+memory errors, fuzzing catches logic errors the spec didn't anticipate.
+
+### 4. The keystore claim, made checkable
+
+"Agent PDs never see raw keys" is the design's marquee property. It
+decomposes into two independently checkable halves:
+
+- **seL4/config half:** the key-material region is mapped into the
+  keystore PD only. That's a fact about the `.system` file — see below.
+- **Code half:** within the keystore PD, key bytes flow only into the
+  TLS session/sealing sinks, never into ring-buffer writes. Verus can
+  enforce this with a ghost taint on secret buffers (secret-typed bytes
+  have no path to functions that write shared regions) — the same
+  spec-function style as the existing `*_pd_can_access` specs, but
+  attached to real code. Full information-flow verification is
+  research-grade; this "typed sinks" discipline is practical and
+  catches the realistic bugs (logging a key, copying it into a
+  response struct).
+
+### 5. Check the `.system` files, not just the code
+
+Every isolation argument in this repo ultimately rests on hand-written
+XML — which PD maps which region with which perms. Today those claims
+live in doc tables. A small CI tool (plain Rust, or Verus-verified for
+sport) should parse each `.system` file, build the access graph, and
+assert the security-critical facts: *the only region shared between
+input and graphics is `input_ring`; the keystore key region has exactly
+one mapping; no slot PD maps any device MMIO; supervisor staging
+buffers are unshared.* This is a lightweight, Microkit-scale version of
+what CapDL does for full seL4 systems, it costs a day, and it converts
+the architecture docs from prose into regression-checked properties.
+It also guards the failure mode most likely in practice: a future
+`.system` edit quietly widening a mapping.
+
+### 6. Crash safety of A/B updates: model checking, not proof
+
+The Tier-3 protocol (write inactive slot → verify → flip U-Boot flag →
+boot → watchdog confirms or reverts) has its interesting bugs in
+*interleavings*: power loss between flag-flip and first successful
+boot, watchdog racing the confirmation write, double-failure paths. A
+TLA+ model with a crash action enabled at every step, checking "always
+eventually boots a signed image; never bricks," is a few hundred lines
+and is the right tool — SMT-backed code verifiers are poor at this,
+model checkers excel at it.
+
+### 7. Consume verified crypto; don't write it
+
+Capsule signatures (ed25519) and PCR digests (SHA-256) should come from
+formally verified implementations — HACL\*/libcrux (proven in F\*) or
+fiat-crypto field arithmetic — rather than being proven in Verus, which
+is the wrong tool for constant-time and algebraic correctness. The
+constant-time PCR compare already claimed behind `rpi4-tpm-boot`'s
+`--features verus` gate should graduate to a libcrux-backed primitive.
+Kani (bounded model checking on plain Rust) is the pragmatic middle
+ground for the bit-twiddling driver code — MMIO register manipulation
+in the GENET/TPM drivers — where SMT-style Verus proofs get painful.
+
+### What this buys, honestly
+
+The composed claim becomes: *if seL4's proofs hold (Isabelle/HOL,
+covering the RV64 and AArch64 kernels we deploy on), and the `.system`
+topology passes the checker, and the supervisor/keystore/ring proofs
+discharge, then a fully compromised agent, tool, or channel PD cannot
+read credentials, corrupt another PD, persist across a signed update,
+or evade attestation.* What remains unverified and tested-only:
+smoltcp, the TLS implementation (mitigated by verified crypto
+underneath and cert pinning), device drivers (mitigated by
+capability-scoped blast radius), and the LLM's behavior itself
+(mitigated by the whole architecture — that's the point).
+
 ## Honest platform caveats
 
 - **RPi4 secure boot exists but is opt-in and rooted in closed
