@@ -1,0 +1,5 @@
+# photoframe: minimal attack surface — serial input only.
+# Enable CONFIG_INPUT_USB_KEYBOARD=y on the make command line to control
+# the frame with a USB keyboard.
+CONFIG_INPUT_UART=y
+# CONFIG_INPUT_USB_KEYBOARD is not set

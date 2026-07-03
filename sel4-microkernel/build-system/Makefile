@@ -30,6 +30,10 @@ THIS_MAKEFILE := $(lastword $(MAKEFILE_LIST))
 #   NET_STACK      - lwip, picotcp (default: lwip)
 #   RPI4_MEMORY    - 1gb, 2gb, 4gb, 8gb (default: 4gb)
 #   ISOLATED       - Enable two-PD architecture (tvdemo only)
+#   CONFIG_*       - Kconfig option overrides (see Kconfig for the list),
+#                    e.g. CONFIG_INPUT_USB_KEYBOARD=y. Defaults come from
+#                    configs/<product>_defconfig.
+#   DEFCONFIG      - Use a different defconfig file
 #
 # Examples:
 #   make PRODUCT=hello PLATFORM=qemu-aarch64 run
@@ -37,6 +41,7 @@ THIS_MAKEFILE := $(lastword $(MAKEFILE_LIST))
 #   make PRODUCT=graphics PLATFORM=rpi4 RPI4_MEMORY=8gb sdcard
 #   make PRODUCT=graphics PLATFORM=rpi4 write-sdcard DEVICE=/dev/sdb
 #   make PRODUCT=tvdemo PLATFORM=rpi4 ISOLATED=1 NET_DRIVER=ethernet sdcard
+#   make PRODUCT=photoframe PLATFORM=rpi4 CONFIG_INPUT_USB_KEYBOARD=y sdcard
 
 # Validate required parameters
 ifndef PRODUCT
@@ -69,6 +74,11 @@ include $(PRODUCT_MK)
 # Must be included before build rules so feature overrides (e.g. SYSTEM_DESC)
 # are visible when rule prerequisites are expanded.
 include config/features/networking.mk
+
+# Kconfig-style configuration (CONFIG_* options). Included after products
+# and features so it preprocesses the final SYSTEM_DESC, and before the
+# build rules so they pick up the generated one.
+include config/kconfig.mk
 
 # Load build rules
 include include/rust.mk
@@ -103,6 +113,13 @@ ifdef NETWORKING_ENABLED
 	@echo "Driver:        $(NET_DRIVER)"
 	@echo "Stack:         $(NET_STACK)"
 	@echo "Features:      $(NETWORK_FEATURES)"
+endif
+ifdef KCONFIG_ENABLED
+	@echo ""
+	@echo "=== Configuration (Kconfig) ==="
+	@echo "Defconfig:     $(DEFCONFIG)"
+	@echo "Resolved:      $(DOT_CONFIG)"
+	@sed -n 's/^/  /p' $(DOT_CONFIG) | grep -v "^  #.*generated\|^  # Layers"
 endif
 	@echo ""
 	@echo "Source: $(PRODUCT_SRC_DIR)"

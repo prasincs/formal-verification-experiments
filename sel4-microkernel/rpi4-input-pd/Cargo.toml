@@ -20,6 +20,17 @@ rpi4-input = { path = "../rpi4-input" }
 # IPC protocol
 rpi4-input-protocol = { path = "../rpi4-input-protocol" }
 
+[features]
+# Input sources compiled into the PD. The Kconfig-driven build passes an
+# explicit set (--no-default-features --features ...) derived from
+# CONFIG_INPUT_* options; plain `cargo build` keeps the UART-only behavior.
+default = ["uart"]
+# Mini-UART serial console input (CONFIG_INPUT_UART)
+uart = []
+# USB HID keyboard via the DWC2 host controller (CONFIG_INPUT_USB_KEYBOARD).
+# Requires the usb_regs/usb_dma mappings in the .system description.
+usb = ["rpi4-input/usb"]
+
 [profile.release]
 opt-level = "z"
 lto = true

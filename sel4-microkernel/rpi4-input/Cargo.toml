@@ -16,3 +16,7 @@ path = "src/lib.rs"
 default = []
 # Enable Verus verification attributes
 verus = []
+# USB HID keyboard input via the DWC2 host controller (BCM2711).
+# Off by default: enable via the Kconfig option CONFIG_INPUT_USB_KEYBOARD
+# (see build-system/Kconfig) or directly with --features usb.
+usb = []

@@ -13,6 +13,25 @@ Previously the keyboard interface was a placeholder: `Keyboard::poll()` returned
 `None` with a `TODO: Read from USB HID endpoint`. This change implements the
 transport under it.
 
+## Enabling it
+
+USB keyboard support is **off by default** and gated behind the
+`CONFIG_INPUT_USB_KEYBOARD` Kconfig option (cargo feature `usb`); see
+`build-configuration.md` for how the configuration system works.
+
+```bash
+# tvdemo enables it in its defconfig:
+make PRODUCT=tvdemo PLATFORM=rpi4 ISOLATED=1 sdcard
+
+# photoframe is serial-only by default; opt in per build:
+make PRODUCT=photoframe PLATFORM=rpi4 CONFIG_INPUT_USB_KEYBOARD=y sdcard
+```
+
+Enabling the option does two coupled things: compiles the `usb` feature into
+`input_pd`, and keeps the guarded `usb_regs`/`usb_dma` mappings in the
+generated `.system` description. With the option off, the Input PD is not
+granted the USB MMIO capability at all.
+
 ## Where the code lives
 
 | Component | File | Role |
@@ -56,9 +75,10 @@ short backoff, so unplugging and replugging the keyboard recovers.
 
 ## Memory isolation
 
-The Input PD is granted exactly two new capabilities, declared in the system
-descriptions and reflected in `rpi4-input-protocol`'s `input_pd_can_access`
-model:
+When `CONFIG_INPUT_USB_KEYBOARD=y`, the Input PD is granted exactly two new
+capabilities, declared in `@if`-guarded blocks of the system descriptions and
+reflected in `rpi4-input-protocol`'s `input_pd_can_access` model (which
+describes the maximal, USB-enabled configuration):
 
 | Region | Physical | Virtual (Input PD) | Size | Cached |
 |--------|----------|--------------------|------|--------|
