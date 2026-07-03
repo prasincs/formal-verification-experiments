@@ -5,6 +5,10 @@ edition = "2021"
 description = "Authority-graph checker for seL4 Microkit .system files"
 license = "MIT"
 
+[lib]
+path = "src/lib.rs"
+test = false
+
 [dependencies]
 roxmltree = "0.20"
 serde = { version = "1", features = ["derive"] }
