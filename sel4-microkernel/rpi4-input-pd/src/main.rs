@@ -23,7 +23,8 @@
 use sel4_microkit::{debug_println, protection_domain, Handler, ChannelSet, Channel};
 use core::fmt;
 
-use rpi4_input::{Uart, KeyCode, KeyState};
+use rpi4_input::{Uart, KeyCode, KeyState, UsbKeyboard};
+use rpi4_input::usb::DmaRegion;
 use rpi4_input_protocol::{
     InputRingHeader, InputRingEntry, KeyState as ProtoKeyState,
     INPUT_CHANNEL_ID, header_ptr, entries_ptr,
@@ -36,12 +37,24 @@ const UART_VADDR: usize = 0x5_0300_0000 + 0x40;
 /// Shared ring buffer virtual address (mapped by Microkit)
 const RING_BUFFER_VADDR: usize = 0x5_0400_0000;
 
+/// DWC2 USB controller MMIO virtual address (mapped by Microkit).
+/// Physical: 0xFE98_0000 (BCM2711 USB OTG core).
+const USB_REGS_VADDR: usize = 0x5_0500_0000;
+
+/// USB DMA buffer virtual address (mapped uncached by Microkit).
+const USB_DMA_VADDR: usize = 0x5_0600_0000;
+/// USB DMA buffer physical address (device-visible, declared in the .system).
+const USB_DMA_PADDR: usize = 0x3e86_0000;
+/// USB DMA buffer size (one 4KB page is plenty for boot-keyboard transfers).
+const USB_DMA_SIZE: usize = 0x1000;
+
 /// Graphics PD channel for notifications
 const GRAPHICS_CHANNEL: Channel = Channel::new(INPUT_CHANNEL_ID);
 
 /// Input PD handler
 struct InputPdHandler {
     uart: Uart,
+    usb: Option<UsbKeyboard>,
     ring_base: *mut u8,
 }
 
@@ -51,8 +64,29 @@ impl InputPdHandler {
     /// # Safety
     /// The virtual addresses must be properly mapped by Microkit.
     unsafe fn new() -> Self {
+        // Bring up the USB host controller best-effort: if the core does not
+        // reach host mode (e.g. running under QEMU without a USB model), keep
+        // the keyboard disabled and fall back to UART input.
+        let dma = DmaRegion {
+            vaddr: USB_DMA_VADDR,
+            paddr: USB_DMA_PADDR,
+            size: USB_DMA_SIZE,
+        };
+        let mut usb = UsbKeyboard::new(USB_REGS_VADDR, dma);
+        let usb = match usb.init() {
+            Ok(()) => {
+                debug_println!("Input PD: USB host controller initialized");
+                Some(usb)
+            }
+            Err(e) => {
+                debug_println!("Input PD: USB init failed ({:?}), using UART only", e);
+                None
+            }
+        };
+
         Self {
             uart: Uart::with_base(UART_VADDR),
+            usb,
             ring_base: RING_BUFFER_VADDR as *mut u8,
         }
     }
@@ -108,8 +142,20 @@ impl InputPdHandler {
         true
     }
 
-    /// Poll UART and forward events to ring buffer
+    /// Poll all input sources and forward events to the ring buffer.
     fn poll_and_forward(&mut self) {
+        // USB HID keyboard (real hardware input path). Poll first so the
+        // mutable borrow of `self.usb` is released before `write_event`.
+        let usb_event = self.usb.as_mut().and_then(|usb| usb.poll());
+        if let Some(event) = usb_event {
+            unsafe {
+                if self.write_event(event.key, event.state) {
+                    GRAPHICS_CHANNEL.notify();
+                }
+            }
+        }
+
+        // UART serial input (development / fallback path).
         if let Some(event) = self.uart.poll() {
             unsafe {
                 if self.write_event(event.key, event.state) {

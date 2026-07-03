@@ -251,14 +251,14 @@ impl Keyboard {
         }
     }
 
-    /// Poll for keyboard events
+    /// Poll for keyboard events.
+    ///
+    /// [`Keyboard`] is the HID *report decoder*; it has no USB transport of its
+    /// own, so polling it directly yields nothing. The working input path is
+    /// [`crate::usb::UsbKeyboard`], which drives the DWC2 host controller and
+    /// feeds each 8-byte report to [`process_hid_report`](Self::process_hid_report).
+    /// This method remains for callers that inject reports another way.
     pub fn poll(&mut self) -> Option<KeyEvent> {
-        // Read HID report (8 bytes: modifiers + reserved + 6 keycodes)
-        // This is a simplified implementation - actual USB HID requires
-        // proper USB stack integration
-
-        // TODO: Read from USB HID endpoint
-        // For now, return None as we need USB driver integration
         None
     }
 

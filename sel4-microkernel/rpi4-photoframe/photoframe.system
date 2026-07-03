@@ -36,6 +36,12 @@
 
         <!-- Shared ring buffer for IPC (write access) -->
         <map mr="input_ring" vaddr="0x5_0400_0000" perms="rw" cached="false" />
+
+        <!-- DWC2 USB OTG controller registers (for USB HID keyboard) -->
+        <map mr="usb_regs" vaddr="0x5_0500_0000" perms="rw" cached="false" />
+
+        <!-- Uncached DMA buffer for USB transfers -->
+        <map mr="usb_dma" vaddr="0x5_0600_0000" perms="rw" cached="false" />
     </protection_domain>
 
     <!--
@@ -96,6 +102,12 @@
 
     <!-- Shared input ring buffer (4KB) - no physical address, allocated by Microkit -->
     <memory_region name="input_ring" size="0x1000" />
+
+    <!-- DWC2 USB OTG controller MMIO (64KB at 0xFE980000 on the BCM2711) -->
+    <memory_region name="usb_regs" size="0x10000" phys_addr="0xFE980000" />
+
+    <!-- USB DMA buffer (4KB) - fixed low-memory physical address for HCDMA -->
+    <memory_region name="usb_dma" size="0x1000" phys_addr="0x3e860000" />
 
     <!--
         IPC Channel for input notifications
