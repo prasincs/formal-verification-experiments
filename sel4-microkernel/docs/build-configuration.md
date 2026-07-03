@@ -42,13 +42,17 @@ controller at all.
 |-------|------|------|
 | Declarations | `build-system/Kconfig` | Every `CONFIG_*` option: type, default, dependencies, help |
 | Product defaults | `build-system/configs/<product>_defconfig` | Kconfig-idiom assignments (`CONFIG_X=y`, `# CONFIG_X is not set`) |
-| Resolver | `build-system/scripts/kconfig.sh resolve` | Layers defaults ← defconfig ← command line; validates; writes `.config` + `config.mk` |
-| System preprocessor | `build-system/scripts/kconfig.sh gensystem` | Copies a `.system` template, keeping/stripping `@if` blocks |
-| Make glue | `build-system/config/kconfig.mk` | Runs the resolver at parse time, maps options to cargo features, swaps `SYSTEM_DESC` for the generated file |
-| Self-test | `build-system/scripts/test-kconfig.sh` | 48 checks over resolution, validation, and generation; run by the `kconfig` CI job |
+| Resolver | `build-system/kconfig-tool resolve` | Layers defaults ← defconfig ← command line; validates; writes `.config` + `config.mk` |
+| System preprocessor | `build-system/kconfig-tool gensystem` | Copies a `.system` template, keeping/stripping `@if` blocks |
+| Make glue | `build-system/config/kconfig.mk` | Builds the tool, runs the resolver at parse time, maps options to cargo features, swaps `SYSTEM_DESC` for the generated file |
+| Self-test | `build-system/kconfig-tool` (`cargo test`) | Unit tests over the resolver/preprocessor logic plus end-to-end CLI tests against the real repo Kconfig/defconfigs/.system files; run by the `kconfig` CI job |
 
-Everything is POSIX `sh` + `awk` — no python, no `kconfig-frontends`
-dependency.
+`kconfig-tool` is a small std-only Rust host crate (`build-system/kconfig-tool/`,
+zero dependencies) — no python, no `kconfig-frontends` dependency. It builds
+with stable Rust via its own `rust-toolchain.toml`, independent of the
+nightly pin the seL4 Microkit crates use, and `config/kconfig.mk` builds it
+lazily inside `$(shell ...)` at make parse time (a `cargo build -q --release`
+no-op after the first build).
 
 ## Declaration language
 
@@ -71,7 +75,7 @@ naming the missing option, not a silent auto-disable. `menu`/`endmenu` and
 
 ## Resolution layers
 
-`kconfig.sh resolve` computes each option's value from three layers, later
+`kconfig-tool resolve` computes each option's value from three layers, later
 wins:
 
 1. `default y|n` in `Kconfig`
@@ -103,7 +107,7 @@ own:
 <!-- @endif -->
 ```
 
-`kconfig.sh gensystem` copies the template into `$(BUILD_DIR)`, dropping the
+`kconfig-tool gensystem` copies the template into `$(BUILD_DIR)`, dropping the
 marker lines and, when the option is `n`, everything between them. Blocks
 nest, and `@if !CONFIG_X` inverts the test. Referencing an option that is not
 in the `.config` is an error, as is an unbalanced `@if`/`@endif` — typos fail
@@ -129,8 +133,9 @@ untouched by the configuration layer.
 2. Set it in the defconfigs where the default should differ.
 3. Consume it: map it to a cargo feature and/or guard `.system` blocks in
    `config/kconfig.mk` (see the `CONFIG_INPUT_*` handling as the template).
-4. `build-system/scripts/test-kconfig.sh` picks up new defconfigs and the
-   guarded `.system` templates automatically; extend it if the option has
+4. `build-system/kconfig-tool/tests/cli.rs` picks up new defconfigs and the
+   guarded `.system` templates automatically (it globs `configs/*_defconfig`
+   and lists the known `.system` files); extend it if the option has
    interesting invariants.
 
 The existing `NET_DRIVER`/`NET_STACK`/`ISOLATED` make variables predate this

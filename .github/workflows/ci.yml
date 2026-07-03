@@ -108,8 +108,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Run kconfig self-tests
-        run: ./sel4-microkernel/build-system/scripts/test-kconfig.sh
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Test kconfig-tool
+        working-directory: sel4-microkernel/build-system/kconfig-tool
+        run: cargo test
 
   # Input drivers library (host-testable logic incl. USB HID)
   input-library:

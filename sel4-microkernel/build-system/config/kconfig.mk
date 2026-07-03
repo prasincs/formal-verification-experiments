@@ -6,22 +6,23 @@
 #
 #   make PRODUCT=photoframe PLATFORM=rpi4 CONFIG_INPUT_USB_KEYBOARD=y sdcard
 #
-# Resolution happens at make parse time (scripts/kconfig.sh resolve) so the
+# Resolution happens at make parse time (kconfig-tool resolve) so the
 # CONFIG_* values can steer rules and prerequisites. The resolved config is
-# written to $(BUILD_DIR)/.config; kconfig.sh only rewrites it when the
+# written to $(BUILD_DIR)/.config; kconfig-tool only rewrites it when the
 # content changes, so it is safe as a rule prerequisite.
 #
 # Consumers wired up here:
 #   - input_pd cargo features (uart/usb) from CONFIG_INPUT_*
 #   - the product .system description is preprocessed with
-#     `kconfig.sh gensystem`, which keeps or strips
+#     `kconfig-tool gensystem`, which keeps or strips
 #     <!-- @if CONFIG_X --> ... <!-- @endif --> blocks. Device MMIO is
 #     therefore only mapped into a PD when the driver is compiled in.
 #
 # Products without a defconfig are untouched by this file.
 
 KCONFIG_FILE := $(BUILD_SYSTEM_DIR)/Kconfig
-KCONFIG_SCRIPT := $(SCRIPTS_DIR)/kconfig.sh
+KCONFIG_TOOL_DIR := $(BUILD_SYSTEM_DIR)/kconfig-tool
+KCONFIG_TOOL_BIN := $(KCONFIG_TOOL_DIR)/target/release/kconfig-tool
 DEFCONFIG ?= $(BUILD_SYSTEM_DIR)/configs/$(PRODUCT)_defconfig
 
 ifneq ($(wildcard $(DEFCONFIG)),)
@@ -34,10 +35,13 @@ CONFIG_MK := $(BUILD_DIR)/config.mk
 KCONFIG_OVERRIDES := $(foreach v,$(filter CONFIG_%,$(.VARIABLES)),\
 	$(if $(filter command line,$(origin $(v))),--set $(v)=$($(v))))
 
-# Resolve now (parse time). Errors from kconfig.sh land on stderr; the OK
-# sentinel distinguishes success from a silent failure inside $(shell).
+# Build the tool lazily (cached no-op after the first build; the tool has
+# its own rust-toolchain.toml pinning stable, independent of the repo-wide
+# nightly pin) and resolve now, at parse time. Errors land on stderr; the
+# OK sentinel distinguishes success from a silent failure inside $(shell).
 KCONFIG_STATUS := $(shell mkdir -p $(BUILD_DIR) && \
-	$(KCONFIG_SCRIPT) resolve \
+	cargo build -q --release --manifest-path $(KCONFIG_TOOL_DIR)/Cargo.toml && \
+	$(KCONFIG_TOOL_BIN) resolve \
 		--kconfig $(KCONFIG_FILE) \
 		--defconfig $(DEFCONFIG) \
 		$(strip $(KCONFIG_OVERRIDES)) \
@@ -82,9 +86,10 @@ endif # INPUT_PD_ELF
 KCONFIG_SYSTEM_SRC := $(SYSTEM_DESC)
 GEN_SYSTEM_DESC := $(BUILD_DIR)/$(notdir $(SYSTEM_DESC))
 
-$(GEN_SYSTEM_DESC): $(KCONFIG_SYSTEM_SRC) $(DOT_CONFIG) $(KCONFIG_SCRIPT) | $(BUILD_DIR)
+$(GEN_SYSTEM_DESC): $(KCONFIG_SYSTEM_SRC) $(DOT_CONFIG) | $(BUILD_DIR)
 	@echo "=== Generating system description ($(notdir $(KCONFIG_SYSTEM_SRC))) ==="
-	$(KCONFIG_SCRIPT) gensystem --config $(DOT_CONFIG) --in $(KCONFIG_SYSTEM_SRC) --out $@
+	@cargo build -q --release --manifest-path $(KCONFIG_TOOL_DIR)/Cargo.toml
+	$(KCONFIG_TOOL_BIN) gensystem --config $(DOT_CONFIG) --in $(KCONFIG_SYSTEM_SRC) --out $@
 
 SYSTEM_DESC := $(GEN_SYSTEM_DESC)
 

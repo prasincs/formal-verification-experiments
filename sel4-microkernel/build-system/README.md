@@ -89,9 +89,10 @@ The resolved configuration does two things:
    stripped unless the option is enabled, so a PD is only granted MMIO for
    drivers it actually contains (least privilege).
 
-`scripts/kconfig.sh` implements both steps (POSIX sh + awk, no external
-kconfig tooling); `scripts/test-kconfig.sh` is its self-test, run in CI.
-See `../docs/build-configuration.md` for the full description.
+`kconfig-tool/` implements both steps (a small std-only Rust host crate,
+built lazily at make parse time); `cargo test` in that directory is its
+self-test, run in CI. See `../docs/build-configuration.md` for the full
+description.
 
 ## Examples
 
@@ -154,9 +155,12 @@ build-system/
 │   ├── create-sdcard.sh
 │   ├── download-sdk.sh
 │   ├── build-uboot.sh
-│   ├── detect-toolchain.sh
-│   ├── kconfig.sh             # Kconfig resolver + .system preprocessor
-│   └── test-kconfig.sh        # Self-test for kconfig.sh (run in CI)
+│   └── detect-toolchain.sh
+├── kconfig-tool/                # Kconfig resolver + .system preprocessor
+│   ├── Cargo.toml              # std-only, builds with stable Rust
+│   ├── src/lib.rs              # resolve/gensystem logic + unit tests
+│   ├── src/main.rs             # CLI (resolve, gensystem subcommands)
+│   └── tests/cli.rs            # End-to-end tests (run via `cargo test`, CI)
 └── targets/                    # Rust target specs
     ├── aarch64-sel4-microkit.json
     └── riscv64gc-sel4-microkit.json
