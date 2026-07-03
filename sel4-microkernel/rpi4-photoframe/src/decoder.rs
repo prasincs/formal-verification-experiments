@@ -1,0 +1,367 @@
+//! # Multi-Format Image Decoder (No Allocation Required)
+//!
+//! Supports multiple image formats without heap allocation:
+//! - **BMP** - Uncompressed bitmap (tinybmp)
+//! - **QOI** - Quite OK Image format (inline implementation)
+//!
+//! ## Security Note
+//!
+//! All decoders operate on untrusted input. In the full 3-PD architecture,
+//! this module would run in an isolated Decoder PD with no framebuffer access.
+//!
+//! ## Why QOI?
+//!
+//! QOI is ideal for embedded systems:
+//! - ~30% the size of BMP (lossless)
+//! - 3-4x faster to decode than PNG
+//! - Simple format (100 lines to implement)
+//! - No heap allocation needed
+
+/// Error types for decoding
+#[derive(Debug, Clone, Copy)]
+pub enum DecodeError {
+    InvalidFormat,
+    InvalidHeader,
+    InvalidDimensions,
+    BufferTooSmall,
+    UnsupportedFormat,
+    CorruptedData,
+}
+
+// ============================================================================
+// BMP DECODER (using tinybmp)
+// ============================================================================
+
+/// Decode a BMP image to ARGB32 pixels
+pub fn decode_bmp(data: &[u8], output: &mut [u32]) -> Result<(u32, u32), DecodeError> {
+    use tinybmp::Bmp;
+    use embedded_graphics_core::pixelcolor::Rgb888;
+    use embedded_graphics_core::prelude::*;
+
+    let bmp = Bmp::<Rgb888>::from_slice(data)
+        .map_err(|_| DecodeError::InvalidFormat)?;
+
+    let width = bmp.size().width;
+    let height = bmp.size().height;
+
+    if output.len() < (width * height) as usize {
+        return Err(DecodeError::BufferTooSmall);
+    }
+
+    for pixel in bmp.pixels() {
+        let x = pixel.0.x as u32;
+        let y = pixel.0.y as u32;
+        let color = pixel.1;
+
+        if x < width && y < height {
+            let idx = (y * width + x) as usize;
+            output[idx] = 0xFF000000
+                | ((color.r() as u32) << 16)
+                | ((color.g() as u32) << 8)
+                | (color.b() as u32);
+        }
+    }
+
+    Ok((width, height))
+}
+
+// ============================================================================
+// CHANNEL-AWARE PIXEL PACKING
+// ============================================================================
+
+/// Pack raw decoder output (grayscale, RGB, or RGBA bytes) into ARGB32.
+///
+/// `channels` is derived from `bytes.len() / (width*height)`, so this works
+/// regardless of the decoder's chosen colorspace. Alpha is forced opaque
+/// because the framebuffer is opaque ARGB.
+fn pack_to_argb(
+    bytes: &[u8],
+    channels: usize,
+    width: u32,
+    height: u32,
+    output: &mut [u32],
+) -> Result<(), DecodeError> {
+    let pixel_count = (width as usize)
+        .checked_mul(height as usize)
+        .ok_or(DecodeError::InvalidDimensions)?;
+
+    if output.len() < pixel_count {
+        return Err(DecodeError::BufferTooSmall);
+    }
+    if bytes.len() < pixel_count * channels {
+        return Err(DecodeError::CorruptedData);
+    }
+
+    match channels {
+        1 => {
+            // Grayscale: replicate luma across RGB
+            for i in 0..pixel_count {
+                let v = bytes[i] as u32;
+                output[i] = 0xFF00_0000 | (v << 16) | (v << 8) | v;
+            }
+        }
+        3 => {
+            for i in 0..pixel_count {
+                let o = i * 3;
+                output[i] = 0xFF00_0000
+                    | ((bytes[o] as u32) << 16)
+                    | ((bytes[o + 1] as u32) << 8)
+                    | (bytes[o + 2] as u32);
+            }
+        }
+        4 => {
+            for i in 0..pixel_count {
+                let o = i * 4;
+                // Force alpha opaque; framebuffer does not blend.
+                output[i] = 0xFF00_0000
+                    | ((bytes[o] as u32) << 16)
+                    | ((bytes[o + 1] as u32) << 8)
+                    | (bytes[o + 2] as u32);
+            }
+        }
+        _ => return Err(DecodeError::UnsupportedFormat),
+    }
+
+    Ok(())
+}
+
+// ============================================================================
+// JPEG DECODER (zune-jpeg, allocation-based)
+// ============================================================================
+
+/// Decode a JPEG image to ARGB32 pixels.
+///
+/// # Safety / Security
+///
+/// This allocates via the global allocator. In this crate that is the
+/// [`crate::bounded_alloc::BoundedBumpAllocator`], so total allocation is
+/// hard-capped. Call only through [`crate::secure_decode`], which validates
+/// the header and checks the memory budget *before* invoking the decoder.
+pub fn decode_jpeg(data: &[u8], output: &mut [u32]) -> Result<(u32, u32), DecodeError> {
+    use zune_jpeg::JpegDecoder;
+
+    let mut decoder = JpegDecoder::new(data);
+    let pixels = decoder.decode().map_err(|_| DecodeError::CorruptedData)?;
+    let info = decoder.info().ok_or(DecodeError::InvalidHeader)?;
+
+    let width = info.width as u32;
+    let height = info.height as u32;
+    let pixel_count = (width as usize) * (height as usize);
+    if pixel_count == 0 {
+        return Err(DecodeError::InvalidDimensions);
+    }
+
+    // Derive channel count from the produced buffer (1=gray, 3=RGB).
+    let channels = pixels.len() / pixel_count;
+    pack_to_argb(&pixels, channels, width, height, output)?;
+
+    Ok((width, height))
+}
+
+// ============================================================================
+// PNG DECODER (zune-png, allocation-based)
+// ============================================================================
+
+/// Decode a PNG image to ARGB32 pixels.
+///
+/// See [`decode_jpeg`] for the allocation/security contract; the same applies
+/// here (PNG inflate uses the bounded global heap).
+pub fn decode_png(data: &[u8], output: &mut [u32]) -> Result<(u32, u32), DecodeError> {
+    use zune_png::PngDecoder;
+
+    let mut decoder = PngDecoder::new(data);
+    let pixels = decoder.decode_raw().map_err(|_| DecodeError::CorruptedData)?;
+    let (w, h) = decoder.get_dimensions().ok_or(DecodeError::InvalidHeader)?;
+
+    let width = w as u32;
+    let height = h as u32;
+    let pixel_count = w * h;
+    if pixel_count == 0 {
+        return Err(DecodeError::InvalidDimensions);
+    }
+
+    // Channels from buffer length (1=gray, 2=gray+alpha, 3=RGB, 4=RGBA).
+    let channels = pixels.len() / pixel_count;
+    // Map gray+alpha (2) down to grayscale by ignoring alpha bytes.
+    if channels == 2 {
+        // Repack: take every first byte of each 2-byte pair as luma.
+        let pc = pixel_count;
+        if output.len() < pc {
+            return Err(DecodeError::BufferTooSmall);
+        }
+        if pixels.len() < pc * 2 {
+            return Err(DecodeError::CorruptedData);
+        }
+        for i in 0..pc {
+            let v = pixels[i * 2] as u32;
+            output[i] = 0xFF00_0000 | (v << 16) | (v << 8) | v;
+        }
+        return Ok((width, height));
+    }
+
+    pack_to_argb(&pixels, channels, width, height, output)?;
+    Ok((width, height))
+}
+
+// ============================================================================
+// QOI DECODER (inline, no dependencies, no allocation)
+// ============================================================================
+
+/// QOI operation codes
+mod qoi {
+    pub const OP_INDEX: u8 = 0x00;  // 00xxxxxx
+    pub const OP_DIFF: u8 = 0x40;   // 01xxxxxx
+    pub const OP_LUMA: u8 = 0x80;   // 10xxxxxx
+    pub const OP_RUN: u8 = 0xC0;    // 11xxxxxx
+    pub const OP_RGB: u8 = 0xFE;    // 11111110
+    pub const OP_RGBA: u8 = 0xFF;   // 11111111
+    pub const MASK_2: u8 = 0xC0;    // Top 2 bits
+
+    /// QOI color hash for index lookup
+    #[inline]
+    pub fn hash(r: u8, g: u8, b: u8, a: u8) -> usize {
+        ((r as usize).wrapping_mul(3)
+            .wrapping_add((g as usize).wrapping_mul(5))
+            .wrapping_add((b as usize).wrapping_mul(7))
+            .wrapping_add((a as usize).wrapping_mul(11)))
+            % 64
+    }
+}
+
+/// Decode a QOI image to ARGB32 pixels (no allocation required)
+///
+/// QOI format specification: https://qoiformat.org/qoi-specification.pdf
+pub fn decode_qoi(data: &[u8], output: &mut [u32]) -> Result<(u32, u32), DecodeError> {
+    // Minimum QOI file: 14 byte header + 8 byte end marker
+    if data.len() < 22 {
+        return Err(DecodeError::InvalidFormat);
+    }
+
+    // Check magic "qoif"
+    if &data[0..4] != b"qoif" {
+        return Err(DecodeError::InvalidFormat);
+    }
+
+    // Parse header (big-endian)
+    let width = u32::from_be_bytes([data[4], data[5], data[6], data[7]]);
+    let height = u32::from_be_bytes([data[8], data[9], data[10], data[11]]);
+    let _channels = data[12];  // 3 = RGB, 4 = RGBA
+    let _colorspace = data[13]; // 0 = sRGB, 1 = linear
+
+    // Validate dimensions
+    if width == 0 || height == 0 || width > 8192 || height > 8192 {
+        return Err(DecodeError::InvalidDimensions);
+    }
+
+    let total_pixels = (width as usize) * (height as usize);
+    if output.len() < total_pixels {
+        return Err(DecodeError::BufferTooSmall);
+    }
+
+    // Decoding state
+    let mut index: [[u8; 4]; 64] = [[0, 0, 0, 255]; 64];  // Recently seen colors
+    let mut px: [u8; 4] = [0, 0, 0, 255];  // Current pixel (RGBA)
+
+    let mut pos = 14;  // Start after header
+    let mut pixel_idx = 0;
+    let end = data.len() - 8;  // Stop before 8-byte end marker
+
+    while pixel_idx < total_pixels && pos < end {
+        let b1 = data[pos];
+
+        if b1 == qoi::OP_RGB {
+            // RGB literal
+            if pos + 3 >= data.len() {
+                return Err(DecodeError::CorruptedData);
+            }
+            px[0] = data[pos + 1];
+            px[1] = data[pos + 2];
+            px[2] = data[pos + 3];
+            pos += 4;
+        } else if b1 == qoi::OP_RGBA {
+            // RGBA literal
+            if pos + 4 >= data.len() {
+                return Err(DecodeError::CorruptedData);
+            }
+            px[0] = data[pos + 1];
+            px[1] = data[pos + 2];
+            px[2] = data[pos + 3];
+            px[3] = data[pos + 4];
+            pos += 5;
+        } else {
+            match b1 & qoi::MASK_2 {
+                qoi::OP_INDEX => {
+                    // Index into recent colors
+                    let idx = (b1 & 0x3F) as usize;
+                    px = index[idx];
+                    pos += 1;
+                }
+                qoi::OP_DIFF => {
+                    // Small RGB difference (-2..1)
+                    let dr = ((b1 >> 4) & 0x03).wrapping_sub(2);
+                    let dg = ((b1 >> 2) & 0x03).wrapping_sub(2);
+                    let db = (b1 & 0x03).wrapping_sub(2);
+                    px[0] = px[0].wrapping_add(dr);
+                    px[1] = px[1].wrapping_add(dg);
+                    px[2] = px[2].wrapping_add(db);
+                    pos += 1;
+                }
+                qoi::OP_LUMA => {
+                    // Larger difference with luma
+                    if pos + 1 >= data.len() {
+                        return Err(DecodeError::CorruptedData);
+                    }
+                    let b2 = data[pos + 1];
+                    let dg = (b1 & 0x3F).wrapping_sub(32);
+                    let dr = ((b2 >> 4) & 0x0F).wrapping_sub(8).wrapping_add(dg);
+                    let db = (b2 & 0x0F).wrapping_sub(8).wrapping_add(dg);
+                    px[0] = px[0].wrapping_add(dr);
+                    px[1] = px[1].wrapping_add(dg);
+                    px[2] = px[2].wrapping_add(db);
+                    pos += 2;
+                }
+                qoi::OP_RUN => {
+                    // Run of same pixel (1-62 pixels)
+                    let run = ((b1 & 0x3F) + 1) as usize;
+                    let color = 0xFF000000
+                        | ((px[0] as u32) << 16)
+                        | ((px[1] as u32) << 8)
+                        | (px[2] as u32);
+
+                    for _ in 0..run.min(total_pixels - pixel_idx) {
+                        output[pixel_idx] = color;
+                        pixel_idx += 1;
+                    }
+                    pos += 1;
+
+                    // Update index and continue (don't emit pixel again)
+                    let hash = qoi::hash(px[0], px[1], px[2], px[3]);
+                    index[hash] = px;
+                    continue;
+                }
+                _ => {
+                    return Err(DecodeError::CorruptedData);
+                }
+            }
+        }
+
+        // Store in index
+        let hash = qoi::hash(px[0], px[1], px[2], px[3]);
+        index[hash] = px;
+
+        // Write pixel
+        output[pixel_idx] = 0xFF000000
+            | ((px[0] as u32) << 16)
+            | ((px[1] as u32) << 8)
+            | (px[2] as u32);
+        pixel_idx += 1;
+    }
+
+    // Fill any remaining pixels (shouldn't happen with valid files)
+    while pixel_idx < total_pixels {
+        output[pixel_idx] = 0xFF000000;
+        pixel_idx += 1;
+    }
+
+    Ok((width, height))
+}
