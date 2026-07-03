@@ -466,49 +466,77 @@ virtio-AArch64 path lands.
 
 ## Local inference: the model PD
 
-Can the device run its own LLM — llama.cpp-style — inside a PD? Yes,
-with eyes open about hardware, and the architecture gets genuinely
-interesting security properties out of it. Two routes:
+Can the device run its own LLM — llama.cpp-style — inside a PD? Yes.
+Two routes; **Route B is the novel one and the one this project should
+lead with**, because it's where "formal verification experiments" and
+"local inference" actually intersect rather than merely coexist.
 
-### Route A: a VM PD running Linux + llama.cpp (pragmatic)
+### Route B: a verified-substrate native inference PD (novel — lead)
 
-llama.cpp wants libc, libstdc++, pthreads, and mmap — a bare-metal
-Microkit port is a large, thankless effort. The standard seL4 answer
-for "big legacy software" applies instead: **run it in a virtual
-machine that is itself a child of a PD.** Microkit supports this
-natively — `<virtual_machine>` elements with vCPUs, where the parent
-PD is the VMM and receives all guest faults
+A llama2.c-scale engine — a few hundred lines of transformer inference
+— ports cleanly to a no_std Rust PD: no libc, no threads required, and
+**pre-allocated arenas instead of malloc**, which is exactly the
+allocation discipline `docs/decoder-allocation-security.md` already
+prescribes for the image decoders. Weights load from a big Microkit
+memory region; quantized matmuls use NEON. Realistic for
+sub-1.5B-parameter models; forget 7B.
+
+What makes this genuinely new rather than just small: **nobody ships an
+inference stack whose loader, memory discipline, and isolation
+substrate are all verified.** llama.cpp's own history shows where such
+a stack actually breaks — not in the math, but in parsing and
+allocation (malformed-GGUF heap overflows are real, published CVEs;
+"model file" is just "malicious media file" wearing a lab coat). Those
+are precisely the classes this repo's toolchain eliminates:
+
+- **Verified model loader.** GGUF parsing as a Verus totality target:
+  every header/tensor-offset/quantization-block read proven in-bounds,
+  every malformed file cleanly rejected, no integer overflow in size
+  arithmetic. This is the same proof shape as the ring buffers, applied
+  to the scariest new input format of the decade.
+- **Verified memory envelope.** All inference buffers (KV cache,
+  activations, scratch) carved from fixed arenas sized at load time
+  from *verified* header fields — provable absence of allocation-based
+  DoS, extending the decoder-allocation-security argument.
+- **Panic-freedom of the whole PD** — an availability property the
+  supervisor's restart tier then backstops.
+- **Deterministic, attestable inference.** No threads, no malloc, fixed
+  arenas, integer/quantized kernels ⇒ bit-reproducible outputs for a
+  given (weights, prompt, seed). Combined with PCR-measured weights,
+  the device can make a *checkable* claim of the form "this answer is
+  what model M produces for this input" — reproducibility is the
+  ingredient cloud inference and llama.cpp-on-Linux both lack.
+- The hot loops (matmul/attention) stay ordinary unverified Rust with
+  NEON — Verus proves the *envelope* (bounds, sizes, totality), not
+  the linear algebra; property tests against a reference
+  implementation cover numerics. Honest division of labor, same as
+  the crypto rule.
+
+It also starts *earlier* than Route A: a stories15M-class model with
+embedded weights needs only rings + a PD — demoable in the existing
+QEMU CI today, no libvmm dependency, then scale to real weights via
+the storage PD and signed capsules.
+
+### Route A: a VM PD running Linux + llama.cpp (pragmatic bridge)
+
+Noted as the fallback for when someone wants an off-the-shelf model at
+full llama.cpp maturity. It wants libc, libstdc++, pthreads, and mmap,
+so instead of porting: **run it in a virtual machine that is itself a
+child of a PD.** Microkit supports this natively — `<virtual_machine>`
+elements with vCPUs, where the parent PD is the VMM and receives all
+guest faults
 ([manual](https://github.com/seL4/microkit/blob/main/docs/manual.md)),
 with [libvmm](https://github.com/au-ts/libvmm) as the AArch64 VMM
 library (in development; boots Linux guests; the LionsOS pattern).
-
-- **Isolation story holds.** The guest Linux is inside the model PD's
-  box, not inside the system's TCB: it gets its own RAM region, zero
-  device mappings, and talks to agent-core over the same shared-memory
-  rings (or virtio-console) as any other PD. A kernel exploit *inside*
-  the model VM yields exactly the model PD's capabilities — nothing.
-- **Threads and cores.** Microkit PDs/vCPUs take a `cpu` attribute, so
-  the model VM gets cores 2–3 (llama.cpp threads inside the guest)
-  while input/graphics/network keep cores 0–1 and their latency.
-- **Path:** bring it up on `qemu_virt_aarch64` first (libvmm's
-  best-supported target, and it slots into the existing QEMU CI
-  pattern); RPi4 hypervisor-mode support (EL2 + GIC-400 quirks) needs
-  validation before promising it on the Pi.
-
-### Route B: a native no_std inference PD (purist)
-
-A llama2.c-scale engine — a few hundred lines of transformer inference
-— ports cleanly to a no_std Rust PD: no libc, no threads required,
-and **pre-allocated arenas instead of malloc**, which is exactly the
-allocation discipline `docs/decoder-allocation-security.md` already
-prescribes for the image decoders. Weights load from a big
-Microkit memory region; quantized matmuls use NEON. Realistic for
-sub-1.5B-parameter models; forget 7B. Bonus: the GGUF/weights parser
-becomes a Verus totality target like every other trust-boundary parser
-— which matters, because malformed-GGUF parsing bugs in llama.cpp are
-real, published CVEs, and "model file" is just "malicious media file"
-wearing a lab coat. The photoframe decoder threat model transfers
-verbatim.
+The guest Linux sits inside the model PD's capability box, not the
+system's TCB — no device mappings, no credentials, rings to agent-core
+only — and the `cpu` attribute pins it to cores 2–3 away from the
+interactive PDs. Bring-up on `qemu_virt_aarch64` first; RPi4
+hypervisor-mode support (EL2 + GIC-400 quirks) needs validation. The
+trade: you inherit a Linux kernel and all of llama.cpp inside the box,
+so the *loader* guarantees of Route B don't apply — isolation is the
+only story, which is nanoclaw's story. Route B is the one that says
+something new.
 
 ### What the security architecture buys you here
 
@@ -537,9 +565,12 @@ cloud path gets AVX2-class throughput but pays the "hypervisor in TCB"
 tax already noted. The two-tier design (local = private + fallback,
 cloud = smart) is honest about all of these.
 
-Sequencing: this is a post-Phase-C feature (it needs the supervisor,
-rings, and update pipeline), and Route A's QEMU-first bring-up means it
-can mature entirely in CI before touching hardware.
+Sequencing: the *full* model PD (real weights, signed capsules,
+routing) is post-Phase-C, but Route B's core — verified GGUF loader +
+arena engine + tiny embedded model in a QEMU CI test — has no
+dependency on the supervisor or networking and can start immediately as
+its own track. It's also the strongest standalone artifact this repo
+could publish. Route A waits on libvmm bring-up and is optional.
 
 ## Gap analysis
 
