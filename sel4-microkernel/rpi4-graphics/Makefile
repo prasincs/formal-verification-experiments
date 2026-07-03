@@ -47,7 +47,8 @@ endif
 
 # Tools
 MICROKIT_TOOL := $(MICROKIT_SDK)/bin/microkit
-CARGO := cargo +nightly
+# Toolchain comes from ../rust-toolchain.toml (pinned nightly) via the shim
+CARGO := cargo
 
 # Directories
 BUILD_DIR := build

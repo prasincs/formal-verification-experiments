@@ -161,8 +161,10 @@ jobs:
             curl
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@nightly
+        uses: dtolnay/rust-toolchain@master
         with:
+          # Pinned nightly - keep in sync with sel4-microkernel/rust-toolchain.toml
+          toolchain: nightly-2026-07-02
           components: rust-src
 
       - name: Cache Raspberry Pi firmware

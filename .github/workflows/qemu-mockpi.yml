@@ -39,8 +39,10 @@ jobs:
             gcc-aarch64-linux-gnu
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@nightly
+        uses: dtolnay/rust-toolchain@master
         with:
+          # Pinned nightly - keep in sync with sel4-microkernel/rust-toolchain.toml
+          toolchain: nightly-2026-07-02
           components: rust-src
 
       - name: Cache Microkit SDK
@@ -144,8 +146,10 @@ jobs:
             gcc-aarch64-linux-gnu
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@nightly
+        uses: dtolnay/rust-toolchain@master
         with:
+          # Pinned nightly - keep in sync with sel4-microkernel/rust-toolchain.toml
+          toolchain: nightly-2026-07-02
           components: rust-src
 
       - name: Cache Microkit SDK
@@ -265,8 +269,10 @@ jobs:
             mtools
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@nightly
+        uses: dtolnay/rust-toolchain@master
         with:
+          # Pinned nightly - keep in sync with sel4-microkernel/rust-toolchain.toml
+          toolchain: nightly-2026-07-02
           components: rust-src
 
       - name: Cache Microkit SDK

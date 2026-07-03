@@ -1,3 +1,8 @@
+# Pinned nightly for all seL4 Microkit crates (custom target specs and
+# build-std require nightly). Moving `nightly` broke CI three times as
+# custom-target gating churned, so this pins a known-good build; the CI
+# workflows install the same version. Update deliberately: bump the date
+# here and in .github/workflows/*, then verify the QEMU boot tests.
 [toolchain]
-channel = "nightly"
+channel = "nightly-2026-07-02"
 components = ["rust-src", "rustfmt", "clippy"]

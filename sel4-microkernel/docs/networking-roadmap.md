@@ -139,11 +139,13 @@ ring protocol is not.
 - [ ] Graphics/tvdemo UI: surface link status + IP in the About screen
 - [ ] Modern (non-legacy) virtio-mmio support, `VIRTIO_NET_F_STATUS`
       link detection
-- [ ] Pin the nightly toolchain (`rust-toolchain.toml` tracks moving
-      `nightly`; drift has broken CI three times — `633d433`, `dc4fa57`,
-      and `build-microkit.sh` on the 2026-07 nightly. Requires updating
-      the `dtolnay/rust-toolchain@nightly` workflow steps and the
-      `cargo +nightly` Makefile invocations together)
+- [x] Pin the nightly toolchain — done: `rust-toolchain.toml` pins
+      `nightly-2026-07-02` (single source of truth), Makefiles/scripts
+      use the plain `cargo` shim so the toml drives selection, and all
+      workflow `dtolnay/rust-toolchain` steps install the same pin.
+      (Moving `nightly` had broken CI three times: `633d433`, `dc4fa57`,
+      `build-microkit.sh` on the 2026-07 nightly.) To bump: update the
+      toml + workflows together and re-verify the QEMU boot tests
 - [ ] ARM64 GitHub runners (`ubuntu-24.04-arm`) for KVM-speed QEMU tests
       if boot tests grow beyond smoke checks
 

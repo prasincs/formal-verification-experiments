@@ -23,16 +23,19 @@ else
 endif
 
 # Cargo settings
-# Detect cargo bin directory (handles PATH not including ~/.cargo/bin)
+# Detect cargo bin directory (handles PATH not including ~/.cargo/bin).
+# Use the rustup cargo shim (not `rustup run nightly`) so the toolchain
+# is selected by sel4-microkernel/rust-toolchain.toml — the single place
+# the pinned nightly is defined. Rustup auto-installs it on first use.
 CARGO_HOME ?= $(HOME)/.cargo
 CARGO_BIN := $(CARGO_HOME)/bin
 ifneq ($(wildcard $(CARGO_BIN)/rustup),)
     RUSTUP := $(CARGO_BIN)/rustup
-    CARGO := $(RUSTUP) run nightly cargo
+    CARGO := $(CARGO_BIN)/cargo
 else
     # Fall back to PATH-based lookup
     RUSTUP := rustup
-    CARGO := rustup run nightly cargo
+    CARGO := cargo
 endif
 CARGO_BUILD_STD := -Z build-std=core,alloc,compiler_builtins -Z build-std-features=compiler-builtins-mem
 
