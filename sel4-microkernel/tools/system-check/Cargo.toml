@@ -1,0 +1,15 @@
+[package]
+name = "system-check"
+version = "0.1.0"
+edition = "2021"
+description = "Authority-graph checker for seL4 Microkit .system files"
+license = "MIT"
+
+[dependencies]
+roxmltree = "0.20"
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+walkdir = "2"
+
+[dev-dependencies]
+pretty_assertions = "1"
