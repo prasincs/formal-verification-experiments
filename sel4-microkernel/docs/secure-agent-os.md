@@ -464,6 +464,83 @@ or **PolarFire Icicle** if the goal is the maximal formal story
 low-friction way to run the agent 24/7 once the x86_64 or
 virtio-AArch64 path lands.
 
+## Local inference: the model PD
+
+Can the device run its own LLM — llama.cpp-style — inside a PD? Yes,
+with eyes open about hardware, and the architecture gets genuinely
+interesting security properties out of it. Two routes:
+
+### Route A: a VM PD running Linux + llama.cpp (pragmatic)
+
+llama.cpp wants libc, libstdc++, pthreads, and mmap — a bare-metal
+Microkit port is a large, thankless effort. The standard seL4 answer
+for "big legacy software" applies instead: **run it in a virtual
+machine that is itself a child of a PD.** Microkit supports this
+natively — `<virtual_machine>` elements with vCPUs, where the parent
+PD is the VMM and receives all guest faults
+([manual](https://github.com/seL4/microkit/blob/main/docs/manual.md)),
+with [libvmm](https://github.com/au-ts/libvmm) as the AArch64 VMM
+library (in development; boots Linux guests; the LionsOS pattern).
+
+- **Isolation story holds.** The guest Linux is inside the model PD's
+  box, not inside the system's TCB: it gets its own RAM region, zero
+  device mappings, and talks to agent-core over the same shared-memory
+  rings (or virtio-console) as any other PD. A kernel exploit *inside*
+  the model VM yields exactly the model PD's capabilities — nothing.
+- **Threads and cores.** Microkit PDs/vCPUs take a `cpu` attribute, so
+  the model VM gets cores 2–3 (llama.cpp threads inside the guest)
+  while input/graphics/network keep cores 0–1 and their latency.
+- **Path:** bring it up on `qemu_virt_aarch64` first (libvmm's
+  best-supported target, and it slots into the existing QEMU CI
+  pattern); RPi4 hypervisor-mode support (EL2 + GIC-400 quirks) needs
+  validation before promising it on the Pi.
+
+### Route B: a native no_std inference PD (purist)
+
+A llama2.c-scale engine — a few hundred lines of transformer inference
+— ports cleanly to a no_std Rust PD: no libc, no threads required,
+and **pre-allocated arenas instead of malloc**, which is exactly the
+allocation discipline `docs/decoder-allocation-security.md` already
+prescribes for the image decoders. Weights load from a big
+Microkit memory region; quantized matmuls use NEON. Realistic for
+sub-1.5B-parameter models; forget 7B. Bonus: the GGUF/weights parser
+becomes a Verus totality target like every other trust-boundary parser
+— which matters, because malformed-GGUF parsing bugs in llama.cpp are
+real, published CVEs, and "model file" is just "malicious media file"
+wearing a lab coat. The photoframe decoder threat model transfers
+verbatim.
+
+### What the security architecture buys you here
+
+1. **Attested model provenance.** Weights ship as Tier-2 signed
+   capsules, measured into a PCR like any code blob. The device can
+   *prove to a remote party which model produced an answer* — a
+   property no mainstream local-inference stack offers.
+2. **Contained model supply chain.** A poisoned or malformed model file
+   detonates inside a PD with no device caps and no credentials —
+   same blast-radius argument as the photo decoder, now covering the
+   scariest new input format of the decade.
+3. **A private tier.** Routing becomes a policy decision in agent-core:
+   sensitive prompts (health, finances, home presence) go to the local
+   model and never leave the device; heavy reasoning goes to Claude;
+   the local model triages, summarizes notifications, and keeps the
+   agent minimally functional offline.
+
+### Hardware honesty
+
+RPi4's 4×A72 gives TinyLlama-class models (0.5–1.5B, Q4) at a few
+tokens/second and nothing usable beyond ~3B — a triage/private tier,
+not the main brain; the 8GB variant is effectively required. The
+deployment targets change the math: RPi5/CM5 roughly triples it (once
+an seL4 BCM2712 port exists), i.MX8M is comparable to RPi4, and the
+cloud path gets AVX2-class throughput but pays the "hypervisor in TCB"
+tax already noted. The two-tier design (local = private + fallback,
+cloud = smart) is honest about all of these.
+
+Sequencing: this is a post-Phase-C feature (it needs the supervisor,
+rings, and update pipeline), and Route A's QEMU-first bring-up means it
+can mature entirely in CI before touching hardware.
+
 ## Gap analysis
 
 What exists and carries over directly:
