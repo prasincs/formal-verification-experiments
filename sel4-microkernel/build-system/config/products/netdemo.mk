@@ -18,8 +18,7 @@ endif
 PRODUCT_NAME := Virtio Network Demo
 PRODUCT_SRC_DIR := $(ROOT_DIR)/rpi4-network
 
-# Primary protection domain (generic rust.mk rule builds the whole crate,
-# which produces both network_pd and netclient_pd)
+# Primary protection domain (built by the generic rust.mk rule)
 PD_NAME := network_pd
 PD_ELF := $(BUILD_DIR)/$(PD_NAME).elf
 NETCLIENT_ELF := $(BUILD_DIR)/netclient_pd.elf
@@ -43,8 +42,17 @@ SYSTEM_IMAGE := $(BUILD_DIR)/loader.img
 LOADER_ELF := $(BUILD_DIR)/loader.elf
 REPORT := $(BUILD_DIR)/report.txt
 
-# The netclient ELF comes from the same cargo build as the network PD
-$(NETCLIENT_ELF): $(PD_ELF)
+# Build the netclient PD (rust.mk builds only --bin $(PD_NAME), so the
+# client binary needs its own cargo invocation; same features for cache
+# reuse of the shared dependencies)
+$(NETCLIENT_ELF): $(PRODUCT_SOURCES) $(PD_ELF) | $(BUILD_DIR)
+	@echo "=== Building netclient_pd Protection Domain ($(PLATFORM_ARCH)) ==="
+	cd $(PRODUCT_SRC_DIR) && $(CARGO) build \
+		--release \
+		--target $(TARGET_SPEC) \
+		--bin netclient_pd \
+		--features net-virtio \
+		$(CARGO_BUILD_STD)
 	cp $(PRODUCT_SRC_DIR)/target/$(CARGO_TARGET)/release/netclient_pd.elf $@
 	@echo "Built: $@"
 

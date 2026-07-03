@@ -7,12 +7,16 @@ export SEL4_INCLUDE_DIRS := $(MICROKIT_SDK)/board/$(MICROKIT_BOARD)/$(MICROKIT_C
 CARGO_TARGET_DIR := $(PRODUCT_SRC_DIR)/target
 
 # Build protection domain ELF
-# PRODUCT_SRC_DIR and PD_NAME must be set by product config
+# PRODUCT_SRC_DIR and PD_NAME must be set by product config.
+# Build only the product's binary: crates like rpi4-graphics carry other
+# demo bins (e.g. tpmtest_pd) that are not part of every product and may
+# not even link in this configuration.
 $(PD_ELF): $(PRODUCT_SOURCES) | $(BUILD_DIR)
 	@echo "=== Building $(PD_NAME) Protection Domain ($(PLATFORM_ARCH)) ==="
 	cd $(PRODUCT_SRC_DIR) && $(CARGO) build \
 		--release \
 		--target $(TARGET_SPEC) \
+		--bin $(PD_NAME) \
 		$(CARGO_BUILD_STD)
 	@mkdir -p $(BUILD_DIR)
 	cp $(CARGO_TARGET_DIR)/$(CARGO_TARGET)/release/$(PD_NAME).elf $@
