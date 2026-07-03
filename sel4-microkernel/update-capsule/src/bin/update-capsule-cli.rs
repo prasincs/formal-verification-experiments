@@ -9,7 +9,7 @@ fn main() {
     let args: Vec<String> = env::args().skip(1).collect();
     let result = match args.first().map(String::as_str) {
         Some("keygen") if args.len() == 3 => generate_keypair(&args[1], &args[2]),
-        Some("sign") if args.len() == 14 => sign_capsule(&args[1..]),
+        Some("sign") if args.len() == 13 => sign_capsule(&args[1..]),
         _ => Err("usage: update-capsule-cli keygen <signing-key.hex> <verify-key.hex> | sign <signing-key.hex> <payload> <capsule> <type> <slot> <platform> <abi> <version> <load-vaddr> <entry-offset> <key-id> <key-epoch>".into()),
     };
     if let Err(error) = result {
@@ -21,7 +21,11 @@ fn main() {
 fn generate_keypair(signing_path: &str, verifying_path: &str) -> Result<(), String> {
     let key = SigningKey::generate(&mut OsRng);
     fs::write(signing_path, hex::encode(key.to_bytes()) + "\n").map_err(err)?;
-    fs::write(verifying_path, hex::encode(key.verifying_key().to_bytes()) + "\n").map_err(err)
+    fs::write(
+        verifying_path,
+        hex::encode(key.verifying_key().to_bytes()) + "\n",
+    )
+    .map_err(err)
 }
 
 fn sign_capsule(args: &[String]) -> Result<(), String> {
