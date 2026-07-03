@@ -1,4 +1,20 @@
-# Secure Agent OS: a nanoclaw-class personal agent on seL4
+# High-Assurance Agent Appliance: Design RFC
+
+**Status: RFC / design exploration — nothing here is implemented.**
+Claims are validated only where a cited artifact exists in this repo.
+
+This revision incorporates an external design review (2026-07) whose
+central criticism is accepted in full: the original draft slid between
+four distinct guarantees — (1) formally verified isolation, (2)
+memory-safe/verified component code, (3) measured/attested software
+identity, and (4) semantically correct agent behavior — of which only
+the first is substantially inherited from seL4; the rest require
+additional proofs, trusted components, protocols, and explicit
+threat-model assumptions. The defensible framing, used throughout this
+revision, is: **a capability-secure, attestable agent appliance with
+selectively verified control-plane and inference-boundary components**
+— not a "verified agent OS." See the [assurance case](#assurance-case)
+for the claim-by-claim status.
 
 Design sketch for evolving this repo from isolated demos (tvdemo,
 photoframe, netdemo) into a **personal agent appliance**: a device that
@@ -15,12 +31,13 @@ stronger guarantees: container isolation becomes capability-enforced PD
 isolation on a formally verified kernel, and the vault becomes a
 TPM-backed keystore PD.
 
-## Why seL4 beats containers for this
+## Why seL4 — and what containers still do better
 
 Nanoclaw's threat model is real: an LLM agent executes untrusted
 instructions (prompt injection via any message channel) and runs tools
-with side effects. Its mitigation is Docker. Ours is stronger on every
-axis:
+with side effects. Its mitigation is Docker. seL4 provides a stronger
+*isolation foundation* under a smaller, explicit, partially verified
+TCB — which is a narrower statement than "better on every axis":
 
 | Property | nanoclaw (Docker) | This project (seL4 Microkit) |
 |---|---|---|
@@ -31,12 +48,60 @@ axis:
 | Supply-chain / update trust | `docker pull` | Signed update capsules, TPM-measured before activation |
 | Attestation | None | TPM 2.0 quote over PCRs (already scaffolded in `rpi4-tpm-boot`) |
 
+For fairness: containers win on ecosystem, hardware and accelerator
+support, observability, and update tooling, and a confidential-VM/TEE
+deployment of a mature Linux agent stack is the faster route to a
+usable product (see [Related work](#related-work)). The bet this
+project makes is that for a *personal trust anchor* — the thing holding
+your credentials — a small explicit TCB beats a rich ecosystem.
+
+### Scope of the seL4 guarantee (read before quoting the table)
+
+What seL4's proofs give us is **verified kernel-mediated spatial
+isolation, under the selected proof assumptions and configuration** —
+not a verified appliance. Outside the proofs and therefore inside our
+trust-by-other-means budget: the Microkit tool and loader, boot
+firmware and U-Boot, device-tree/platform initialization, every driver
+we write, DMA-capable devices (next subsection), TPM firmware and the
+SPI bus to it, the Rust toolchain, timing/covert channels (a separate,
+ongoing research area for seL4), the specific SMP configuration (seL4's
+functional-correctness story is strongest single-core; multicore
+verification is still maturing), and physical attackers. Each row of
+the [assurance case](#assurance-case) says which of these it leans on.
+
+### DMA: the honest hole in Pi-class hardware
+
+A device that can DMA arbitrarily defeats MMU-based isolation from
+below, no matter what the kernel proves. BCM2711 has **no IOMMU/SMMU
+in front of the bus masters we use** (GENET Ethernet, USB), so a
+compromised network driver PD programming its NIC — or a malicious
+device — can in principle read or write any physical memory, including
+the keystore's. The repo's existing fixed-phys DMA carve-outs
+(`net_dma` at `0x3e700000` in `tvdemo-network.system`) constrain an
+*honest* driver's buffers; they do not constrain a *malicious*
+descriptor. Consequences for this design:
+
+- On RPi4/CM4, the network driver PD + NIC must be treated as
+  potentially having system-wide write authority. Mitigations are
+  softening, not solving: keep the driver minimal and memory-safe
+  (Rust), keep secrets sealed in the TPM rather than resident in RAM
+  where possible, and never claim DMA-immune isolation on this board.
+- Platform choice changes this materially: the cloud targets have
+  virtio devices mediated by the host IOMMU, i.MX8M and PolarFire have
+  varying degrees of bus-master control, and any future
+  accelerator-based inference path must answer "who configures the
+  IOMMU, and is that configuration measured?" before it touches the
+  architecture.
+- The `.system` topology checker (verification section) should flag
+  every PD that owns a DMA-capable device as a distinguished trust
+  class, so the docs can never quietly forget this.
+
 The LLM itself runs in the cloud (Claude API). The device is the
 **trusted terminal and policy-enforcement point**: it owns the
 credentials, the channels, the tools, and the human I/O path, and it is
 the thing that must stay trustworthy when the model is fed hostile
-input. That's precisely the part containers protect weakly and seL4
-protects provably.
+input. That's the part containers protect weakly and seL4 protects
+strongly — within the scope stated above.
 
 ## Target architecture
 
@@ -79,7 +144,7 @@ Mapping nanoclaw concepts onto PDs:
 | nanoclaw | Here | Status |
 |---|---|---|
 | Agent group container | Agent/tool **slot PD** (child of supervisor) | new |
-| OneCLI Agent Vault | **Keystore PD**: extends `rpi4-tpm-pd`'s broker pattern; holds API keys sealed to PCRs, injects auth headers so agent PDs never see raw keys | TPM broker exists (`rpi4-tpm-pd/src/main.rs`) |
+| OneCLI Agent Vault | **Keystore PD**: extends `rpi4-tpm-pd`'s broker pattern; holds API keys sealed to PCRs and acts as a *policy-enforcing credential-use service* (see below), not a mere header injector | TPM broker exists (`rpi4-tpm-pd/src/main.rs`) |
 | Channel adapters (WhatsApp, …) | **Channel PDs** behind the https PD | new |
 | Memory (CLAUDE.md, notes) | **Storage PD** owning the SD card | new (no storage driver yet) |
 | Scheduled jobs | **Timer PD** (generic timer, `CNTVCT_EL0`) | new (also needed by smoltcp — see networking roadmap Phase 4) |
@@ -88,11 +153,83 @@ Mapping nanoclaw concepts onto PDs:
 
 The key architectural rule carried over from nanoclaw, but enforced by
 the kernel instead of by convention: **the agent-core PD composes API
-requests but holds no credentials**. Requests flow through the keystore
-PD, which attaches the `Authorization` header inside the TLS session it
-brokers. A fully prompt-injected agent-core PD can emit garbage requests
-but cannot exfiltrate the key, read another PD's memory, or touch a
-device it wasn't mapped.
+requests but holds no credentials and no generic authenticated-HTTPS
+authority**. A fully prompt-injected agent-core PD cannot exfiltrate
+the key, read another PD's memory, or touch a device it wasn't mapped.
+
+### The keystore is a policy engine, not a header stamper
+
+Review-driven correction: hiding the key bytes prevents **extraction**,
+not **abuse**. A compromised agent-core with access to an unrestricted
+credential-injection oracle doesn't need the literal key — it can spend
+without limit, exfiltrate anything it can read through *authorized* API
+calls, and use the API as a covert channel. So the keystore PD is
+specified as a **credential-use service**: agent-core presents a
+request together with an **attenuated request capability** the keystore
+previously granted, and the keystore enforces, per request:
+
+1. permitted destination (pinned `api.anthropic.com` endpoints only),
+2. permitted operation (e.g. `POST /v1/messages`, nothing else),
+3. maximum request size,
+4. rate and cumulative-cost limits (token budget as a hard ceiling),
+5. model allowlist,
+6. data-classification restrictions (e.g. entries tagged
+   local-only by the provenance labels in the control-plane section
+   never leave the device), and
+7. an owner-auditable log entry per credential use.
+
+This policy check is a small deterministic state machine over typed
+requests — precisely the shape Verus handles well, and a far more
+valuable proof target than any amount of model arithmetic.
+
+**Who owns TLS (explicit decision).** Bearer-token APIs leave three
+options: keystore owns TLS (sees all plaintext), https PD owns TLS and
+receives reusable credentials (defeats the point), or split-TLS
+exotica. This design picks the first, with eyes open: **the keystore
+PD owns the TLS client, certificate pinning, and session keys for
+credentialed endpoints**, and therefore sees prompts and responses for
+those sessions. That makes it the privacy-sensitive heart of the TCB —
+which is accepted and managed: it is the smallest PD in the system, it
+is the highest-priority verification target, and DNS resolution for it
+is pinned/static so no other PD can redirect it. The separate https PD
+in the diagram handles *uncredentialed* traffic only (update capsules,
+public fetches), where TLS termination outside the keystore leaks
+nothing.
+
+## The agent control plane: authority flow, not just isolation
+
+Isolation answers "what memory can a compromised component touch?" The
+central agent-security question is different: **which authority may
+flow from untrusted text to consequential action?** If agent-core
+legitimately holds a channel to a tool broker, an injected prompt
+invokes that legitimate authority — capability security does not solve
+this by itself. The design therefore adopts a **split-agent control
+plane**:
+
+- **The LLM (local or cloud) never directly controls tools.** It emits
+  a *typed proposed action* — a structured request, not a tool call.
+- **A small deterministic policy engine** (its own PD, or fused with
+  the keystore's policy machine) decides whether a proposed action may
+  execute, based on: provenance labels on every input (who said this —
+  owner keyboard vs. WhatsApp stranger vs. fetched web content),
+  information-flow labels on data the action would touch, per-action
+  authorization policy, and explicit declassification rules.
+- **High-impact actions require human confirmation** on the trusted
+  I/O path — the input and graphics PDs, which no other PD can forge
+  or overdraw, are exactly the trusted-display/trusted-input primitive
+  this needs. That's a genuinely nice consequence of the existing
+  architecture: the confirmation dialog is rendered by a PD the agent
+  cannot touch.
+- **Non-bypassability is a capability-topology fact, not a promise:**
+  agent-core's `.system` entry has channels to the policy PD and
+  nothing else consequential — a property the topology checker
+  (verification section) machine-checks on every commit.
+
+The policy engine's state machine — authority delegation, approval
+flows, budget accounting, declassification — is the single most
+valuable Verus target in the system, ahead of anything in the
+inference path. Verifying *this* is what makes the appliance an
+"agent" rather than a very secure pipe to an unconstrained model.
 
 ## PD restart and update: the missing mechanism
 
@@ -142,36 +279,70 @@ anticipates).
 
 ### Tier 2: hot code update (per-PD, signed + measured)
 
-For agent/tool slot PDs, updates without reboot:
+For agent/tool slot PDs, updates without reboot. Structural decision
+first, per review: **"the supervisor" is not one PD.** A single PD that
+verifies updates, writes executable memory, controls restarts, owns
+epochs, and coordinates measurement is an ambient authority whose
+compromise defeats every property at once. The role decomposes into:
 
-1. Slot PDs are declared with their executable region as an explicit
+- **lifecycle PD** — the Microkit parent: fault handling, stop/restart,
+  epochs; touches no update bytes;
+- **update-verifier PD** — parses capsules, checks signatures and
+  anti-rollback; its only output is a **one-shot install authorization**
+  (a signed token naming blob digest + target slot + generation) sent
+  to the installer;
+- **installer PD** — tiny, holds the `rw` mapping to slot code regions,
+  and writes *only* what a fresh one-shot authorization names;
+- **measurement/event-log** stays in the keystore/TPM broker;
+  **rollback state** lives in TPM NV, owned by the verifier.
+
+"Verified artifact may execute once in slot N" becomes an explicit,
+consumable object rather than a standing power.
+
+The install lifecycle (normative order — each step's omission is a
+concrete attack):
+
+1. Slot PDs declare their executable region as an explicit
    `memory_region` mapped `rx` into the slot and `rw` into the
-   supervisor (Microkit can't hand a parent the child's *original*
-   program image, so the slot's real payload lives in this shared
-   region; the baked-in slot ELF is just a trampoline that jumps into
-   it, or the supervisor restarts the slot directly at the region's
-   entry point).
-2. New code arrives as an **update capsule**: `{blob, version,
-   ed25519 signature}` fetched via the https PD or loaded from
-   storage.
-3. Supervisor verifies the signature against a pinned public key,
-   asks the keystore PD to **extend a PCR with the blob digest**
-   (append-only measured-update log — the event-log machinery in
-   `rpi4-tpm-boot/src/boot_chain.rs` and `attestation.rs` is exactly
-   this), and enforces version monotonicity (anti-rollback counter,
-   sealable in a TPM NV index).
-4. `microkit_pd_stop(slot)` → write blob → bump ring epochs →
-   `microkit_pd_restart(slot, entry)`.
+   installer only (Microkit can't hand a parent the child's *original*
+   program image, so the slot's payload lives in this region).
+2. A capsule arrives via the https PD or storage. Beyond
+   `{blob, version, signature}`, the signed header **binds** target
+   platform, slot and PD type, load address and entry point, ABI/
+   protocol version, dependency and config hashes, rollback epoch, and
+   expiry — otherwise a validly signed artifact can be replayed into
+   the wrong slot or under an incompatible interface (workplan IC-2 is
+   the normative encoding).
+3. Verifier PD: totality-parse header → verify signature over
+   header+payload from a **private staging buffer** (no other PD maps
+   it — no TOCTOU) → check monotonic version against TPM NV → emit
+   one-shot authorization; keystore extends the PCR (the event-log
+   machinery in `rpi4-tpm-boot/src/boot_chain.rs`/`attestation.rs`).
+4. Lifecycle PD: `microkit_pd_stop(slot)`. Installer: copy staged blob
+   to the slot region, **clean D-cache and invalidate I-cache** for the
+   range (skipping this is a real correctness/security bug on ARM),
+   validate the entry point against the capsule header. Lifecycle PD:
+   zero ring indices, bump epochs, `microkit_pd_restart(slot, entry)`.
 
-Blobs must be position-independent or linked to the slot's fixed region
-base; slot PDs get a deliberately generic, minimal capability set
-(rings to agent-core, nothing else), which is what makes running
+Honest limitation: Microkit's static mappings mean the installer's
+`rw` alias **cannot be revoked at runtime** — per-address-space W⊕X
+holds, but a live writer to executable memory permanently exists.
+The design compensates by making the installer minimal, verified, and
+inert without a fresh authorization; true revocation (unmap between
+updates) requires dropping below Microkit to dynamic seL4, noted as
+future work. Blobs are position-independent or linked to the slot's
+fixed base; slot PDs get a deliberately minimal capability set (rings
+to agent-core, nothing else), which is what makes running
 freshly-downloaded code in them acceptable.
 
-5. A remote party (your phone, a home server) can then demand a **TPM
-   quote** over the boot + update PCRs and know exactly which agent
-   code the device is running — attestation the container world simply
-   doesn't have.
+What attestation then gives a remote party — stated precisely: a TPM
+quote establishes the **measured boot + update history**, *assuming*
+the verifier trusts the root of trust, the measurement agent, the
+event-log reconstruction, the mapping from digests to approved
+artifacts, and the absence of unmeasured execution paths. It does not
+by itself prove anything about what the code *did* — per-response
+claims need the execution receipts described in the local-inference
+section.
 
 ### Tier 3: whole-image A/B update (fallback and TCB updates)
 
@@ -306,18 +477,54 @@ Kani (bounded model checking on plain Rust) is the pragmatic middle
 ground for the bit-twiddling driver code — MMIO register manipulation
 in the GENET/TPM drivers — where SMT-style Verus proofs get painful.
 
-### What this buys, honestly
+### Assurance case
 
-The composed claim becomes: *if seL4's proofs hold (Isabelle/HOL,
-covering the RV64 and AArch64 kernels we deploy on), and the `.system`
-topology passes the checker, and the supervisor/keystore/ring proofs
-discharge, then a fully compromised agent, tool, or channel PD cannot
-read credentials, corrupt another PD, persist across a signed update,
-or evade attestation.* What remains unverified and tested-only:
-smoltcp, the TLS implementation (mitigated by verified crypto
-underneath and cert pinning), device drivers (mitigated by
-capability-scoped blast radius), and the LLM's behavior itself
-(mitigated by the whole architecture — that's the point).
+Claim by claim, with mechanism and honest status — this table is the
+document's real thesis:
+
+| Claim | Mechanism | Proof / validation status |
+|---|---|---|
+| PD memory isolation | seL4 capabilities | inherited **only** for the verified configuration/architecture; see scope + DMA caveats |
+| Capability topology matches docs | `.system` checker in CI | proposed |
+| Ring safety incl. restart | Verus | input ring: verified today; epoch extension: proposed |
+| Update authorization (verify-before-write, measure-before-execute, anti-rollback) | Verus on verifier/installer | proposed |
+| Update crash-atomicity | TLA+ model | proposed |
+| Model parser / memory envelope safety | Verus | proposed |
+| Model/code identity (what's installed) | measurement + TPM quote | proposed; conditional on RoT/event-log trust |
+| Per-response inference provenance | signed execution receipts + deterministic re-execution | proposed; receipts are *challengeable claims*, not proofs |
+| Credential-use policy compliance | keystore policy state machine (Verus) | proposed |
+| Agent policy compliance (authority flow) | control-plane policy engine (Verus) + human confirmation | **absent** — hardest, most valuable open item |
+| Safe tool behavior | capability mediation + per-tool reasoning | **absent**; mediation bounds blast radius only |
+| Timing/covert channels, physical attacks | — | out of scope, stated |
+
+The composed *conditional* claim: if seL4's proofs hold for our
+configuration, the topology checker passes, the DMA caveat is respected
+(no claim of DMA-immunity on Pi-class hardware), and the
+verifier/installer/keystore/ring proofs discharge, then a fully
+compromised agent, tool, or channel PD cannot read credentials, corrupt
+another PD, persist across a signed update, or evade the measured
+update history. What remains unverified and tested-only: smoltcp, the
+TLS implementation (mitigated by verified crypto underneath and cert
+pinning), device drivers (mitigated by capability scoping, *except* the
+DMA hole), and the LLM's behavior itself — which is mitigated by the
+control-plane policy engine, not by any property of the model.
+
+## Threat model
+
+Explicit attacker classes and what the design does — and does not —
+provide against each:
+
+| Attacker | Containment | Residual risk |
+|---|---|---|
+| Compromised agent-core (prompt injection, bug) | no credentials, no devices, typed-action mediation, keystore policy limits, human confirmation for high impact | covert signaling within policy limits; garbage within budget |
+| Malicious model weights | verified loader (parse safety), capability-empty model PD, measured identity | model outputs bad *content* — handled by control plane, not isolation |
+| Malicious tool capsule | signature required, slot PD minimal caps, restartable | signed-but-buggy tools act within their capability set |
+| Malicious channel input (WhatsApp/email/web) | channel PD isolation + provenance labels + policy engine | social engineering of the *owner* at confirmation prompts |
+| Compromised network peer / MITM | TLS + cert pinning in keystore; signed capsules end-to-end | DoS/blocking (availability) |
+| Compromised verifier/installer/lifecycle PD | decomposed roles, one-shot authorizations, proofs targeted here first | a *proven-wrong* proof; residual ambient authority in installer's rw alias |
+| DMA-capable device / driver PD (Pi-class) | fixed carve-outs, minimal Rust drivers | **system-wide memory access — unmitigated on BCM2711**; choose platform accordingly |
+| Physical attacker | measured boot (detect), OTP signed boot on CM4 (prevent boot of tampered images), sealed keys | hardware implants, closed-ROM trust, chip-level attacks: out of scope |
+| Resource exhaustion | fixed arenas, ring capacities, budget ceilings, watchdog restarts | sustained flooding degrades service (availability is the weakest proof) |
 
 ## Honest platform caveats
 
@@ -500,12 +707,29 @@ are precisely the classes this repo's toolchain eliminates:
   DoS, extending the decoder-allocation-security argument.
 - **Panic-freedom of the whole PD** — an availability property the
   supervisor's restart tier then backstops.
-- **Deterministic, attestable inference.** No threads, no malloc, fixed
-  arenas, integer/quantized kernels ⇒ bit-reproducible outputs for a
-  given (weights, prompt, seed). Combined with PCR-measured weights,
-  the device can make a *checkable* claim of the form "this answer is
-  what model M produces for this input" — reproducibility is the
-  ingredient cloud inference and llama.cpp-on-Linux both lack.
+- **Deterministic inference → re-execution verifiability (stated
+  narrowly).** No threads, no malloc, fixed arenas, integer/quantized
+  kernels make bit-reproducibility *achievable* — conditional on
+  pinning the tokenizer version, prompt serialization, quantization
+  semantics, integer-overflow behavior, compiler/SIMD codegen, sampling
+  algorithm, RNG + seed, context-truncation rules, and model config.
+  That's why the workplan makes determinism a *CI-tested property*
+  (asserted output hash), not an assumption. What determinism buys is
+  **re-execution verification**: a verifier holding the same measured
+  weights can replay (input, seed) and check the output — the
+  challenge/re-execute pattern of
+  [EigenAI](https://arxiv.org/abs/2602.00182). It does *not* make a
+  TPM quote a proof of inference.
+- **Signed execution receipts** are the per-response artifact: the
+  model PD emits, and a device-held attestation key signs,
+  `{nonce/session, input digest, weights + runtime measurements,
+  config + sampling params, output digest}`. A receipt
+  cryptographically *binds* an answer to a measured model and input —
+  making the claim challengeable by re-execution — but attested
+  execution still doesn't establish the model behaved well
+  (the limits discussed for attested guardrails in
+  [Proof-of-Guardrail](https://arxiv.org/abs/2603.05786) apply
+  verbatim).
 - The hot loops (matmul/attention) stay ordinary unverified Rust with
   NEON — Verus proves the *envelope* (bounds, sizes, totality), not
   the linear algebra; property tests against a reference
@@ -540,10 +764,14 @@ something new.
 
 ### What the security architecture buys you here
 
-1. **Attested model provenance.** Weights ship as Tier-2 signed
-   capsules, measured into a PCR like any code blob. The device can
-   *prove to a remote party which model produced an answer* — a
-   property no mainstream local-inference stack offers.
+1. **Attested model identity + challengeable response provenance.**
+   Weights ship as Tier-2 signed capsules, measured into a PCR like any
+   code blob — that attests *which model is installed*. Execution
+   receipts (above) then bind individual answers to that measured
+   model, verifiable by re-execution. Neither mainstream local
+   inference nor cloud APIs offer this combination; stated this way it
+   is defensible, where "prove which model produced an answer" via
+   quote alone was not.
 2. **Contained model supply chain.** A poisoned or malformed model file
    detonates inside a PD with no device caps and no credentials —
    same blast-radius argument as the photo decoder, now covering the
@@ -606,6 +834,15 @@ What's missing, roughly in dependency order:
 Each phase is independently demoable and CI-testable in QEMU (the
 existing `qemu-netdemo` job is the template):
 
+- **Phase 0 — the flagship artifact (leads everything, per review):**
+  tiny deterministic inference PD with a verified bounded model loader
+  and **signed execution receipts** (workplan WP-6). Self-contained,
+  more novel, and easier to evaluate than the Claude-connected
+  appliance; publishable on its own.
+- **Phase 0.5 — substrate decision:** timeboxed evaluation of adopting
+  LionsOS/sDDF components for network/timer/storage vs. bespoke
+  (workplan WP-0); decides how much of Phase A below is *ours to
+  build*.
 - **Phase A — network becomes useful:** smoltcp + timer PD; DHCP +
   ICMP echo against QEMU slirp in CI.
 - **Phase B — supervised PDs:** supervisor parent PD; convert netclient
@@ -625,13 +862,71 @@ existing `qemu-netdemo` job is the template):
   is an ideal Verus target — a bug there is exactly a "load unsigned
   code" bug).
 
+## Related work
+
+No existing project combines a verified microkernel, a personal
+tool-using agent, local inference with a verified loader/envelope, and
+attested output provenance — but every piece has adjacent prior art
+that this design should acknowledge and, in two cases, possibly adopt:
+
+- **KataOS / Sparrow (Google):** the closest conceptual predecessor —
+  an seL4 + Rust + component-isolation platform aimed at ambient ML
+  devices, with hardware-rooted identity. "Secure seL4 appliance
+  hosting ML" is not a new category; the claimed novelty here is
+  narrower and must be stated as such: the verified inference
+  *boundary* and the agent *authority architecture*.
+- **[LionsOS](https://arxiv.org/abs/2501.06234) + sDDF (Trustworthy
+  Systems):** a Microkit-based modular OS with exactly the driver/
+  service framework this design would otherwise rebuild bespoke.
+  **Open substrate decision (workplan WP-0):** build agent-specific
+  PDs on LionsOS services vs. continue this repo's own plumbing. The
+  honest default is to adopt where components fit (network, timer,
+  storage) — spending the project's novelty budget on the agent
+  control plane and inference boundary, not on commodity OS plumbing.
+- **Project Veracruz:** attestable computation as {measured runtime,
+  policy document, approved principals, attested session} — and the
+  inspiration for a serious alternative to native tool capsules:
+  **tools as WebAssembly modules** in a Wasm-runtime PD, with explicit
+  host imports, bounded memory, fuel limits, and typed capability
+  handles. A narrower loader and a more analyzable update surface than
+  arbitrary ELF blobs, at the cost of trusting the Wasm runtime.
+  Worth a spike (workplan WP-18) before committing to native slots
+  for *tools* (system PDs stay native).
+- **Project Oak / confidential-computing runtimes (CoCo, Gramine,
+  Enarx):** measured workloads + remote attestation on TEEs — larger
+  TCB, weaker host-runtime assurance, but far better hardware and
+  accelerator support. This is the pragmatic baseline for the cloud
+  route, and the honest comparison point for "why seL4 at all."
+- **[VECODI](https://arxiv.org/abs/2606.07470):** verifiable/
+  confidential DNN inference on constrained devices via a *minimal
+  trusted monitor* around **untrusted optimized inference code** —
+  an alternative decomposition to Route B worth keeping in mind if
+  making the whole native engine panic-free proves expensive: verify
+  and attest model identity, memory ownership, sequencing, and output
+  commitment; leave the kernels untrusted.
+- **[EigenAI](https://arxiv.org/abs/2602.00182)** (deterministic
+  inference + challenge/re-execution) and
+  **[Proof-of-Guardrail](https://arxiv.org/abs/2603.05786)** (TEE-attested
+  guardrail execution, and its explicit limits) — the two results that
+  calibrate this design's receipt and attestation claims, cited in the
+  local-inference section.
+
 ## Bottom line
 
 Nothing in the nanoclaw model is out of reach; the repo has been
 unknowingly building its substrate. The demos established the isolation
 grammar (PDs + verified rings + broker PDs + measured boot); the agent
-OS is that grammar applied to a new vocabulary: supervisor, keystore,
-https, agent-core, slots. The genuinely new kernel-adjacent work is
-small and well-supported by the pinned SDK (hierarchical PDs). The
-long-pole engineering is unglamorous: TCP, TLS, storage, and update
-plumbing — all of it CI-provable in QEMU before ever touching the Pi.
+appliance is that grammar applied to a new vocabulary: lifecycle/
+verifier/installer, keystore-as-policy-engine, control plane,
+agent-core, slots. The genuinely new kernel-adjacent work is small and
+well-supported by the pinned SDK (hierarchical PDs); the long-pole
+engineering is unglamorous (TCP, TLS, storage, update plumbing — much
+of it possibly adoptable from LionsOS) and CI-provable in QEMU before
+ever touching the Pi.
+
+The differentiated contribution, stated at its defensible size:
+**seL4-enforced authority boundaries + a formally verified
+action/update control plane + verified model-file and memory-envelope
+handling + cryptographically bound deterministic inference receipts.**
+That combination is ahead of every adjacent system in Related work —
+and it is a precise claim, not "a verified agent OS."

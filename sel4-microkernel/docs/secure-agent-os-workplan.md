@@ -79,27 +79,42 @@ The existing ring header (`docs/device-isolation-architecture.md`) is:
 
 ### IC-2: Update capsule format (WP-8 ⇄ WP-3 ⇄ WP-6)
 
-Little-endian, fixed-offset header, no variable-length fields before
-the payload:
+Little-endian, fixed-offset header (the fixed layout *is* the canonical
+serialization), no variable-length fields before the payload. Per
+review, the signature must **bind** platform, slot/PD type, load
+address, entry point, ABI version, dependencies, rollback epoch, and
+expiry — otherwise a validly signed artifact can be replayed into an
+unintended slot or under an incompatible interface:
 
 ```
 0x00  [u8;4]  magic = "SAOC"
-0x04  u32     format_version = 1
-0x08  u8      payload_type   (1 = pd-code, 2 = model-weights, 3 = config)
-0x09  u8      target_slot    (slot PD id; 0 for whole-image)
-0x0A  [u8;6]  reserved (zero)
-0x10  u64     monotonic_version
+0x04  u32     format_version = 2
+0x08  u8      payload_type    (1 = pd-code, 2 = model-weights, 3 = config, 4 = wasm-tool)
+0x09  u8      target_slot     (slot PD id; 0 for whole-image)
+0x0A  u16     target_platform (1 = qemu-aarch64, 2 = rpi4, 3 = qemu-riscv64, ...)
+0x0C  u32     abi_version     (slot protocol/ABI the payload expects)
+0x10  u64     monotonic_version (rollback epoch)
 0x18  u64     payload_len
-0x20  [u8;32] payload_sha256
-0x40  [u8;64] ed25519 signature over bytes [0x00..0x40) ++ payload
-0x80  ...     payload
+0x20  u64     load_vaddr      (slot-region base the blob is linked for; 0 = PIC)
+0x28  u64     entry_offset    (entry point relative to load_vaddr)
+0x30  u64     not_after       (unix seconds; 0 = no expiry)
+0x38  [u8;8]  reserved (zero)
+0x40  [u8;32] payload_sha256
+0x60  [u8;32] deps_sha256     (digest of dependency/config manifest; zero = none)
+0x80  [u8;64] ed25519 signature over bytes [0x00..0x80) ++ payload
+0xC0  ...     payload
 ```
 
 Verification order (normative): parse header (totality — reject, never
-trust) → check `payload_len` bounds against buffer → hash payload →
-compare `payload_sha256` (constant-time) → verify signature → check
-`monotonic_version > stored version`. Only then is the payload
-readable by anyone.
+trust) → check `payload_len` bounds against buffer → check
+`target_platform`, `target_slot`+`payload_type`, `abi_version` against
+the running system → check `not_after` → hash payload → compare
+`payload_sha256` (constant-time) → verify signature → check
+`monotonic_version > stored version` (TPM NV). Only then is the
+payload readable by anyone, and the verifier's sole output is a
+**one-shot install authorization** naming
+`{payload_sha256, target_slot, monotonic_version}` — the installer
+acts only on that object (see design doc, Tier 2 decomposition).
 
 ### IC-3: TPM transport trait (WP-7 ⇄ future keystore)
 
@@ -128,6 +143,7 @@ input: a specific ring entry value causes a deliberate fault.
 
 | WP | Owns (create/modify) | Read-only everywhere else |
 |---|---|---|
+| WP-0 | `docs/substrate-decision.md` (new), spike in scratch branch only | yes |
 | WP-1 | `rpi4-network/src/stack/`, `rpi4-network/src/time.rs`, `build-system/config/features/networking.mk` (additive) | yes |
 | WP-3 | `rpi4-supervisor/` (new), `supdemo` product files, `rpi4-graphics/supdemo.system` or sibling | yes |
 | WP-4 | `rpi4-input-protocol/` (additive), `rpi4-network-protocol/` (additive) | yes |
@@ -146,6 +162,25 @@ exists.
 ---
 
 ## Wave 1 — fully parallel, no cross-dependencies
+
+### WP-0: Substrate evaluation (LionsOS / sDDF) — timeboxed
+
+**Goal:** decide whether Phases A+ build on LionsOS/sDDF services or
+this repo's bespoke plumbing (design doc, Related work). This gates
+*direction*, not other Wave-1 WPs — they proceed regardless, since
+protocol crates, proofs, checker, inference, TPM, and capsules are
+substrate-independent.
+**Deliverables:** a decision memo (`docs/substrate-decision.md`)
+covering: does sDDF's network/timer/serial stack build against our
+pinned toolchain and Microkit 2.1.0; what would netdemo look like on
+it; license/maintenance posture; migration cost for the existing ring
+protocols; plus a build spike (LionsOS example booting in QEMU from
+our build system, or a documented failure).
+**Acceptance:** memo answers adopt/partial/decline with evidence;
+spike outcome reproducible via a make target or documented exactly.
+**Non-goals:** actually migrating anything; touching existing products.
+**Timebox:** if the spike exceeds ~2 days of effort, write up findings
+and stop — that itself is the answer.
 
 ### WP-1: IP stack (smoltcp) + time source
 
@@ -189,6 +224,12 @@ heartbeat. Kill-via-watchdog path exercised once as well.
 **Non-goals:** code reloading (Tier 2), signature checking, more than
 one child, Verus proofs of the supervisor (that's a follow-on once WP-8
 lands).
+**Structure note (review-driven):** the demo runs as one supervisor
+binary, but lay the crate out as distinct modules mirroring the design
+doc's decomposition — `lifecycle` (faults/stop/restart/epochs),
+`verifier` (stub here), `installer` (stub here) — so Wave 2 can split
+them into separate PDs without a rewrite. `lifecycle` must never gain
+an rw mapping to any executable region.
 
 ### WP-4: Epoch ring protocol + Verus proofs
 
@@ -264,17 +305,28 @@ how decoders integrate.
   (GGUF, committed via Git LFS or fetched+pinned by SHA256 in
   `versions.mk` style), generates N tokens from a fixed prompt+seed.
 - Host fuzz target for the loader (`cargo-fuzz`, run bounded in CI).
+- **Signed execution receipts** (per review — this is what makes the
+  artifact publishable): the PD emits
+  `{nonce, input_digest, weights_digest (loader-computed),
+  config+sampling params, output_digest}`; a receipt module signs it
+  with a device key (build-injected test key in QEMU; TPM-backed key is
+  Wave 2). Ship a host-side verifier (`llm-receipt-verify`) that checks
+  the signature AND re-executes the model to confirm the output digest
+  — determinism upgraded from tested property to *challenge protocol*.
 **Acceptance (CI):** `qemu-llmdemo` job boots, generates ≥32 tokens,
-prints `TOKENS SHA256 <hash>` — and the hash is asserted in CI
-(determinism is a *tested property*, per the design doc's
-attestable-inference claim). Verus job passes on the loader. Fuzzer
-runs ≥60s in CI with zero panics; a corpus of malformed GGUFs
-(truncated, oversized lengths, overlapping tensors) is rejected
-cleanly in unit tests.
+prints `TOKENS SHA256 <hash>` — hash asserted in CI (determinism is a
+*tested property*; the design doc enumerates what it's conditional on:
+tokenizer, serialization, quant semantics, codegen, RNG, truncation,
+config — pin all of them). Receipt printed on serial, extracted by the
+CI job, and validated by `llm-receipt-verify` including re-execution.
+Verus job passes on the loader. Fuzzer runs ≥60s in CI with zero
+panics; a corpus of malformed GGUFs (truncated, oversized lengths,
+overlapping tensors) is rejected cleanly in unit tests.
 **Non-goals:** NEON optimization, models >100M params, sampling
 strategies beyond greedy/temperature-with-fixed-seed, tokenizer
-generality (whatever the checkpoint needs), weight capsules (that
-composes with WP-8 in Wave 2).
+generality (whatever the checkpoint needs), weight capsules (composes
+with WP-8 in Wave 2), TPM-backed receipt keys (Wave 2), any claim that
+a receipt proves the model behaved well — it binds, it does not bless.
 
 ### WP-7: TPM transport trait refactor
 
@@ -355,21 +407,39 @@ protocol redesign.
 Sketched here so Wave 1 agents know what they're feeding; each gets a
 full spec when scheduled.
 
-- **WP-12 Tier-2 hot update:** supervisor (WP-3) + capsules (WP-8) +
-  slot PD with shared executable region; CI: mint capsule v2 with the
-  WP-8 CLI, deliver via ring, watch `BOOT GEN` and a
-  behavior change; rollback attempt (v1 after v2) rejected. TPM
+- **WP-12 Tier-2 hot update:** WP-3's lifecycle + WP-8 capsules, with
+  the verifier/installer split into their own PDs per the design doc's
+  supervisor decomposition (one-shot install authorizations; install
+  sequence including D-cache clean + I-cache invalidate). CI: mint
+  capsule with the WP-8 CLI, deliver via ring, watch `BOOT GEN` and a
+  behavior change; rollback attempt rejected; wrong-slot and
+  wrong-platform capsules rejected (IC-2 binding fields). TPM
   measurement mocked via WP-7's transport until a QEMU TPM is wired.
 - **WP-13 HTTPS client PD:** smoltcp (WP-1) + `embedded-tls`; CI
   against a TLS server on the slirp host side with a pinned test cert.
-- **WP-14 Keystore PD:** WP-7 trait + WP-8 crypto; vault-proxy
-  header-injection over the https PD (WP-13); ghost-taint discipline
-  from the design doc's verification section.
+  Uncredentialed traffic only — credentialed TLS lives in WP-14.
+- **WP-14 Credential-use service (keystore PD):** WP-7 trait + WP-8
+  crypto + its own TLS client for credentialed endpoints (the design
+  doc's explicit TLS-ownership decision). Not a header stamper: enforces
+  attenuated request capabilities — destination, operation, size,
+  rate/cost ceilings, model allowlist, classification rules, audit log.
+  The policy state machine is a Verus target; ghost-taint discipline on
+  key bytes per the verification section.
 - **WP-15 Agent-core PD + end-to-end demo:** rings + https + keystore;
   the "prompt on UART → Claude reply on HDMI" milestone (Phase C), with
   local-model routing to WP-6's PD as the private tier.
-- **WP-16 Model weights as capsules:** WP-6 + WP-8 + WP-12 —
-  attested model provenance demo.
+- **WP-16 Model weights as capsules:** WP-6 + WP-8 + WP-12 — measured
+  model identity + receipts demo (attested *identity*, challengeable
+  *provenance* — see design doc for the precise claim).
+- **WP-17 Control-plane policy engine:** typed proposed actions from
+  the model, deterministic authorization state machine (provenance
+  labels, budgets, human confirmation via the trusted input/graphics
+  path), Verus-verified. Per the design doc this is the most valuable
+  proof target in the system.
+- **WP-18 Wasm tool-runtime spike:** evaluate tools as WebAssembly
+  modules (Veracruz-style: explicit imports, bounded memory, fuel
+  limits, typed capability handles) vs. native slot blobs; feeds the
+  tool-execution design before any native tool capsule ships.
 
 ---
 
@@ -377,6 +447,7 @@ full spec when scheduled.
 
 | WP | Branch | PR | Status |
 |---|---|---|---|
+| WP-0 | — | — | not started |
 | WP-1 | — | — | not started |
 | WP-3 | — | — | not started |
 | WP-4 | — | — | not started |
@@ -392,7 +463,7 @@ folded into WP-1 and WP-13 respectively.)
 
 ## Orchestrator notes
 
-- Wave 1 is 9 agents wide with no shared mutable files except the two
+- Wave 1 is 10 agents wide with no shared mutable files except the two
   protocol crates (WP-4/WP-11, both additive, merge order WP-4 first)
   and additive CI/build entries. Merge conflicts should be near-zero by
   construction; if an agent hits one, the ownership matrix (IC-5)
