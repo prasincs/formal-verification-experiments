@@ -1,0 +1,31 @@
+name: TPM Transport
+
+on:
+  push:
+    branches: [main, "agent/*", "claude/*"]
+    paths:
+      - "sel4-microkernel/rpi4-tpm-boot/**"
+      - ".github/workflows/tpm-transport.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "sel4-microkernel/rpi4-tpm-boot/**"
+      - ".github/workflows/tpm-transport.yml"
+
+jobs:
+  transport:
+    name: SPI, CRB, and command tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pinned Rust nightly
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-07-02
+
+      - name: Build no_std library
+        run: cargo build --manifest-path sel4-microkernel/rpi4-tpm-boot/Cargo.toml
+
+      - name: Run host transport tests
+        run: cargo test --manifest-path sel4-microkernel/rpi4-tpm-boot/Cargo.toml --features std
