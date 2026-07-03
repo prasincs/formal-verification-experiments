@@ -70,8 +70,10 @@ jobs:
           sudo apt-get install -y gcc-aarch64-linux-gnu
 
       - name: Install Rust nightly
-        uses: dtolnay/rust-toolchain@nightly
+        # Pinned nightly - keep in sync with sel4-microkernel/rust-toolchain.toml
+        uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: nightly-2026-07-02
           components: rust-src
 
       - name: Cache Microkit SDK
@@ -105,7 +107,10 @@ jobs:
         run: |
           export MICROKIT_SDK=/opt/microkit-sdk
           export SEL4_INCLUDE_DIRS="$MICROKIT_SDK/board/rpi4b_4gb/debug/include"
-          cargo +nightly build --release \
+          # Plain `cargo` uses the pinned nightly via sel4-microkernel/rust-toolchain.toml.
+          # nightly-2026-07-02 gates .json target specs behind -Z json-target-spec.
+          cargo build --release \
             --target ../build-system/targets/aarch64-sel4-microkit.json \
             -Z build-std=core,alloc,compiler_builtins \
-            -Z build-std-features=compiler-builtins-mem
+            -Z build-std-features=compiler-builtins-mem \
+            -Z json-target-spec
