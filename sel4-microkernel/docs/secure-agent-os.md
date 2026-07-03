@@ -185,13 +185,18 @@ optimization on top of it.
 
 ## Honest platform caveats
 
-- **RPi4 has no real secure boot.** The boot ROM and VideoCore firmware
-  are closed and can't be made to verify our chain, so a physical
-  attacker can replace the image. The TPM gives *measured* boot —
-  tampering is detectable via attestation and secrets sealed to PCRs
-  become unrecoverable — but not *verified* boot. The repo already
-  acknowledges the VideoCore trust gap (`rpi4-spi-display/README.md`).
-  Acceptable for a personal device; document it, don't oversell it.
+- **RPi4 secure boot exists but is opt-in and rooted in closed
+  firmware.** The stock boot flow verifies nothing, so out of the box
+  the TPM gives *measured* boot only — tampering is detectable via
+  attestation and PCR-sealed secrets become unrecoverable, but not
+  prevented. RPi4/CM4 can be upgraded to *verified* boot by fusing a
+  customer public-key hash into SoC OTP, after which the EEPROM
+  bootloader only loads a customer-signed `boot.img` (see
+  [Deployment targets](#deployment-targets-with-secure-boot) below).
+  Even then the chain roots in the closed VideoCore boot ROM and
+  Raspberry Pi-signed bootloader — the trust gap the repo already
+  acknowledges (`rpi4-spi-display/README.md`). Document it, don't
+  oversell it.
 - **The LLM is remote.** Agent quality/behavior is Anthropic's model +
   our prompts; the OS guarantees are about *containment of effects*,
   credentials, and code integrity — which is the right division of
@@ -199,6 +204,109 @@ optimization on top of it.
 - **63-PD limit** bounds the number of slots; fine for a personal
   agent (a handful of tools + channels), just pre-plan the slot count
   per image.
+
+## Deployment targets with secure boot
+
+The update/attestation design above assumes the platform can anchor a
+chain of trust. Four realistic paths, in increasing order of porting
+effort:
+
+### 1. Stay on Pi: RPi4 / CM4 with OTP-fused signed boot
+
+Raspberry Pi 4 and CM4 support real secure boot: `recovery.bin` fuses
+the SHA-256 of a customer RSA-2048 public key into SoC OTP
+(irreversible), after which the EEPROM bootloader refuses any EEPROM
+config or `boot.img` not signed with that key
+([docs](https://github.com/raspberrypi/usbboot/blob/master/docs/secure-boot.md),
+[RPi 4 boot security whitepaper](https://pip.raspberrypi.com/categories/1260-security/documents/RP-004651-WP/Raspberry-Pi-4-Boot-Security.pdf)).
+`boot.img` is a FAT ramdisk containing the firmware + our U-Boot +
+`loader.img` — i.e. the whole Microkit image rides inside the signed
+artifact with **zero code changes** to this repo.
+
+- Fit: keeps the existing BCM2711 drivers, SLB9670 TPM, and build
+  system. The Tier-3 A/B update flips between two *signed* `boot.img`
+  files; the supervisor's capsule signature check stays as the Tier-2
+  layer.
+- Prefer **CM4 + carrier** over the 4B for deployment: eMMC instead of
+  a swappable SD card, and `rpiboot`-gated EEPROM provisioning.
+- Residual trust: closed VideoCore ROM and RPi-signed bootloader stages
+  sit below our chain; RSA-2048-only; key revocation is limited. RPi5
+  has the same facility but seL4 has no BCM2712 port yet.
+
+### 2. ARM derivative with industrial secure boot: NXP i.MX8M
+
+Microkit/seL4 already support i.MX8M-family boards (e.g. `imx8mm_evk`,
+`imx8mq_evk` — see [Microkit supported platforms](https://docs.sel4.systems/projects/microkit/platforms.html)),
+and NXP's **HAB (High Assurance Boot)** is the mature embedded answer:
+the on-die ROM verifies the first-stage image against key hashes in
+eFuses, with proper key revocation and a field-proven provisioning
+flow. This is the "same architecture, better silicon" move:
+
+- Port cost: new platform `.mk` + device drivers (UART, ENET instead of
+  GENET, eMMC); the PD architecture, protocols, and supervisor design
+  carry over unchanged. AArch64 target JSON already exists.
+- The CAAM crypto engine can complement or replace the discrete SPI
+  TPM; keeping the `rpi4-tpm-pd` broker interface stable means client
+  PDs don't care which backend signs quotes.
+
+### 3. RISC-V: PolarFire SoC Icicle (strongest end-to-end story)
+
+seL4's functional-correctness proofs cover RV64, and the
+[Microchip PolarFire SoC Icicle Kit is a supported seL4 platform](https://docs.sel4.systems/Hardware/polarfire.html)
+with an ecosystem already using it for exactly this trusted-base role
+([DornerWorks](https://www.dornerworks.com/blog/sel4-on-polarfire-soc/)).
+PolarFire SoC brings its own hardware root of trust: immutable boot
+ROM-equivalent secure boot, device certificates, and tamper features —
+no closed application-processor firmware in the chain at all. Combined
+with the verified kernel this is the maximal "provable stack" target.
+
+- The repo already builds and CI-tests `qemu-riscv64`
+  (`microkit-hello`), so the toolchain path exists today; porting means
+  platform bring-up (HSS boot handoff, UART, MACB Ethernet) rather than
+  new architecture work.
+- Cheaper RISC-V boards (Star64/VisionFive 2, JH7110) are
+  seL4-supported but have a much weaker/poorly documented secure-boot
+  story — fine for development, not for the trust anchor.
+
+### 4. Cloud: seL4 as a UEFI guest with vTPM
+
+For an always-on personal agent without hardware on a shelf,
+[EC2 supports UEFI Secure Boot and NitroTPM (TPM 2.0)](https://aws.amazon.com/blogs/aws/amazon-ec2-now-supports-nitrotpm-and-uefi-secure-boot/):
+you can enroll **your own PK/KEK/db keys** in the instance's UEFI
+variable store (via `--uefi-data` at image registration), sign your own
+bootloader, and get measured boot + PCR-sealed secrets + remote
+attestation from the vTPM
+([deep dive](https://aws.amazon.com/blogs/compute/deep-dive-into-nitrotpm-and-uefi-secure-boot-support-in-amazon-ec2/)).
+Azure Trusted Launch and GCP Shielded VMs offer the equivalent
+(GCP also accepts custom secure-boot certificates on custom images).
+
+- Path here: the repo's `sel4-x86_64/` rootserver approach (Microkit
+  has no x86_64 yet — it's on the roadmap), chain-loaded from a signed
+  GRUB/multiboot2 EFI binary; or run the AArch64 Microkit image under
+  QEMU/KVM on a metal instance as a staging environment.
+- Driver deltas are small and generic: virtio-net (already CI-proven),
+  virtio-blk for storage, and a **TIS/CRB MMIO transport** for the TPM
+  driver in place of the SLB9670 SPI transport — worth structuring
+  `rpi4-tpm-pd` behind a transport trait now so the broker interface
+  is backend-agnostic.
+- Trust model shifts: the hypervisor (AWS/Azure/GCP) is inside the TCB.
+  That's weaker than PolarFire, stronger than most people's home
+  network, and the same CI images (`qemu-netdemo` pattern with OVMF +
+  swtpm) double as the local test rig for the whole secure-boot +
+  vTPM flow before any cloud deployment.
+
+### Recommendation
+
+Near-term: **CM4 with OTP signed boot** — it upgrades the exact
+hardware this repo runs on from measured-only to verified boot with no
+code changes, and the A/B update design slots straight into signed
+`boot.img` pairs. Add **QEMU + OVMF + swtpm** CI early since it
+exercises secure boot + TPM logic on every commit. Mid-term, **i.MX8MM**
+if the project wants deployable ARM hardware with serious provisioning,
+or **PolarFire Icicle** if the goal is the maximal formal story
+(verified kernel on RV64 + open hardware root of trust). Cloud is the
+low-friction way to run the agent 24/7 once the x86_64 or
+virtio-AArch64 path lands.
 
 ## Gap analysis
 
