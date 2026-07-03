@@ -6,13 +6,25 @@
 #![no_std]
 #![no_main]
 
+extern crate alloc;
+
 use sel4_microkit::{debug_println, protection_domain, Handler, Channel, ChannelSet};
+use linked_list_allocator::LockedHeap;
+
+// Global allocator for fontdue and other alloc-dependent code
+#[global_allocator]
+static ALLOCATOR: LockedHeap = LockedHeap::empty();
+
+// 64KB heap for font rendering
+const HEAP_SIZE: usize = 64 * 1024;
+static mut HEAP: [u8; HEAP_SIZE] = [0; HEAP_SIZE];
 
 use rpi4_graphics::{
     Mailbox, Framebuffer, MAILBOX_BASE,
     graphics::{Color, draw_box, draw_arrow_down},
     font::{draw_string, draw_string_scaled},
     crypto::{Sha256, VerifyResult, constant_time_compare, hex_to_bytes, digest_to_hex},
+    truetype::FontRenderer,
 };
 
 /// Screen dimensions
@@ -312,6 +324,41 @@ impl GraphicsHandler {
 
         debug_println!("Crypto demo complete!");
     }
+
+    /// Display the Nepali welcome message (MOTD)
+    fn draw_welcome_message(&mut self) {
+        let fb = match self.fb.as_mut() {
+            Some(fb) => fb,
+            None => return,
+        };
+
+        debug_println!("Drawing welcome message...");
+
+        // Create Devanagari font renderer at 24px
+        let font = match FontRenderer::devanagari(24.0) {
+            Some(f) => f,
+            None => {
+                debug_println!("Failed to load Devanagari font");
+                return;
+            }
+        };
+
+        // Nepali welcome message: "Welcome to seL4 Operating System"
+        let message = "सेल४ अप्पेरेटिङ सिस्टम मा स्वागत छ।";
+
+        // Draw at bottom of screen, centered
+        let msg_width = font.measure_string(message);
+        let x = ((SCREEN_WIDTH as f32 - msg_width) / 2.0) as i32;
+        let y = (SCREEN_HEIGHT - 60) as i32;
+
+        // Draw background bar
+        fb.fill_rect(0, y as u32 - 5, SCREEN_WIDTH, 40, Color::rgb(0, 40, 30));
+
+        // Draw the Nepali text
+        font.draw_string(fb, x, y, message, Color::SEL4_GREEN, None);
+
+        debug_println!("Welcome message displayed!");
+    }
 }
 
 /// Error type for the graphics handler
@@ -348,11 +395,19 @@ impl Handler for GraphicsHandler {
 
 #[protection_domain]
 fn init() -> impl Handler {
+    // Initialize the heap allocator (required for fontdue)
+    unsafe {
+        ALLOCATOR.lock().init(HEAP.as_mut_ptr(), HEAP_SIZE);
+    }
+
     debug_println!("");
     debug_println!("=====================================");
     debug_println!("  seL4 Microkit Graphics Demo");
     debug_println!("  Raspberry Pi 4");
     debug_println!("=====================================");
+    debug_println!("");
+    debug_println!("सेल४ अप्पेरेटिङ सिस्टम मा स्वागत छ।");
+    debug_println!("(Welcome to seL4 Operating System)");
     debug_println!("");
 
     // First, blink the activity LED to prove we're running
@@ -363,6 +418,7 @@ fn init() -> impl Handler {
     handler.init_framebuffer();
     handler.draw_architecture_diagram();
     handler.draw_crypto_verification();
+    handler.draw_welcome_message();
 
     debug_println!("");
     debug_println!("Graphics PD initialized. Entering event loop...");
