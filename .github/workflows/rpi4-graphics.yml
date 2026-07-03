@@ -34,101 +34,12 @@ env:
   RPI_FIRMWARE_TAG: "1.20250915"
 
 jobs:
-  # Build Microkit SDK from source with RPi4B boot fix
-  build-sdk:
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        memory: [8gb]
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Cache Microkit SDK build
-        id: cache-sdk
-        uses: actions/cache@v4
-        with:
-          path: microkit-sdk-${{ matrix.memory }}
-          key: microkit-sdk-patched-${{ matrix.memory }}-sel4-14.0.0-v2
-
-      - name: Download pre-built SDK 2.1.0 (for tool binary)
-        if: steps.cache-sdk.outputs.cache-hit != 'true'
-        run: |
-          echo "=== Downloading pre-built SDK 2.1.0 ==="
-          curl -L -o microkit-sdk.tar.gz \
-            "https://github.com/seL4/microkit/releases/download/${{ env.MICROKIT_VERSION }}/microkit-sdk-${{ env.MICROKIT_VERSION }}-linux-x86-64.tar.gz"
-          echo "${{ env.MICROKIT_SDK_SHA256 }}  microkit-sdk.tar.gz" | sha256sum -c -
-          mkdir -p prebuilt-sdk
-          tar -xzf microkit-sdk.tar.gz -C prebuilt-sdk --strip-components=1
-          rm microkit-sdk.tar.gz
-
-      - name: Clone Microkit (with RPi4B fix)
-        if: steps.cache-sdk.outputs.cache-hit != 'true'
-        run: |
-          git clone --depth 1 https://github.com/seL4/microkit.git vendor-microkit
-          cd vendor-microkit
-          echo "=== Microkit version ==="
-          git log --oneline -1
-
-      - name: Clone seL4 kernel source
-        if: steps.cache-sdk.outputs.cache-hit != 'true'
-        run: |
-          # Use seL4 14.0.0 which is compatible with Microkit main
-          git clone --depth 1 --branch 14.0.0 https://github.com/seL4/seL4.git sel4-kernel
-          cd sel4-kernel && git log --oneline -1
-
-      - name: Build Microkit SDK for RPi4B ${{ matrix.memory }}
-        if: steps.cache-sdk.outputs.cache-hit != 'true'
-        run: |
-          echo "=== Building Microkit SDK for rpi4b_${{ matrix.memory }} ==="
-
-          docker pull trustworthysystems/camkes:latest
-
-          # Build SDK - use 'aarch64-linux-gnu' (no trailing dash, script adds it)
-          docker run --rm \
-            -u $(id -u):$(id -g) \
-            -e CCACHE_DISABLE=1 \
-            -v $PWD/vendor-microkit:/microkit \
-            -v $PWD/sel4-kernel:/sel4 \
-            -w /microkit \
-            trustworthysystems/camkes:latest \
-            python3 build_sdk.py \
-              --sel4 /sel4 \
-              --boards rpi4b_${{ matrix.memory }} \
-              --configs debug \
-              --skip-tool \
-              --skip-initialiser \
-              --skip-docs \
-              --gcc-toolchain-prefix-aarch64 aarch64-linux-gnu
-
-          # Assemble final SDK
-          mkdir -p microkit-sdk-${{ matrix.memory }}
-          cp -r vendor-microkit/release/microkit-sdk-*/. microkit-sdk-${{ matrix.memory }}/
-
-          # Copy pre-built tool binary (since we skipped building it)
-          cp prebuilt-sdk/bin/microkit microkit-sdk-${{ matrix.memory }}/bin/
-          chmod +x microkit-sdk-${{ matrix.memory }}/bin/microkit
-
-          # Copy pre-built initialiser.elf (since we skipped building it)
-          # The initialiser is board-specific
-          cp prebuilt-sdk/board/rpi4b_${{ matrix.memory }}/debug/elf/initialiser.elf \
-             microkit-sdk-${{ matrix.memory }}/board/rpi4b_${{ matrix.memory }}/debug/elf/
-
-          echo "=== SDK contents ==="
-          ls -la microkit-sdk-${{ matrix.memory }}/bin/
-          ls -la microkit-sdk-${{ matrix.memory }}/board/rpi4b_${{ matrix.memory }}/debug/elf/
-
-      - name: Upload SDK artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: microkit-sdk-${{ matrix.memory }}
-          path: microkit-sdk-${{ matrix.memory }}/
-          retention-days: 7
-
   # Build 8GB variant
+  #
+  # Uses the official pre-built Microkit SDK: release 2.1.0 ships all
+  # rpi4b_* boards, so the old from-source SDK build (which cloned moving
+  # Microkit main and broke when it drifted from seL4 14.0.0) is gone.
   build-8gb:
-    needs: build-sdk
     runs-on: ubuntu-latest
     outputs:
       sha_short: ${{ steps.commit.outputs.SHA_SHORT }}
@@ -141,14 +52,24 @@ jobs:
         id: commit
         run: echo "SHA_SHORT=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
 
-      - name: Download Microkit SDK
-        uses: actions/download-artifact@v4
+      - name: Cache Microkit SDK
+        id: cache-microkit
+        uses: actions/cache@v4
         with:
-          name: microkit-sdk-8gb
-          path: sel4-microkernel/rpi4-graphics/microkit-sdk
+          path: /opt/microkit-sdk
+          key: microkit-sdk-${{ env.MICROKIT_VERSION }}-linux-x86-64
 
-      - name: Fix SDK permissions
-        run: chmod +x sel4-microkernel/rpi4-graphics/microkit-sdk/bin/microkit
+      - name: Download Microkit SDK
+        if: steps.cache-microkit.outputs.cache-hit != 'true'
+        run: |
+          curl -L -o /tmp/microkit-sdk.tar.gz \
+            "https://github.com/seL4/microkit/releases/download/${{ env.MICROKIT_VERSION }}/microkit-sdk-${{ env.MICROKIT_VERSION }}-linux-x86-64.tar.gz"
+
+          echo "${{ env.MICROKIT_SDK_SHA256 }}  /tmp/microkit-sdk.tar.gz" | sha256sum -c -
+
+          sudo mkdir -p /opt/microkit-sdk
+          sudo tar -xzf /tmp/microkit-sdk.tar.gz -C /opt/microkit-sdk --strip-components=1
+          rm /tmp/microkit-sdk.tar.gz
 
       - name: Install dependencies
         run: |
@@ -161,8 +82,10 @@ jobs:
             curl
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@nightly
+        uses: dtolnay/rust-toolchain@master
         with:
+          # Pinned nightly - keep in sync with sel4-microkernel/rust-toolchain.toml
+          toolchain: nightly-2026-07-02
           components: rust-src
 
       - name: Cache Raspberry Pi firmware
@@ -180,7 +103,7 @@ jobs:
       - name: Build for 8GB Raspberry Pi 4
         working-directory: sel4-microkernel/rpi4-graphics
         run: |
-          export MICROKIT_SDK=$PWD/microkit-sdk
+          export MICROKIT_SDK=/opt/microkit-sdk
           export SEL4_INCLUDE_DIRS=$MICROKIT_SDK/board/rpi4b_8gb/debug/include
           echo "=== Environment ==="
           echo "MICROKIT_SDK=$MICROKIT_SDK"
@@ -270,7 +193,7 @@ jobs:
           sha256sum -c rpi4-sel4-graphics-8gb.img.sha256
           ```
 
-          Built with Microkit SDK from source (includes RPi4B boot fix PR #402).
+          Built with the official Microkit SDK ${{ env.MICROKIT_VERSION }}.
           EOF
 
       - name: Delete existing release

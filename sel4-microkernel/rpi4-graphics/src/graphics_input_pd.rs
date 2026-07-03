@@ -39,6 +39,8 @@ use rpi4_input_protocol::{
     InputRingHeader, InputRingEntry, INPUT_CHANNEL_ID,
     header_ptr, entries_ptr,
 };
+#[cfg(feature = "network")]
+use rpi4_network_protocol::{ring_flags, NetSharedMemory, NET_CLIENT_CHANNEL_ID, RING_SIZE};
 
 /// Screen dimensions
 const WIDTH: u32 = 1280;
@@ -52,6 +54,14 @@ const RING_BUFFER_VADDR: usize = 0x5_0400_0000;
 
 /// Input channel for notifications from Input PD
 const INPUT_CHANNEL: Channel = Channel::new(INPUT_CHANNEL_ID);
+
+/// Network shared ring virtual address (must match tvdemo-network.system)
+#[cfg(feature = "network")]
+const NET_RING_VADDR: usize = 0x5_0700_0000;
+
+/// Channel for notifications from the Network PD
+#[cfg(feature = "network")]
+const NET_CHANNEL: Channel = Channel::new(NET_CLIENT_CHANNEL_ID);
 
 /// Application state
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -152,9 +162,68 @@ impl RingBufferInput {
     }
 }
 
+/// Client for the Network PD shared memory ring
+///
+/// Reads received packets out of the RX ring published by the Network PD.
+/// The client owns `rx_read_idx`; the Network PD owns `rx_write_idx`,
+/// `mac_address` and `link_up`, so those are read volatilely.
+#[cfg(feature = "network")]
+struct NetClient {
+    shared: *mut NetSharedMemory,
+}
+
+#[cfg(feature = "network")]
+impl NetClient {
+    const fn new() -> Self {
+        Self {
+            shared: NET_RING_VADDR as *mut NetSharedMemory,
+        }
+    }
+
+    /// Drain the RX ring: consume every valid entry the Network PD queued
+    /// and log a summary of what arrived.
+    fn drain_rx(&mut self) {
+        // Safety: NET_RING_VADDR is mapped by tvdemo-network.system
+        let shared = unsafe { &mut *self.shared };
+
+        let mut packets: u32 = 0;
+        let mut bytes: u64 = 0;
+
+        unsafe {
+            // The Network PD writes rx_write_idx; read it volatilely each iteration
+            while shared.rx_read_idx != core::ptr::read_volatile(&shared.rx_write_idx) {
+                let idx = (shared.rx_read_idx as usize) % RING_SIZE;
+                let entry = &mut shared.rx_ring[idx];
+
+                let flags = core::ptr::read_volatile(&entry.flags);
+                if flags & ring_flags::VALID != 0 {
+                    let len = core::ptr::read_volatile(&entry.length) as usize;
+                    packets += 1;
+                    bytes += len as u64;
+                    // Hand the entry back to the Network PD
+                    core::ptr::write_volatile(&mut entry.flags, 0);
+                }
+
+                let next = shared.rx_read_idx.wrapping_add(1);
+                core::ptr::write_volatile(&mut shared.rx_read_idx, next);
+            }
+
+            let link_up = core::ptr::read_volatile(&shared.link_up) != 0;
+            let mac = core::ptr::read_volatile(&shared.mac_address);
+            debug_println!(
+                "Graphics PD: net rx {} packets ({} bytes), link_up={}, mac={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
+                packets, bytes, link_up,
+                mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]
+            );
+        }
+    }
+}
+
 struct GraphicsHandler {
     framebuffer: Option<Framebuffer>,
     input: RingBufferInput,
+    #[cfg(feature = "network")]
+    net: NetClient,
     state: AppState,
     menu_selected: usize,
     snake: Snake,
@@ -406,6 +475,8 @@ impl GraphicsHandler {
         Self {
             framebuffer: None,
             input: RingBufferInput::new(),
+            #[cfg(feature = "network")]
+            net: NetClient::new(),
             state: AppState::Menu,
             menu_selected: 0,
             snake: Snake::new(),
@@ -673,6 +744,12 @@ impl Handler for GraphicsHandler {
             while let Some((key, state)) = self.input.poll() {
                 self.handle_input(key, state);
             }
+        }
+
+        // Check if notification is from Network PD (received packets)
+        #[cfg(feature = "network")]
+        if channels.contains(NET_CHANNEL) {
+            self.net.drain_rx();
         }
 
         // Render frame

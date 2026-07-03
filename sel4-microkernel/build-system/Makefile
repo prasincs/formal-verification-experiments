@@ -7,6 +7,7 @@ THIS_MAKEFILE := $(lastword $(MAKEFILE_LIST))
 # Products:
 #   graphics    - RPi4 HDMI framebuffer demo
 #   hello       - Hello World for QEMU
+#   netdemo     - Virtio network demo for QEMU (CI network testing)
 #   tvdemo      - TV Demo with input (RPi4)
 #   tpmtest     - TPM 2.0 boot verification test (RPi4 + TPM module)
 #
@@ -24,15 +25,22 @@ THIS_MAKEFILE := $(lastword $(MAKEFILE_LIST))
 #   clean        - Remove build artifacts
 #   help         - Show this message
 #
+# Optional:
+#   NET_DRIVER     - ethernet, wifi, both, none (default: none)
+#   NET_STACK      - lwip, picotcp (default: lwip)
+#   RPI4_MEMORY    - 1gb, 2gb, 4gb, 8gb (default: 4gb)
+#   ISOLATED       - Enable two-PD architecture (tvdemo only)
+#
 # Examples:
 #   make PRODUCT=hello PLATFORM=qemu-aarch64 run
 #   make PRODUCT=graphics PLATFORM=rpi4 sdcard
 #   make PRODUCT=graphics PLATFORM=rpi4 RPI4_MEMORY=8gb sdcard
 #   make PRODUCT=graphics PLATFORM=rpi4 write-sdcard DEVICE=/dev/sdb
+#   make PRODUCT=tvdemo PLATFORM=rpi4 ISOLATED=1 NET_DRIVER=ethernet sdcard
 
 # Validate required parameters
 ifndef PRODUCT
-$(error PRODUCT is required. Use: make PRODUCT=<graphics|hello|tvdemo> PLATFORM=<platform>)
+$(error PRODUCT is required. Use: make PRODUCT=<graphics|hello|netdemo|tvdemo> PLATFORM=<platform>)
 endif
 
 ifndef PLATFORM
@@ -53,9 +61,14 @@ include $(PLATFORM_MK)
 # Load product configuration
 PRODUCT_MK := config/products/$(PRODUCT).mk
 ifeq ($(wildcard $(PRODUCT_MK)),)
-$(error Unknown product: $(PRODUCT). Available: graphics, hello, tvdemo)
+$(error Unknown product: $(PRODUCT). Available: graphics, hello, netdemo, tvdemo)
 endif
 include $(PRODUCT_MK)
+
+# Load optional features (networking, etc.)
+# Must be included before build rules so feature overrides (e.g. SYSTEM_DESC)
+# are visible when rule prerequisites are expanded.
+include config/features/networking.mk
 
 # Load build rules
 include include/rust.mk
@@ -84,6 +97,13 @@ info:
 	@echo "Microkit SDK:  $(MICROKIT_SDK)"
 	@echo "Build dir:     $(BUILD_DIR)"
 	@echo "Target spec:   $(TARGET_SPEC)"
+ifdef NETWORKING_ENABLED
+	@echo ""
+	@echo "=== Networking ==="
+	@echo "Driver:        $(NET_DRIVER)"
+	@echo "Stack:         $(NET_STACK)"
+	@echo "Features:      $(NETWORK_FEATURES)"
+endif
 	@echo ""
 	@echo "Source: $(PRODUCT_SRC_DIR)"
 	@echo "System: $(SYSTEM_DESC)"

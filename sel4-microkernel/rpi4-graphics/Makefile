@@ -47,7 +47,8 @@ endif
 
 # Tools
 MICROKIT_TOOL := $(MICROKIT_SDK)/bin/microkit
-CARGO := cargo +nightly
+# Toolchain comes from ../rust-toolchain.toml (pinned nightly) via the shim
+CARGO := cargo
 
 # Directories
 BUILD_DIR := build
@@ -84,6 +85,10 @@ all: $(SYSTEM_IMAGE)
 # Custom target for seL4 Microkit (absolute path for reliability)
 TARGET_JSON := $(PWD)/support/targets/aarch64-sel4-microkit.json
 
+# Newer nightlies (>= 2026-06) require an explicit opt-in for .json target
+# specs. Probe the toolchain so older nightlies keep working.
+JSON_TARGET_SPEC_FLAG := $(shell $(CARGO) build -Zjson-target-spec --help >/dev/null 2>&1 && echo -Zjson-target-spec)
+
 # Build the Rust protection domain
 $(PD_ELF): src/*.rs Cargo.toml | $(BUILD_DIR)
 	@echo "=== Building $(PD_NAME) Protection Domain ==="
@@ -92,7 +97,8 @@ $(PD_ELF): src/*.rs Cargo.toml | $(BUILD_DIR)
 		--target $(TARGET_JSON) \
 		--bin $(PD_NAME) \
 		-Z build-std=core,alloc,compiler_builtins \
-		-Z build-std-features=compiler-builtins-mem
+		-Z build-std-features=compiler-builtins-mem \
+		$(JSON_TARGET_SPEC_FLAG)
 	@mkdir -p $(BUILD_DIR)
 	cp target/aarch64-sel4-microkit/release/$(PD_NAME).elf $@
 	@echo "Built: $@"

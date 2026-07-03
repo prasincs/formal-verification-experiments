@@ -25,7 +25,8 @@ mkdir -p "$BUILD_DIR"
 # For now, we'll build a standalone ELF that can be loaded by seL4
 # In a full setup, this would integrate with the seL4 build system
 
-cargo +nightly build \
+# Toolchain comes from sel4-microkernel/rust-toolchain.toml (pinned nightly)
+cargo build \
     --release \
     --target x86_64-unknown-none \
     -Z build-std=core,alloc \

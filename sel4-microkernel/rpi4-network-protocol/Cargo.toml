@@ -1,0 +1,9 @@
+[package]
+name = "rpi4-network-protocol"
+version = "0.1.0"
+edition = "2021"
+authors = ["Prasanna Gautam"]
+description = "Shared network IPC protocol between the Network PD and client PDs"
+license = "MIT"
+
+[dependencies]

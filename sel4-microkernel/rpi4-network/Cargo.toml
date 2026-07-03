@@ -1,0 +1,45 @@
+[package]
+name = "rpi4-network"
+version = "0.1.0"
+edition = "2021"
+authors = ["Prasanna Gautam"]
+description = "Network Protection Domain for seL4 Microkit on Raspberry Pi 4"
+license = "MIT"
+
+[[bin]]
+name = "network_pd"
+path = "src/main.rs"
+
+# Minimal ring-protocol client used by the QEMU netdemo product for CI
+[[bin]]
+name = "netclient_pd"
+path = "src/bin/netclient_pd.rs"
+
+[features]
+default = []
+
+# Driver selection (compile-time)
+net-ethernet = []
+net-virtio = []
+net-wifi = []
+
+# IP stack selection
+net-stack-lwip = []
+net-stack-picotcp = []
+
+[dependencies]
+# sel4-microkit provides the Microkit runtime and API
+sel4-microkit = { git = "https://github.com/seL4/rust-sel4", rev = "3059c2d236bf56b066936dd48d8966255e172c3b" }
+
+# Shared IPC protocol between the Network PD and client PDs
+rpi4-network-protocol = { path = "../rpi4-network-protocol" }
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+debug = false
+panic = "abort"
+
+[profile.dev]
+panic = "abort"

@@ -1,0 +1,234 @@
+# Raspberry Pi 4 Networking on seL4
+
+This document describes networking options for seL4 Microkit on Raspberry Pi 4, comparing Ethernet and WiFi approaches, and explaining the compile-time configuration system.
+
+> Work tracking: see the [Networking Roadmap](networking-roadmap.md) for
+> per-phase status, open items, and the testing matrix.
+
+## Hardware Overview
+
+The Raspberry Pi 4 Model B includes two networking interfaces:
+
+| Interface | Chip | Connection | Max Speed |
+|-----------|------|------------|-----------|
+| **Ethernet** | BCM54213PE (GENET) | Native SoC bus | 1 Gbps |
+| **WiFi** | CYW43455 | SDIO (4-bit) | ~160 Mbps theoretical |
+
+## Comparison: Ethernet vs WiFi
+
+### Ethernet (BCM54213PE) - Recommended
+
+**Advantages:**
+- Native SoC connection (no USB/PCIe bridge)
+- Simpler driver architecture (~600 lines in sDDF)
+- Full gigabit speeds achievable
+- No firmware blob loading required at runtime
+- No wireless regulatory compliance complexity
+- Lower power consumption
+- Deterministic latency (critical for real-time systems)
+
+**Disadvantages:**
+- Requires physical cable
+- Less flexible deployment
+
+**Driver Complexity:** Medium
+- GENET (Gigabit Ethernet) controller driver
+- UniMAC MDIO bus controller
+- BCM54213PE PHY initialization
+
+**References:**
+- [Circle bare metal driver](https://github.com/rsta2/circle/blob/master/lib/bcm54213.cpp)
+- Linux `drivers/net/ethernet/broadcom/genet/`
+
+### WiFi (CYW43455) - Advanced
+
+**Advantages:**
+- Wireless connectivity
+- Flexible deployment
+- Bluetooth included (shared chip)
+
+**Disadvantages:**
+- Complex SDIO initialization sequence
+- Requires proprietary firmware blobs:
+  - `brcmfmac43455-sdio.bin` (main firmware)
+  - `brcmfmac43455-sdio.txt` (NVRAM config)
+  - `brcmfmac43455-sdio.clm_blob` (regulatory database)
+- WPA/WPA2 adds significant complexity
+- Higher latency variability
+- More power consumption
+- 802.11 stack overhead
+
+**Driver Complexity:** High
+- SDIO bus initialization (Arasan controller)
+- Firmware loading and verification
+- BCDC protocol implementation
+- 802.11 management frames
+- WPA supplicant integration
+
+**References:**
+- Linux `drivers/net/wireless/broadcom/brcm80211/brcmfmac/`
+- NetBSD/OpenBSD `bwfm` driver
+
+## Architecture
+
+### Protection Domain Model
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    seL4 Microkit System                     │
+├─────────────────────────────────────────────────────────────┤
+│                                                             │
+│  ┌──────────────┐    IPC     ┌──────────────┐              │
+│  │  Network PD  │◄──────────►│  Client PD   │              │
+│  │              │            │  (Graphics)  │              │
+│  │ ┌──────────┐ │            └──────────────┘              │
+│  │ │ IP Stack │ │                                          │
+│  │ │ (lwIP/   │ │                                          │
+│  │ │ picoTCP) │ │                                          │
+│  │ └────┬─────┘ │                                          │
+│  │      │       │                                          │
+│  │ ┌────┴─────┐ │                                          │
+│  │ │  Driver  │ │   MMIO                                   │
+│  │ │(ETH/WiFi)│ │◄─────────►  Hardware                     │
+│  │ └──────────┘ │                                          │
+│  └──────────────┘                                          │
+│                                                            │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### Memory Regions
+
+**Ethernet (GENET):**
+```
+GENET Base:     0xfd580000
+GENET Size:     0x10000 (64KB)
+DMA buffers:    0x3e700000 (1MB, fixed phys addr for descriptors)
+```
+
+**WiFi (SDIO):**
+```
+EMMC2/SDIO:     0xfe340000
+SDHOST:         0xfe202000
+GPIO (pins 34-39 for SDIO)
+```
+
+## Compile-Time Configuration
+
+Networking is enabled via the `NET_DRIVER` build variable. The networked
+tvdemo uses the three-PD system description (Input + Network + Graphics),
+so `ISOLATED=1` is required:
+
+```bash
+# No networking (default)
+make PRODUCT=tvdemo PLATFORM=rpi4
+
+# Ethernet only
+make PRODUCT=tvdemo PLATFORM=rpi4 ISOLATED=1 NET_DRIVER=ethernet
+
+# WiFi only
+make PRODUCT=tvdemo PLATFORM=rpi4 ISOLATED=1 NET_DRIVER=wifi
+
+# Both (Ethernet primary, WiFi secondary)
+make PRODUCT=tvdemo PLATFORM=rpi4 ISOLATED=1 NET_DRIVER=both
+```
+
+### Feature Flags in Rust
+
+The build system sets Cargo features based on `NET_DRIVER`:
+
+```toml
+[features]
+default = []
+net-ethernet = []
+net-wifi = []
+net-stack-lwip = []
+net-stack-picotcp = []
+```
+
+### Conditional Compilation
+
+```rust
+#[cfg(feature = "net-ethernet")]
+mod ethernet;
+
+#[cfg(feature = "net-wifi")]
+mod wifi;
+
+pub fn init_network() {
+    #[cfg(feature = "net-ethernet")]
+    ethernet::init();
+
+    #[cfg(feature = "net-wifi")]
+    wifi::init();
+}
+```
+
+## IP Stack Options
+
+### lwIP (Recommended)
+
+- Mature, widely used
+- ~40KB code size
+- Full TCP/IP support
+- BSD-style socket API available
+- Dual-stack IPv4/IPv6
+
+### picoTCP
+
+- Modular design
+- Good for constrained environments
+- seL4 fork maintained by Trustworthy Systems
+- GPL v2/v3 licensed
+
+## Component Layout
+
+- `rpi4-network` — Network PD binary (drivers + ring-buffer server) and
+  the `netclient_pd` test client for QEMU
+- `rpi4-network-protocol` — shared IPC protocol crate used by the Network
+  PD and clients (mirrors the `rpi4-input-protocol` pattern)
+- `rpi4-graphics` `network` feature — client that drains the RX ring and
+  reads link state (enabled automatically when `NET_DRIVER` is set)
+
+## CI Testing (QEMU virtio-net)
+
+QEMU cannot emulate the RPi4's GENET or CYW43455, so the drivers above
+need real hardware. To keep the rest of the stack testable in CI, the
+`netdemo` product (`PLATFORM=qemu-aarch64`) pairs the Network PD with a
+virtio-net driver (`net-virtio` feature, legacy virtio-mmio) and a
+minimal client PD. The client ARP-probes QEMU's user-network gateway
+through the shared-memory rings and logs the reply, covering:
+
+- driver init, TX/RX virtqueues, and IRQ routing (GIC SPI 79)
+- the full client -> TX ring -> driver -> QEMU -> RX ring -> client path
+
+The `qemu-netdemo` job in `.github/workflows/qemu-mockpi.yml` runs this
+boot test on every push.
+
+## Implementation Roadmap
+
+Tracked in the dedicated [Networking Roadmap](networking-roadmap.md) —
+phase status, open items with code locations, and the testing matrix.
+Summary: foundations, the GENET Ethernet driver, and QEMU/CI testing are
+complete; the IP stack (Phase 4) is next; hardware validation, WiFi, and
+formal verification of the ring protocol follow.
+
+## Security Considerations
+
+### Isolation Benefits
+- Network PD runs in separate protection domain
+- Capability-based access control
+- Buffer overflow in driver cannot compromise kernel
+- Network-facing code isolated from trusted components
+
+### Verification Opportunities
+- Ring buffer IPC can use Verus verification (like rpi4-input-protocol)
+- Packet parsing can be formally verified
+- State machine verification for protocol handlers
+
+## References
+
+- [sDDF Network Framework](https://github.com/au-ts/sDDF) - seL4 Device Driver Framework
+- [seL4 Microkit SDK](https://docs.sel4.systems/projects/microkit/) - Official documentation
+- [Circle BCM54213 Driver](https://github.com/rsta2/circle) - Bare metal reference
+- [seL4 picoTCP Fork](https://github.com/seL4/picotcp) - TCP/IP stack
+- [lwIP](https://savannah.nongnu.org/projects/lwip/) - Lightweight IP stack

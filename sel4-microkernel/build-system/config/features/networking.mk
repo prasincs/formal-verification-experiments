@@ -1,0 +1,138 @@
+# Feature: Networking Support for seL4 Microkit
+#
+# This feature module adds networking capabilities to seL4 products.
+# It supports both Ethernet (BCM54213PE) and WiFi (CYW43455) on Raspberry Pi 4.
+#
+# Usage (requires ISOLATED=1 for the three-PD system):
+#   make PRODUCT=tvdemo PLATFORM=rpi4 ISOLATED=1 NET_DRIVER=ethernet
+#   make PRODUCT=tvdemo PLATFORM=rpi4 ISOLATED=1 NET_DRIVER=wifi
+#   make PRODUCT=tvdemo PLATFORM=rpi4 ISOLATED=1 NET_DRIVER=both
+#
+# Options:
+#   NET_DRIVER   - ethernet, wifi, both, or none (default: none)
+#   NET_STACK    - lwip or picotcp (default: lwip)
+
+# Default values
+NET_DRIVER ?= none
+NET_STACK ?= lwip
+
+# Validate NET_DRIVER option
+ifneq ($(filter $(NET_DRIVER),none ethernet wifi both),$(NET_DRIVER))
+$(error Invalid NET_DRIVER='$(NET_DRIVER)'. Valid options: none, ethernet, wifi, both)
+endif
+
+# Validate NET_STACK option
+ifneq ($(filter $(NET_STACK),lwip picotcp),$(NET_STACK))
+$(error Invalid NET_STACK='$(NET_STACK)'. Valid options: lwip, picotcp)
+endif
+
+# Skip networking setup if disabled
+ifneq ($(NET_DRIVER),none)
+
+# Enable networking flag
+NETWORKING_ENABLED := 1
+
+# Network PD source directory
+NETWORK_PD_SRC_DIR := $(ROOT_DIR)/rpi4-network
+
+# Network PD binary name
+NETWORK_PD_NAME := network_pd
+NETWORK_PD_ELF := $(BUILD_DIR)/$(NETWORK_PD_NAME).elf
+
+# Cargo features based on driver selection
+NETWORK_FEATURES :=
+
+ifeq ($(NET_DRIVER),ethernet)
+NETWORK_FEATURES += net-ethernet
+endif
+
+ifeq ($(NET_DRIVER),wifi)
+NETWORK_FEATURES += net-wifi
+endif
+
+ifeq ($(NET_DRIVER),both)
+NETWORK_FEATURES += net-ethernet net-wifi
+endif
+
+# Add IP stack feature
+ifeq ($(NET_STACK),lwip)
+NETWORK_FEATURES += net-stack-lwip
+else ifeq ($(NET_STACK),picotcp)
+NETWORK_FEATURES += net-stack-picotcp
+endif
+
+# Convert features to Cargo format
+NETWORK_CARGO_FEATURES := $(if $(NETWORK_FEATURES),--features "$(NETWORK_FEATURES)")
+
+# Hardware memory regions for Microkit system descriptor
+# These are included when networking is enabled
+
+# Ethernet (GENET) memory regions
+ifeq ($(filter ethernet both,$(NET_DRIVER)),$(NET_DRIVER))
+GENET_BASE := 0xfd580000
+GENET_SIZE := 0x10000
+endif
+
+# WiFi (SDIO) memory regions
+ifeq ($(filter wifi both,$(NET_DRIVER)),$(NET_DRIVER))
+SDIO_BASE := 0xfe340000
+SDIO_SIZE := 0x1000
+SDHOST_BASE := 0xfe202000
+SDHOST_SIZE := 0x100
+endif
+
+# Network PD source files for dependency tracking
+NETWORK_SOURCES := $(wildcard $(NETWORK_PD_SRC_DIR)/src/*.rs) \
+                   $(wildcard $(NETWORK_PD_SRC_DIR)/src/**/*.rs) \
+                   $(NETWORK_PD_SRC_DIR)/Cargo.toml
+
+# Wire the Network PD into supported products.
+# The three-PD system description (tvdemo-network.system) uses the isolated
+# Input PD and Graphics PD images, so ISOLATED=1 is required.
+ifeq ($(PRODUCT),tvdemo)
+ifndef ISOLATED
+$(error NET_DRIVER=$(NET_DRIVER) on tvdemo requires ISOLATED=1 (three-PD system))
+endif
+SYSTEM_DESC := $(PRODUCT_SRC_DIR)/tvdemo-network.system
+# Build the Graphics PD with its network client enabled
+# (networking.mk is included after tvdemo.mk; recipe variables expand at
+# execution time, so the graphics PD build rule picks this up)
+GRAPHICS_PD_FEATURES := --features network
+# The generic $(PD_ELF) recipe in include/rust.mk overrides the graphics PD
+# recipe in tvdemo.mk (make uses the last recipe defined for a target), so
+# also inject the feature flags into that recipe via a target-specific
+# variable. CARGO_BUILD_STD is simply-expanded, so this expands here, after
+# GRAPHICS_PD_FEATURES is set.
+$(GRAPHICS_PD_ELF): CARGO_BUILD_STD += $(GRAPHICS_PD_FEATURES)
+else
+$(error NET_DRIVER is currently only supported for PRODUCT=tvdemo)
+endif
+
+# Build rule for Network PD
+$(NETWORK_PD_ELF): $(NETWORK_SOURCES) | $(BUILD_DIR)
+	@echo "=== Building Network PD ($(NET_DRIVER), $(NET_STACK)) ==="
+	cd $(NETWORK_PD_SRC_DIR) && $(CARGO) build \
+		--release \
+		--target $(TARGET_SPEC) \
+		$(NETWORK_CARGO_FEATURES) \
+		$(CARGO_BUILD_STD)
+	cp $(NETWORK_PD_SRC_DIR)/target/$(CARGO_TARGET)/release/$(NETWORK_PD_NAME).elf $@
+	@echo "Built: $@"
+
+# Add Network PD to build dependencies
+.PHONY: build-network-pd
+build-network-pd: $(NETWORK_PD_ELF)
+
+# The system image and loader need the Network PD ELF in the search path
+$(SYSTEM_IMAGE): $(NETWORK_PD_ELF)
+$(LOADER_ELF): $(NETWORK_PD_ELF)
+
+# Print networking configuration
+.PHONY: print-network-config
+print-network-config:
+	@echo "Networking Configuration:"
+	@echo "  NET_DRIVER: $(NET_DRIVER)"
+	@echo "  NET_STACK:  $(NET_STACK)"
+	@echo "  Features:   $(NETWORK_FEATURES)"
+
+endif # NET_DRIVER != none

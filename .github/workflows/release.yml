@@ -51,8 +51,10 @@ jobs:
         run: ./scripts/install-deps.sh --microkit
 
       - name: Install Rust nightly
-        uses: dtolnay/rust-toolchain@nightly
+        uses: dtolnay/rust-toolchain@master
         with:
+          # Pinned nightly - keep in sync with sel4-microkernel/rust-toolchain.toml
+          toolchain: nightly-2026-07-02
           components: rust-src
 
       - name: Cache Microkit SDK
@@ -99,8 +101,10 @@ jobs:
             curl
 
       - name: Install Rust nightly
-        uses: dtolnay/rust-toolchain@nightly
+        uses: dtolnay/rust-toolchain@master
         with:
+          # Pinned nightly - keep in sync with sel4-microkernel/rust-toolchain.toml
+          toolchain: nightly-2026-07-02
           components: rust-src
 
       - name: Cache Microkit SDK
