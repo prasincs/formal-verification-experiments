@@ -4,6 +4,10 @@ version = 1
 pds = ["supervisor", "worker"]
 regions = ["work_ring"]
 
+[[exclusive]]
+region = "rtc_regs"
+pd = "supervisor"
+
 [[no_device_mmio]]
 pd = "worker"
 
@@ -14,6 +18,9 @@ peers = ["worker"]
 [[only_channels]]
 pd = "worker"
 peers = ["supervisor"]
+
+[[dma_capable]]
+pd = "supervisor"
 
 [[restartable_ring]]
 region = "work_ring"
