@@ -16,7 +16,9 @@ use netif::{NetifConfig, NetworkInterface};
 use sel4_microkit::{debug_println, protection_domain, Channel, ChannelSet, Handler};
 use smoltcp::iface::SocketStorage;
 use smoltcp::socket::icmp;
-use stack::{NetworkStack, StackEvent, StackResources};
+use stack::{
+    DeviceResources, NetworkStack, StackEvent, StackResources, FRAME_CAPACITY,
+};
 
 const VIRTIO_MMIO_VADDR: usize = 0x5_0900_0000;
 const VIRTIO_MMIO_SIZE: usize = 0x4000;
@@ -26,6 +28,8 @@ const VIRTIO_DMA_SIZE: usize = 0x10_0000;
 const NET_IRQ_CHANNEL_ID: usize = 1;
 const NET_IRQ_CHANNEL: Channel = Channel::new(NET_IRQ_CHANNEL_ID);
 
+static mut FRAME_RX: [u8; FRAME_CAPACITY] = [0; FRAME_CAPACITY];
+static mut FRAME_TX: [u8; FRAME_CAPACITY] = [0; FRAME_CAPACITY];
 static mut SOCKET_STORAGE: [SocketStorage<'static>; 2] =
     [SocketStorage::EMPTY, SocketStorage::EMPTY];
 static mut ICMP_RX_METADATA: [icmp::PacketMetadata; 1] = [icmp::PacketMetadata::EMPTY];
@@ -85,6 +89,10 @@ fn init() -> IpDemoHandler {
 
     let resources = unsafe {
         StackResources {
+            device: DeviceResources {
+                rx_buffer: &mut *core::ptr::addr_of_mut!(FRAME_RX),
+                tx_buffer: &mut *core::ptr::addr_of_mut!(FRAME_TX),
+            },
             sockets: &mut *core::ptr::addr_of_mut!(SOCKET_STORAGE),
             icmp_rx_metadata: &mut *core::ptr::addr_of_mut!(ICMP_RX_METADATA),
             icmp_rx_payload: &mut *core::ptr::addr_of_mut!(ICMP_RX_PAYLOAD),
