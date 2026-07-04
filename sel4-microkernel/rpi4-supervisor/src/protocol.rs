@@ -28,25 +28,28 @@ pub struct WorkRing {
 
 impl WorkRing {
     /// # Safety
+    /// The fixed virtual address must be mapped to the `work_ring` region and
+    /// the caller must not create a mutable alias.
+    pub unsafe fn mapped_mut() -> &'static mut Self {
+        &mut *(WORK_RING_VADDR as *mut Self)
+    }
+
+    /// # Safety
     /// The fixed virtual address must be mapped to the `work_ring` region.
     pub unsafe fn mapped() -> &'static Self {
         &*(WORK_RING_VADDR as *const Self)
     }
 
     /// Called by the supervisor before the child can run.
-    pub fn initialize(&self) {
+    pub fn initialize(&mut self) {
         self.write_idx.store(0, Ordering::Relaxed);
         self.read_idx.store(0, Ordering::Relaxed);
-        unsafe {
-            // Capacity is immutable after supervisor initialization. The shared
-            // region starts zeroed and the higher-priority parent initializes
-            // it before the child is scheduled.
-            (core::ptr::addr_of!(self.capacity) as *mut u32).write(WORK_RING_CAPACITY);
-        }
+        self.capacity = WORK_RING_CAPACITY;
         self.generation.store(0, Ordering::Release);
         self.heartbeat.store(0, Ordering::Release);
         self.command.store(COMMAND_NONE, Ordering::Release);
         self.command_sequence.store(0, Ordering::Release);
+        self.reserved.store(0, Ordering::Release);
         for entry in &self.entries {
             entry.store(0, Ordering::Relaxed);
         }
