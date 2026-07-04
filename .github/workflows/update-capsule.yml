@@ -33,6 +33,5 @@ jobs:
         run: cargo install cargo-fuzz --locked
 
       - name: Fuzz parser for 60 seconds
-        run: |
-          cargo fuzz run --manifest-path sel4-microkernel/update-capsule/fuzz/Cargo.toml \
-            parse -- -max_total_time=60
+        working-directory: sel4-microkernel/update-capsule
+        run: cargo fuzz run parse -- -max_total_time=60
