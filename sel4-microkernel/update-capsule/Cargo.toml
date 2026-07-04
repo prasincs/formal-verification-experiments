@@ -18,7 +18,7 @@ sha2 = { version = "0.10", default-features = false }
 subtle = { version = "2.6", default-features = false }
 verus_builtin_macros = "=0.0.0-2025-12-07-0054"
 verus_builtin = "=0.0.0-2025-12-07-0054"
-ed25519-dalek = { version = "2.1", default-features = false, features = ["digest"], optional = true }
+ed25519-dalek = { version = "2.1", default-features = false, features = ["alloc", "digest"], optional = true }
 rand_core = { version = "0.6", features = ["getrandom"], optional = true }
 hex = { version = "0.4", optional = true }
 
@@ -29,7 +29,7 @@ cli = ["alloc-crypto", "dep:rand_core", "dep:hex", "ed25519-dalek/rand_core"]
 
 [dev-dependencies]
 hex = "0.4"
-ed25519-dalek = { version = "2.1", default-features = false, features = ["digest", "rand_core"] }
+ed25519-dalek = { version = "2.1", default-features = false, features = ["alloc", "digest", "rand_core"] }
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(verus_keep_ghost)'] }
