@@ -39,13 +39,25 @@ jobs:
 
       - name: Verify executable input generation contract
         run: |
+          set -o pipefail
           VERUS_BIN="$(find /tmp/verus -type f -name verus | head -n1)"
           test -x "$VERUS_BIN"
           "$VERUS_BIN" --crate-type lib \
-            sel4-microkernel/rpi4-input-protocol/src/generation_contract.rs
+            sel4-microkernel/rpi4-input-protocol/src/generation_contract.rs \
+            2>&1 | tee verus-input.log
 
       - name: Verify executable network generation contract
         run: |
+          set -o pipefail
           VERUS_BIN="$(find /tmp/verus -type f -name verus | head -n1)"
           "$VERUS_BIN" --crate-type lib \
-            sel4-microkernel/rpi4-network-protocol/src/generation_contract.rs
+            sel4-microkernel/rpi4-network-protocol/src/generation_contract.rs \
+            2>&1 | tee verus-network.log
+
+      - name: Upload Verus diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: wp4-verus-diagnostics
+          path: verus-*.log
+          if-no-files-found: warn
