@@ -1,0 +1,85 @@
+name: QEMU Supervisor Demo
+
+on:
+  push:
+    branches: [main, "agent/*", "claude/*"]
+    paths:
+      - "sel4-microkernel/rpi4-supervisor/**"
+      - "sel4-microkernel/build-system/config/products/supdemo.mk"
+      - ".github/workflows/qemu-supdemo.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "sel4-microkernel/rpi4-supervisor/**"
+      - "sel4-microkernel/build-system/config/products/supdemo.mk"
+      - ".github/workflows/qemu-supdemo.yml"
+
+env:
+  MICROKIT_VERSION: "2.1.0"
+  MICROKIT_SDK_SHA256: "faff1b6d6b546cbb0bfea134588499533130d406ae2a5e533e791ddf23ac7599"
+
+jobs:
+  qemu-supdemo:
+    name: Fault and watchdog child restart
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y qemu-system-arm gcc-aarch64-linux-gnu
+
+      - name: Install pinned Rust nightly
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-07-02
+          components: rust-src
+
+      - name: Cache Microkit SDK
+        id: cache-microkit
+        uses: actions/cache@v4
+        with:
+          path: /opt/microkit-sdk
+          key: microkit-sdk-${{ env.MICROKIT_VERSION }}-linux-x86-64
+
+      - name: Download Microkit SDK
+        if: steps.cache-microkit.outputs.cache-hit != 'true'
+        run: |
+          curl -L -o /tmp/microkit-sdk.tar.gz \
+            "https://github.com/seL4/microkit/releases/download/${{ env.MICROKIT_VERSION }}/microkit-sdk-${{ env.MICROKIT_VERSION }}-linux-x86-64.tar.gz"
+          echo "${{ env.MICROKIT_SDK_SHA256 }}  /tmp/microkit-sdk.tar.gz" | sha256sum -c -
+          sudo mkdir -p /opt/microkit-sdk
+          sudo tar -xzf /tmp/microkit-sdk.tar.gz -C /opt/microkit-sdk --strip-components=1
+
+      - name: Build supdemo
+        working-directory: sel4-microkernel/build-system
+        run: make PRODUCT=supdemo PLATFORM=qemu-aarch64 MICROKIT_SDK=/opt/microkit-sdk all
+
+      - name: Boot and exercise restarts
+        working-directory: sel4-microkernel
+        run: |
+          timeout 30s qemu-system-aarch64 \
+            -machine virt,virtualization=on \
+            -cpu cortex-a53 \
+            -m 2G \
+            -nographic \
+            -device loader,file=build/qemu-aarch64/supdemo/loader.img,addr=0x70000000,cpu-num=0 \
+            2>&1 | tee supdemo-boot.log || true
+
+          grep -q "BOOT GEN 1" supdemo-boot.log
+          grep -q "FAULT CAUGHT" supdemo-boot.log
+          grep -q "BOOT GEN 2" supdemo-boot.log
+          grep -q "POST-RESTART HEARTBEAT" supdemo-boot.log
+          grep -q "WATCHDOG STALL DETECTED" supdemo-boot.log
+          grep -q "BOOT GEN 3" supdemo-boot.log
+          grep -q "POST-WATCHDOG HEARTBEAT" supdemo-boot.log
+          grep -q "SUPDEMO PASS" supdemo-boot.log
+
+      - name: Upload boot log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: supdemo-boot-log
+          path: sel4-microkernel/supdemo-boot.log
+          retention-days: 7
