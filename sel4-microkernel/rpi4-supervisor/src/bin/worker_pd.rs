@@ -14,6 +14,8 @@ const SUPERVISOR_CHANNEL: Channel = Channel::new(SUPERVISOR_CHANNEL_ID);
 // Microkit 2.1's pinned Rust runtime has no restartable-stack macro. The
 // trusted build extracts this symbol from the linked worker ELF and injects its
 // address into the supervisor build; the child never supplies the restart PC.
+// Keeping the trampoline in the primary text section prevents link-time
+// garbage collection even though normal worker execution never calls it.
 global_asm!(
     r#"
     .section .bss.worker_restart_stack,"aw",%nobits
@@ -22,7 +24,7 @@ worker_restart_stack:
     .skip 16384
 worker_restart_stack_top:
 
-    .section .text.worker_restart_entry,"ax"
+    .section .text,"ax"
     .balign 16
     .global worker_restart_entry
     .type worker_restart_entry, %function
@@ -45,7 +47,6 @@ fn init() -> Worker {
     let boot = ring
         .boot_generation()
         .expect("worker started during an odd reset generation");
-    // The boot-generation marker is the first canonical ring entry.
     ring.publish_boot_generation(boot);
     let heartbeat = ring.publish_heartbeat();
     debug_println!("BOOT GEN {}", boot);
@@ -71,8 +72,6 @@ impl Handler for Worker {
             }
             COMMAND_WATCHDOG_STALL => {
                 debug_println!("WATCHDOG STALL ARMED");
-                // No notification is sent. A PL031 timer interrupt owned by the
-                // supervisor independently detects the unchanged heartbeat.
                 loop {
                     core::hint::spin_loop();
                 }
