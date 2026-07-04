@@ -17,11 +17,8 @@ name = "worker_pd"
 path = "src/bin/worker_pd.rs"
 
 [dependencies]
-# This revision adds the explicit `stack_size` protection-domain contract and
-# `__sel4_runtime_common__stack_init` entry required for repeatable child
-# restart. Microkit SDK and Rust nightly remain pinned by the repository.
-sel4-microkit = { git = "https://github.com/seL4/rust-sel4", rev = "413940c8058da32098c464f6cd09e550b230505c" }
-sel4 = { git = "https://github.com/seL4/rust-sel4", rev = "413940c8058da32098c464f6cd09e550b230505c" }
+sel4-microkit = { git = "https://github.com/seL4/rust-sel4", rev = "3059c2d236bf56b066936dd48d8966255e172c3b" }
+sel4 = { git = "https://github.com/seL4/rust-sel4", rev = "3059c2d236bf56b066936dd48d8966255e172c3b" }
 
 [profile.release]
 opt-level = "z"
