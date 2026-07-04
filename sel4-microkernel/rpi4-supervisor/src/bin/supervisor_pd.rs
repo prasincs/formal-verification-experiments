@@ -6,7 +6,8 @@ use core::fmt;
 use rpi4_supervisor::installer::InstallerStub;
 use rpi4_supervisor::lifecycle::{self, EndpointsStopped};
 use rpi4_supervisor::protocol::{
-    WorkRing, COMMAND_POISON, COMMAND_WATCHDOG_STALL, SUPERVISOR_CHANNEL_ID,
+    WorkRing, COMMAND_POISON, COMMAND_WATCHDOG_EXPIRE, COMMAND_WATCHDOG_STALL,
+    SUPERVISOR_CHANNEL_ID,
 };
 use rpi4_supervisor::verifier::VerifierStub;
 use sel4_microkit::{
@@ -19,9 +20,10 @@ const WORKER_CHILD_ID: usize = 1;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Stage {
     AwaitBoot1,
-    AwaitFault,
+    AwaitPoisonFault,
     AwaitBoot2,
     AwaitWatchdogDeadline,
+    AwaitWatchdogFault,
     AwaitBoot3,
     Complete,
 }
@@ -81,7 +83,7 @@ impl Supervisor {
             Stage::AwaitBoot1 if boot == 1 && heartbeat > 0 => {
                 debug_println!("HEARTBEAT GEN 1 {}", heartbeat);
                 self.ring.set_command(COMMAND_POISON);
-                self.stage = Stage::AwaitFault;
+                self.stage = Stage::AwaitPoisonFault;
                 WORKER_CHANNEL.notify();
             }
             Stage::AwaitBoot2 if boot == 2 && heartbeat > 0 => {
@@ -95,17 +97,9 @@ impl Supervisor {
                 let current = self.ring.heartbeat();
                 if current == self.watchdog_snapshot {
                     debug_println!("WATCHDOG STALL DETECTED {}", current);
-                    let child = Child::new(WORKER_CHILD_ID);
-                    let restart_entry = self.ring.restart_entry();
-                    let stopped = lifecycle::stop(child)?;
-                    let generation = lifecycle::reset_and_restart(
-                        child,
-                        self.ring,
-                        stopped,
-                        restart_entry,
-                    )?;
-                    debug_println!("WATCHDOG RESTART GEN {}", generation);
-                    self.stage = Stage::AwaitBoot3;
+                    self.ring.set_command(COMMAND_WATCHDOG_EXPIRE);
+                    self.stage = Stage::AwaitWatchdogFault;
+                    WORKER_CHANNEL.notify();
                 }
             }
             Stage::AwaitBoot3 if boot == 3 && heartbeat > 0 => {
@@ -145,11 +139,20 @@ impl Handler for Supervisor {
         if child.index() != WORKER_CHILD_ID {
             return Err(SupervisorError::WrongChild(child.index()));
         }
-        if self.stage != Stage::AwaitFault {
+        if !matches!(
+            self.stage,
+            Stage::AwaitPoisonFault | Stage::AwaitWatchdogFault
+        ) {
             return Err(SupervisorError::UnexpectedFault);
         }
 
-        debug_println!("FAULT CAUGHT child={}", child.index());
+        let watchdog = self.stage == Stage::AwaitWatchdogFault;
+        if watchdog {
+            debug_println!("WATCHDOG FAULT CAUGHT child={}", child.index());
+        } else {
+            debug_println!("FAULT CAUGHT child={}", child.index());
+        }
+
         let restart_entry = self.ring.restart_entry();
         let stopped = unsafe { EndpointsStopped::new_unchecked() };
         let generation = lifecycle::reset_and_restart(
@@ -158,8 +161,14 @@ impl Handler for Supervisor {
             stopped,
             restart_entry,
         )?;
-        debug_println!("FAULT RESTART GEN {}", generation);
-        self.stage = Stage::AwaitBoot2;
+
+        if watchdog {
+            debug_println!("WATCHDOG RESTART GEN {}", generation);
+            self.stage = Stage::AwaitBoot3;
+        } else {
+            debug_println!("FAULT RESTART GEN {}", generation);
+            self.stage = Stage::AwaitBoot2;
+        }
 
         // The child was explicitly restarted, so do not reply to the fault.
         Ok(None)
