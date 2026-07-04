@@ -5,7 +5,8 @@ use core::arch::global_asm;
 use core::convert::Infallible;
 
 use rpi4_supervisor::protocol::{
-    WorkRing, COMMAND_POISON, COMMAND_WATCHDOG_STALL, SUPERVISOR_CHANNEL_ID,
+    WorkRing, COMMAND_POISON, COMMAND_WATCHDOG_EXPIRE, COMMAND_WATCHDOG_STALL,
+    SUPERVISOR_CHANNEL_ID,
 };
 use sel4_microkit::{debug_println, protection_domain, Channel, ChannelSet, Handler};
 
@@ -71,20 +72,21 @@ impl Handler for Worker {
         match self.ring.command() {
             COMMAND_POISON => {
                 debug_println!("POISON RECEIVED");
-                // Deliberately touch an unmapped low address. The resulting VM
-                // fault is delivered to the parent supervisor by Microkit.
                 unsafe {
-                    core::ptr::write_volatile(0x10usize as *mut u32, 0xdead_beef);
+                    core::ptr::write_volatile(0x10usize as *mut u32, 1);
                 }
             }
             COMMAND_WATCHDOG_STALL => {
                 debug_println!("WATCHDOG STALL ARMED");
-                // This notification represents the watchdog deadline in the
-                // deterministic demo. The heartbeat remains unchanged, then
-                // the worker spins until the higher-priority parent suspends it.
+                // Notify the higher-priority supervisor, then return from this
+                // callback so rust-sel4 releases its IPC-buffer borrow before
+                // the supervisor delivers the separate expiry command.
                 SUPERVISOR_CHANNEL.notify();
-                loop {
-                    core::hint::spin_loop();
+            }
+            COMMAND_WATCHDOG_EXPIRE => {
+                debug_println!("WATCHDOG EXPIRY RECEIVED");
+                unsafe {
+                    core::ptr::write_volatile(0x10usize as *mut u32, 2);
                 }
             }
             _ => {}
