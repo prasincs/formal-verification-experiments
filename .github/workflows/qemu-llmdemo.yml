@@ -1,0 +1,118 @@
+name: QEMU Local Inference Demo
+
+on:
+  push:
+    branches: [main, "agent/*", "claude/*"]
+    paths:
+      - "sel4-microkernel/rpi4-llm/**"
+      - "sel4-microkernel/rpi4-llm-loader/**"
+      - "sel4-microkernel/build-system/config/products/llmdemo.mk"
+      - ".github/workflows/qemu-llmdemo.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "sel4-microkernel/rpi4-llm/**"
+      - "sel4-microkernel/rpi4-llm-loader/**"
+      - "sel4-microkernel/build-system/config/products/llmdemo.mk"
+      - ".github/workflows/qemu-llmdemo.yml"
+
+env:
+  MICROKIT_VERSION: "2.1.0"
+  MICROKIT_SDK_SHA256: "faff1b6d6b546cbb0bfea134588499533130d406ae2a5e533e791ddf23ac7599"
+
+jobs:
+  loader-and-receipts:
+    name: Loader, engine, receipts, and fuzzing
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pinned Rust nightly
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-07-02
+
+      - name: Build and test host components
+        run: |
+          cargo build --manifest-path sel4-microkernel/rpi4-llm-loader/Cargo.toml
+          cargo test --manifest-path sel4-microkernel/rpi4-llm-loader/Cargo.toml
+          cargo build --manifest-path sel4-microkernel/rpi4-llm/Cargo.toml
+          cargo test --manifest-path sel4-microkernel/rpi4-llm/Cargo.toml --features std
+          cargo build --manifest-path sel4-microkernel/rpi4-llm/Cargo.toml --features std --bin llm-receipt-verify
+
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz --locked
+
+      - name: Fuzz GGUF parser for 60 seconds
+        working-directory: sel4-microkernel/rpi4-llm-loader
+        run: cargo fuzz run parse -- -max_total_time=60
+
+  qemu-llmdemo:
+    name: Generate and verify signed execution receipt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y qemu-system-arm gcc-aarch64-linux-gnu
+
+      - name: Install pinned Rust nightly
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-07-02
+          components: rust-src
+
+      - name: Cache Microkit SDK
+        id: cache-microkit
+        uses: actions/cache@v4
+        with:
+          path: /opt/microkit-sdk
+          key: microkit-sdk-${{ env.MICROKIT_VERSION }}-linux-x86-64
+
+      - name: Download Microkit SDK
+        if: steps.cache-microkit.outputs.cache-hit != 'true'
+        run: |
+          curl -L -o /tmp/microkit-sdk.tar.gz \
+            "https://github.com/seL4/microkit/releases/download/${{ env.MICROKIT_VERSION }}/microkit-sdk-${{ env.MICROKIT_VERSION }}-linux-x86-64.tar.gz"
+          echo "${{ env.MICROKIT_SDK_SHA256 }}  /tmp/microkit-sdk.tar.gz" | sha256sum -c -
+          sudo mkdir -p /opt/microkit-sdk
+          sudo tar -xzf /tmp/microkit-sdk.tar.gz -C /opt/microkit-sdk --strip-components=1
+
+      - name: Build llmdemo
+        working-directory: sel4-microkernel/build-system
+        run: make PRODUCT=llmdemo PLATFORM=qemu-aarch64 MICROKIT_SDK=/opt/microkit-sdk all
+
+      - name: Boot deterministic inference PD
+        working-directory: sel4-microkernel
+        run: |
+          timeout 30s qemu-system-aarch64 \
+            -machine virt,virtualization=on \
+            -cpu cortex-a53 \
+            -m 2G \
+            -nographic \
+            -device loader,file=build/qemu-aarch64/llmdemo/loader.img,addr=0x70000000,cpu-num=0 \
+            2>&1 | tee llmdemo-boot.log || true
+
+          grep -q "TOKENS 123456789abcdef0123456789abcdef0" llmdemo-boot.log
+          grep -q "TOKENS SHA256 8c2f9fd27c0044c83e64bc66162be45810cadb85e774fb9ab5eaf26ea68f7fa8" llmdemo-boot.log
+          grep -q "LLMDEMO PASS" llmdemo-boot.log
+
+      - name: Verify signature and deterministic reexecution
+        run: |
+          cargo run --manifest-path sel4-microkernel/rpi4-llm/Cargo.toml \
+            --features std --bin llm-receipt-verify -- \
+            sel4-microkernel/llmdemo-boot.log | tee receipt-verification.log
+          grep -q "RECEIPT VERIFIED" receipt-verification.log
+          grep -q "REEXECUTION OK" receipt-verification.log
+
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: llmdemo-receipt-evidence
+          path: |
+            sel4-microkernel/llmdemo-boot.log
+            receipt-verification.log
+          retention-days: 7
