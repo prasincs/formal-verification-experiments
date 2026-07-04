@@ -497,6 +497,7 @@ pub const VERIFIED_PCR_SECURE_BOOT: VerifiedPcrIndex = unsafe { VerifiedPcrIndex
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::vec::Vec;
 
     #[test]
     fn test_pcr_selection() {
