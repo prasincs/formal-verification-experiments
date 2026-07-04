@@ -23,7 +23,7 @@ pub struct WorkRing {
     pub command: AtomicU32,
     pub command_sequence: AtomicU32,
     pub reserved: AtomicU32,
-    /// Actual linked address of Rust's stack-reset runtime entry. The worker
+    /// Linked address of the worker-local stack-reset trampoline. The worker
     /// publishes it on every boot; the supervisor captures it before reset.
     pub restart_entry: AtomicU64,
     pub entries: [AtomicU32; WORK_RING_CAPACITY as usize],
