@@ -15,3 +15,12 @@ peers = ["input", "tpm"]
 [[only_channels]]
 pd = "input"
 peers = ["graphics", "tpm"]
+
+[[dma_capable]]
+pd = "tpm"
+
+[[dma_capable]]
+pd = "graphics"
+
+[[dma_capable]]
+pd = "input"
