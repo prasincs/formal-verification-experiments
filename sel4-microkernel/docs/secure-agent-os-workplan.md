@@ -568,7 +568,7 @@ full spec when scheduled.
 | WP-5 | — | — | not started |
 | WP-6 | — | — | not started |
 | WP-7 | — | — | not started |
-| WP-8 | — | — | not started |
+| WP-8 | `claude/wave-1-formal-verification-zsee9k` | — | in review |
 | WP-10 | `agent/wp10-ab-update-model` | [#21](https://github.com/prasincs/formal-verification-experiments/pull/21) | in review |
 | WP-11 | — | — | not started |
 
