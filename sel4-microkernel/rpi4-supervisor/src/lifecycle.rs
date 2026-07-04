@@ -82,7 +82,7 @@ pub fn quiescent_reset(
 
 pub fn restart(child: Child) -> Result<(), LifecycleError> {
     let mut context = UserContext::default();
-    *context.pc_mut() = WORKER_ENTRY_POINT;
+    *context.pc_mut() = WORKER_ENTRY_POINT as u64;
     child.tcb().tcb_write_registers(true, 1, &mut context)?;
     Ok(())
 }
