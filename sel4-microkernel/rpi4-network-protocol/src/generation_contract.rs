@@ -1,5 +1,8 @@
 use verus_builtin_macros::verus;
 
+#[cfg(verus_keep_ghost)]
+use vstd::prelude::*;
+
 pub const LEGACY_GENERATION: u32 = 0;
 pub const FIRST_STABLE_GENERATION: u32 = 2;
 
