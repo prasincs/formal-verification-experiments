@@ -4,9 +4,10 @@ use core::sync::atomic::Ordering;
 use sel4::UserContext;
 use sel4_microkit::Child;
 
-use crate::protocol::{WorkRing, COMMAND_NONE};
+use crate::build_constants::WORKER_RESTART_ENTRY;
+use crate::protocol::WorkRing;
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Debug)]
 pub struct EndpointsStopped(());
 
 impl EndpointsStopped {
@@ -21,7 +22,7 @@ impl EndpointsStopped {
 #[derive(Debug)]
 pub enum LifecycleError {
     OddGeneration(u32),
-    MissingRestartEntry,
+    MissingBuildRestartEntry,
     Kernel(sel4::Error),
 }
 
@@ -29,7 +30,9 @@ impl fmt::Display for LifecycleError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::OddGeneration(value) => write!(f, "ring reset already in progress ({value})"),
-            Self::MissingRestartEntry => write!(f, "worker did not publish its runtime restart entry"),
+            Self::MissingBuildRestartEntry => {
+                write!(f, "trusted build did not supply the worker restart entry")
+            }
             Self::Kernel(error) => write!(f, "seL4 lifecycle invocation failed: {error:?}"),
         }
     }
@@ -46,10 +49,11 @@ pub fn stop(child: Child) -> Result<EndpointsStopped, LifecycleError> {
     Ok(unsafe { EndpointsStopped::new_unchecked() })
 }
 
-/// Re-establish the ring invariant while both endpoints are quiescent.
+/// Re-establish IC-1 while the child endpoint is quiescent. The lifecycle PD is
+/// the other endpoint and is executing this function, so it cannot publish.
 pub fn quiescent_reset(
     ring: &WorkRing,
-    _stopped: EndpointsStopped,
+    stopped: EndpointsStopped,
 ) -> Result<u32, LifecycleError> {
     let current = ring.generation.load(Ordering::Acquire);
     if current & 1 != 0 {
@@ -57,19 +61,16 @@ pub fn quiescent_reset(
     }
 
     let odd = current.wrapping_add(1);
-    let mut next_even = odd.wrapping_add(1);
-    if next_even == 0 {
-        next_even = 2;
-    }
+    let next_even = if current >= u32::MAX - 1 {
+        2
+    } else {
+        current + 2
+    };
 
+    let _consumed = stopped;
     ring.generation.store(odd, Ordering::Release);
     ring.write_idx.store(0, Ordering::Release);
     ring.read_idx.store(0, Ordering::Release);
-    ring.heartbeat.store(0, Ordering::Release);
-    ring.command.store(COMMAND_NONE, Ordering::Release);
-    ring.command_sequence.store(0, Ordering::Release);
-    ring.reserved.store(0, Ordering::Release);
-    ring.restart_entry.store(0, Ordering::Release);
     for entry in &ring.entries {
         entry.store(0, Ordering::Relaxed);
     }
@@ -77,12 +78,12 @@ pub fn quiescent_reset(
     Ok(next_even)
 }
 
-pub fn restart(child: Child, restart_entry: u64) -> Result<(), LifecycleError> {
-    if restart_entry == 0 {
-        return Err(LifecycleError::MissingRestartEntry);
+pub fn restart(child: Child) -> Result<(), LifecycleError> {
+    if WORKER_RESTART_ENTRY == 0 {
+        return Err(LifecycleError::MissingBuildRestartEntry);
     }
     let mut context = UserContext::default();
-    *context.pc_mut() = restart_entry;
+    *context.pc_mut() = WORKER_RESTART_ENTRY;
     child.tcb().tcb_write_registers(true, 1, &mut context)?;
     Ok(())
 }
@@ -91,12 +92,8 @@ pub fn reset_and_restart(
     child: Child,
     ring: &WorkRing,
     stopped: EndpointsStopped,
-    restart_entry: u64,
 ) -> Result<u32, LifecycleError> {
-    if restart_entry == 0 {
-        return Err(LifecycleError::MissingRestartEntry);
-    }
     let generation = quiescent_reset(ring, stopped)?;
-    restart(child, restart_entry)?;
+    restart(child)?;
     Ok(generation)
 }
