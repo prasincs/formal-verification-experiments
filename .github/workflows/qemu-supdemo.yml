@@ -58,7 +58,7 @@ jobs:
           set -o pipefail
           make PRODUCT=supdemo PLATFORM=qemu-aarch64 MICROKIT_SDK=/opt/microkit-sdk all \
             2>&1 | tee ../../supdemo-build.log
-          grep -Eq "Worker restart entry: 0x[1-9a-fA-F][0-9a-fA-F]*" ../../supdemo-build.log
+          grep -Eq "Worker restart entry: 0x0*[1-9a-fA-F][0-9a-fA-F]*" ../../supdemo-build.log
 
       - name: Boot and exercise restarts
         working-directory: sel4-microkernel
