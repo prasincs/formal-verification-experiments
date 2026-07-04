@@ -23,10 +23,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+      - name: Install pinned Rust nightly
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-07-02
 
-      - name: Test checker and broken fixtures
+      - name: Test checker and reviewed failure fixtures
         working-directory: sel4-microkernel/tools/system-check
         run: cargo test --all-targets --quiet
 
