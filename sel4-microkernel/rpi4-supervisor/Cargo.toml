@@ -1,0 +1,31 @@
+[package]
+name = "rpi4-supervisor"
+version = "0.1.0"
+edition = "2021"
+description = "Hierarchical Microkit supervisor and restart demonstration"
+license = "MIT"
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "supervisor_pd"
+path = "src/bin/supervisor_pd.rs"
+
+[[bin]]
+name = "worker_pd"
+path = "src/bin/worker_pd.rs"
+
+[dependencies]
+sel4-microkit = { git = "https://github.com/seL4/rust-sel4", rev = "3059c2d236bf56b066936dd48d8966255e172c3b" }
+sel4 = { git = "https://github.com/seL4/rust-sel4", rev = "3059c2d236bf56b066936dd48d8966255e172c3b" }
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+debug = false
+panic = "abort"
+
+[profile.dev]
+panic = "abort"
