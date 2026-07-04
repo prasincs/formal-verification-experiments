@@ -1,12 +1,17 @@
 //! Monotonic time for the network stack.
 //!
-//! On AArch64 this reads the architectural virtual counter. The counter is
-//! monotonic across protection-domain execution and does not depend on a wall
-//! clock or timer service. Host tests use an explicit mock counter.
+//! Deployed AArch64 builds read the architectural virtual counter. The QEMU
+//! Microkit hypervisor configuration used by CI traps direct timer-register
+//! access, so `qemu-time-fallback` selects a deterministic logical clock that
+//! advances on each stack poll. The fallback is explicit and never enabled for
+//! hardware products.
 
 use smoltcp::time::Instant;
 
-#[cfg(target_arch = "aarch64")]
+#[cfg(feature = "qemu-time-fallback")]
+use core::sync::atomic::{AtomicU64, Ordering};
+
+#[cfg(all(target_arch = "aarch64", not(feature = "qemu-time-fallback")))]
 #[inline]
 pub fn counter_frequency_hz() -> u64 {
     let value: u64;
@@ -16,7 +21,7 @@ pub fn counter_frequency_hz() -> u64 {
     value
 }
 
-#[cfg(target_arch = "aarch64")]
+#[cfg(all(target_arch = "aarch64", not(feature = "qemu-time-fallback")))]
 #[inline]
 pub fn counter_ticks() -> u64 {
     let value: u64;
@@ -26,12 +31,18 @@ pub fn counter_ticks() -> u64 {
     value
 }
 
-#[cfg(target_arch = "aarch64")]
+#[cfg(all(target_arch = "aarch64", not(feature = "qemu-time-fallback")))]
 pub fn monotonic_millis() -> u64 {
     ticks_to_millis(counter_ticks(), counter_frequency_hz())
 }
 
-#[cfg(target_arch = "aarch64")]
+#[cfg(feature = "qemu-time-fallback")]
+pub fn monotonic_millis() -> u64 {
+    static LOGICAL_MILLIS: AtomicU64 = AtomicU64::new(0);
+    LOGICAL_MILLIS.fetch_add(10, Ordering::Relaxed)
+}
+
+#[cfg(any(target_arch = "aarch64", feature = "qemu-time-fallback"))]
 pub fn instant() -> Instant {
     let millis = monotonic_millis().min(i64::MAX as u64) as i64;
     Instant::from_millis(millis)
@@ -65,5 +76,13 @@ mod tests {
     #[test]
     fn zero_frequency_is_safe() {
         assert_eq!(ticks_to_millis(123, 0), 0);
+    }
+
+    #[cfg(feature = "qemu-time-fallback")]
+    #[test]
+    fn qemu_clock_advances_deterministically() {
+        let first = monotonic_millis();
+        let second = monotonic_millis();
+        assert_eq!(second - first, 10);
     }
 }
