@@ -1,0 +1,82 @@
+name: QEMU IP Demo
+
+on:
+  push:
+    branches: [main, "agent/*", "claude/*"]
+    paths:
+      - "sel4-microkernel/rpi4-network/**"
+      - "sel4-microkernel/build-system/config/products/ipdemo.mk"
+      - ".github/workflows/qemu-ipdemo.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "sel4-microkernel/rpi4-network/**"
+      - "sel4-microkernel/build-system/config/products/ipdemo.mk"
+      - ".github/workflows/qemu-ipdemo.yml"
+
+env:
+  MICROKIT_VERSION: "2.1.0"
+  MICROKIT_SDK_SHA256: "faff1b6d6b546cbb0bfea134588499533130d406ae2a5e533e791ddf23ac7599"
+
+jobs:
+  qemu-ipdemo:
+    name: DHCP and ICMP over virtio-net
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y qemu-system-arm gcc-aarch64-linux-gnu
+
+      - name: Install pinned Rust nightly
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-07-02
+          components: rust-src
+
+      - name: Cache Microkit SDK
+        id: cache-microkit
+        uses: actions/cache@v4
+        with:
+          path: /opt/microkit-sdk
+          key: microkit-sdk-${{ env.MICROKIT_VERSION }}-linux-x86-64
+
+      - name: Download Microkit SDK
+        if: steps.cache-microkit.outputs.cache-hit != 'true'
+        run: |
+          curl -L -o /tmp/microkit-sdk.tar.gz \
+            "https://github.com/seL4/microkit/releases/download/${{ env.MICROKIT_VERSION }}/microkit-sdk-${{ env.MICROKIT_VERSION }}-linux-x86-64.tar.gz"
+          echo "${{ env.MICROKIT_SDK_SHA256 }}  /tmp/microkit-sdk.tar.gz" | sha256sum -c -
+          sudo mkdir -p /opt/microkit-sdk
+          sudo tar -xzf /tmp/microkit-sdk.tar.gz -C /opt/microkit-sdk --strip-components=1
+
+      - name: Build ipdemo
+        working-directory: sel4-microkernel/build-system
+        run: make PRODUCT=ipdemo PLATFORM=qemu-aarch64 MICROKIT_SDK=/opt/microkit-sdk all
+
+      - name: Boot and exercise DHCP plus ping
+        working-directory: sel4-microkernel
+        run: |
+          timeout 40s qemu-system-aarch64 \
+            -machine virt,virtualization=on \
+            -cpu cortex-a53 \
+            -m 2G \
+            -nographic \
+            -device virtio-net-device,netdev=net0 \
+            -netdev user,id=net0 \
+            -device loader,file=build/qemu-aarch64/ipdemo/loader.img,addr=0x70000000,cpu-num=0 \
+            2>&1 | tee ipdemo-boot.log || true
+
+          grep -q "IPDEMO START" ipdemo-boot.log
+          grep -Eq "DHCP OK 10\.0\.2\.[0-9]+/24" ipdemo-boot.log
+          grep -q "PING OK" ipdemo-boot.log
+
+      - name: Upload boot log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ipdemo-boot-log
+          path: sel4-microkernel/ipdemo-boot.log
+          retention-days: 7
