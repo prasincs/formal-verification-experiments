@@ -401,11 +401,18 @@ impl Slb9670Tpm {
         // Wait for response
         self.wait_data_available()?;
 
-        // Read response
+        // Read response. The FIFO helper borrows the device, so read one
+        // byte into a temporary before storing it in the owned response
+        // buffer. The underlying TIS implementation already performs one SPI
+        // transaction per byte; this only makes the borrow boundaries
+        // explicit and avoids aliasing `self` with `self.buffer`.
         self.buffer_pos = 0;
         unsafe {
-            // Read header first (10 bytes minimum)
-            self.tis_read_fifo(&mut self.buffer[0..10]);
+            for index in 0..10 {
+                let mut byte = [0u8; 1];
+                self.tis_read_fifo(&mut byte);
+                self.buffer[index] = byte[0];
+            }
 
             // Parse response size from header
             let size = u32::from_be_bytes([
@@ -416,7 +423,11 @@ impl Slb9670Tpm {
             ]) as usize;
 
             if size > 10 && size <= self.buffer.len() {
-                self.tis_read_fifo(&mut self.buffer[10..size]);
+                for index in 10..size {
+                    let mut byte = [0u8; 1];
+                    self.tis_read_fifo(&mut byte);
+                    self.buffer[index] = byte[0];
+                }
             }
 
             self.buffer_pos = size;
