@@ -5,7 +5,7 @@ security claims supplied by an adjacent `.system.props.toml` file.
 
 The graph covers:
 
-- memory mappings, permissions, and whether a region has a physical address;
+- memory mappings, exact permissions, and whether a region has a physical address;
 - channel endpoints and IDs;
 - protected-procedure call authority;
 - IRQ ownership; and
@@ -51,6 +51,11 @@ peers = ["policy"]
 pd = "worker"
 target = "keystore"
 
+[[mapping_perms]]
+pd = "worker"
+region = "work_ring"
+perms = "rw"
+
 [[dma_capable]]
 pd = "network"
 
@@ -64,11 +69,19 @@ endpoints = ["supervisor", "worker"]
 listed regions in common, and each listed region must be mapped by exactly that
 PD set. `only_channels` is also exact.
 
-A region with `phys_addr` is classified as device/physical memory. The checker
-requires explicit `dma_capable` declarations when a PD maps a physical region
-whose name identifies a common DMA-capable class (`dma`, `virtio`, `genet`,
-`sdio`, `usb`, `ethernet`, or `pcie`). This is intentionally conservative and
-keeps the DMA trust boundary visible in review.
+`mapping_perms` requires exactly one mapping of the named region and an exact
+permission string. A change from `rw` to `rwx`, or a duplicate mapping, is a
+policy violation.
+
+Microkit 2.1 places `pp="true"` on the caller's channel `<end>`. The checker
+therefore records protected-procedure authority as caller → opposite endpoint;
+PD-level `pp` attributes are not used.
+
+A region with `phys_addr` is classified as physical/device memory. The checker
+conservatively requires every PD mapping any such region to be declared
+`dma_capable`. This intentionally over-approximates DMA authority and cannot be
+bypassed by renaming a region. The declaration does not prove that a device can
+DMA only within the mapped region; that remains a platform/IOMMU limitation.
 
 ## Scope
 
