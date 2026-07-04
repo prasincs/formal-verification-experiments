@@ -32,13 +32,36 @@ jobs:
         with:
           toolchain: nightly-2026-07-02
 
-      - name: Build and test host components
+      - name: Build loader
         run: |
-          cargo build --manifest-path sel4-microkernel/rpi4-llm-loader/Cargo.toml
-          cargo test --manifest-path sel4-microkernel/rpi4-llm-loader/Cargo.toml
-          cargo build --manifest-path sel4-microkernel/rpi4-llm/Cargo.toml
-          cargo test --manifest-path sel4-microkernel/rpi4-llm/Cargo.toml --features std
-          cargo build --manifest-path sel4-microkernel/rpi4-llm/Cargo.toml --features std --bin llm-receipt-verify
+          set -o pipefail
+          cargo build --manifest-path sel4-microkernel/rpi4-llm-loader/Cargo.toml \
+            2>&1 | tee wp6-loader-build.log
+
+      - name: Test loader corpus
+        run: |
+          set -o pipefail
+          cargo test --manifest-path sel4-microkernel/rpi4-llm-loader/Cargo.toml \
+            2>&1 | tee wp6-loader-tests.log
+
+      - name: Build inference core
+        run: |
+          set -o pipefail
+          cargo build --manifest-path sel4-microkernel/rpi4-llm/Cargo.toml \
+            2>&1 | tee wp6-engine-build.log
+
+      - name: Test receipt and reexecution core
+        run: |
+          set -o pipefail
+          cargo test --manifest-path sel4-microkernel/rpi4-llm/Cargo.toml --features std \
+            2>&1 | tee wp6-engine-tests.log
+
+      - name: Build host verifier
+        run: |
+          set -o pipefail
+          cargo build --manifest-path sel4-microkernel/rpi4-llm/Cargo.toml \
+            --features std --bin llm-receipt-verify \
+            2>&1 | tee wp6-verifier-build.log
 
       - name: Install cargo-fuzz
         run: cargo install cargo-fuzz --locked
@@ -46,6 +69,14 @@ jobs:
       - name: Fuzz GGUF parser for 60 seconds
         working-directory: sel4-microkernel/rpi4-llm-loader
         run: cargo fuzz run parse -- -max_total_time=60
+
+      - name: Upload host diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: wp6-host-diagnostics
+          path: wp6-*.log
+          if-no-files-found: warn
 
   qemu-llmdemo:
     name: Generate and verify signed execution receipt
