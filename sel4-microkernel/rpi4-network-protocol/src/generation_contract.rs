@@ -27,8 +27,10 @@ pub fn reset_plan(current: u32) -> (result: Result<(u32, u32), u32>)
         result.is_ok() ==> result.unwrap().0 % 2u32 == 1u32,
         result.is_ok() ==> result.unwrap().1 % 2u32 == 0u32,
         result.is_ok() ==> result.unwrap().1 != LEGACY_GENERATION,
-        result.is_ok() ==> result.unwrap().1 ==
-            if current >= 0xffff_fffeu32 { FIRST_STABLE_GENERATION } else { current + 2u32 },
+        result.is_ok() && current < 0xffff_fffeu32 ==>
+            result.unwrap().1 as int == current as int + 2,
+        result.is_ok() && current >= 0xffff_fffeu32 ==>
+            result.unwrap().1 == FIRST_STABLE_GENERATION,
 {
     if current % 2u32 == 1u32 {
         Err(current)
