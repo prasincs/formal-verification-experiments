@@ -36,12 +36,10 @@ jobs:
           cargo test --manifest-path sel4-microkernel/rpi4-tpm-boot/Cargo.toml --features std \
             2>&1 | tee tpm-transport-tests.log
 
-      - name: Upload transport diagnostics
+      - name: Upload transport logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: tpm-transport-logs
-          path: |
-            tpm-transport-*.log
-            sel4-microkernel/rpi4-tpm-boot/src/slb9670.rs
+          path: tpm-transport-*.log
           if-no-files-found: warn
