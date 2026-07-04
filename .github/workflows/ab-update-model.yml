@@ -27,3 +27,11 @@ jobs:
         env:
           TLA_JAR: /tmp/tla2tools.jar
         run: bash check.sh
+
+      - name: Upload TLC logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ab-update-tlc-logs
+          path: sel4-microkernel/formal/ab-update/*-model.log
+          if-no-files-found: warn
