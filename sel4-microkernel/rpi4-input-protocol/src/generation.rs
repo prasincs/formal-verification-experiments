@@ -1,13 +1,13 @@
 //! Restart-safe generation handling for the input SPSC ring.
 //!
 //! Correctness comes from the lifecycle PD stopping both endpoints before a
-//! reset.  The generation check in [`ResyncedInputRing`] is defense in depth;
-//! it is not a substitute for quiescence.
+//! reset. The per-operation generation check is defense in depth only; it is
+//! not a seqlock and cannot make a concurrent reset safe.
 
 use core::sync::atomic::{AtomicU32, Ordering};
 
+use crate::generation_contract::{reset_plan, validate_stable_generation};
 use crate::InputRingHeader;
-use verus_builtin_macros::verus;
 
 /// Generation zero denotes a legacy deployment with no lifecycle supervisor.
 pub const LEGACY_GENERATION: u32 = 0;
@@ -15,7 +15,6 @@ pub const LEGACY_GENERATION: u32 = 0;
 pub const FIRST_STABLE_GENERATION: u32 = 2;
 const GENERATION_OFFSET: usize = 0x0c;
 
-/// A stable (even) ring generation observed by an endpoint.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Generation(u32);
 
@@ -29,37 +28,33 @@ impl Generation {
     }
 }
 
-/// Returned when an endpoint observes a reset in progress.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct OddGeneration {
     pub observed: u32,
 }
 
-/// Returned when a defense-in-depth generation check detects stale state.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct GenerationChanged {
     pub expected: Generation,
     pub observed: u32,
 }
 
-/// Evidence supplied by the lifecycle PD that both ring endpoints are stopped.
+/// Linear evidence supplied by the lifecycle PD for one quiescent reset.
 ///
-/// # Safety
-/// Constructing this token is an assertion about the Microkit lifecycle state.
-/// The caller must have stopped both the producer and consumer (except that the
-/// lifecycle PD itself may be one endpoint and already quiescent in the fault
-/// handler).  Violating this precondition reintroduces the reset/publication
-/// race rejected by IC-1.
-#[derive(Clone, Copy, Debug)]
+/// The token is deliberately neither `Copy` nor `Clone`: each unsafe assertion
+/// of endpoint quiescence authorizes exactly one reset attempt.
+#[derive(Debug)]
 pub struct EndpointsStopped(());
 
 impl EndpointsStopped {
+    /// # Safety
+    /// The caller must have stopped producer and consumer, except that the
+    /// lifecycle PD itself may be the already-quiescent endpoint.
     pub unsafe fn new_unchecked() -> Self {
         Self(())
     }
 }
 
-/// An endpoint view that can only be obtained after `resync`.
 pub struct ResyncedInputRing<'a> {
     header: &'a InputRingHeader,
     generation: Generation,
@@ -67,39 +62,30 @@ pub struct ResyncedInputRing<'a> {
 
 impl InputRingHeader {
     fn generation_atomic(&self) -> &AtomicU32 {
-        // The legacy header reserved bytes 0x0c..0x10 as a u32 padding word.
-        // IC-1 assigns that already-aligned word to the atomic generation.
-        // Initialization writes it before sharing; all post-start accesses use
-        // atomics through this accessor.
+        // The legacy padding word at 0x0c is aligned and initialized before the
+        // region is shared. All post-start accesses are atomic.
         unsafe {
             &*((self as *const Self as *const u8).add(GENERATION_OFFSET)
                 as *const AtomicU32)
         }
     }
 
-    /// Acquire-load the current generation.
     pub fn generation(&self) -> Generation {
         Generation(self.generation_atomic().load(Ordering::Acquire))
     }
 
     /// Re-derive endpoint-local state after boot or restart.
-    ///
-    /// An odd value is a lifecycle fault: endpoints must park rather than
-    /// retrying or publishing into a ring being reset.
     pub fn resync(&self) -> Result<Generation, OddGeneration> {
         let observed = self.generation_atomic().load(Ordering::Acquire);
-        if observed & 1 != 0 {
-            return Err(OddGeneration { observed });
-        }
+        let stable = validate_stable_generation(observed)
+            .map_err(|observed| OddGeneration { observed })?;
 
         debug_assert!(self.capacity > 0);
         debug_assert!(self.current_write_idx() < self.capacity);
         debug_assert!(self.current_read_idx() < self.capacity);
-        Ok(Generation(observed))
+        Ok(Generation(stable))
     }
 
-    /// Create the typed endpoint view used for the first and later
-    /// publications after restart.
     pub fn resynced_endpoint(&self) -> Result<ResyncedInputRing<'_>, OddGeneration> {
         let generation = self.resync()?;
         Ok(ResyncedInputRing {
@@ -108,29 +94,26 @@ impl InputRingHeader {
         })
     }
 
-    /// Reset the shared ring while both endpoints are stopped.
+    /// Reset while both endpoints are stopped.
     ///
-    /// The sequence is normative IC-1: publish odd, clear shared state, publish
-    /// the next even generation.  Generation zero is skipped on wrap so it
-    /// remains an unambiguous legacy marker.
+    /// The verified executable `reset_plan` computes the odd and next-even
+    /// values. The runtime stores remain intentionally explicit: odd marker,
+    /// zero endpoint-visible indices, then final even publication. The odd
+    /// marker is diagnostic, not a synchronization protocol for live endpoints;
+    /// quiescence is the correctness mechanism.
     ///
     /// # Safety
-    /// `stopped` must truthfully represent quiescence of both endpoints.
+    /// `stopped` must truthfully represent the current quiescent window.
     pub unsafe fn quiescent_reset(
         &self,
-        _stopped: EndpointsStopped,
+        stopped: EndpointsStopped,
     ) -> Result<Generation, OddGeneration> {
         let current = self.generation_atomic().load(Ordering::Acquire);
-        if current & 1 != 0 {
-            return Err(OddGeneration { observed: current });
-        }
+        let (odd, next_even) =
+            reset_plan(current).map_err(|observed| OddGeneration { observed })?;
 
-        let odd = current.wrapping_add(1);
-        let mut next_even = odd.wrapping_add(1);
-        if next_even == LEGACY_GENERATION {
-            next_even = FIRST_STABLE_GENERATION;
-        }
-
+        // Consume the linear token in this reset invocation.
+        let _consumed = stopped;
         self.generation_atomic().store(odd, Ordering::Release);
         self.write_idx.store(0, Ordering::Release);
         self.read_idx.store(0, Ordering::Release);
@@ -168,119 +151,24 @@ impl ResyncedInputRing<'_> {
         Ok(self.header.current_read_idx())
     }
 
-    /// Publish one producer advance.  Constructing this object proves the
-    /// endpoint called `resync` before its first publication.
+    /// Defense-in-depth stale-handle check followed by publication.
+    ///
+    /// This is deliberately not an atomic check-and-act protocol. A concurrent
+    /// reset between the check and store would still race; callers rely on the
+    /// lifecycle PD stopping endpoints for every reset.
     pub fn advance_write(&self) -> Result<(), GenerationChanged> {
         self.check_generation()?;
         self.header.advance_write();
         Ok(())
     }
 
-    /// Publish one consumer advance after a successful resynchronization.
+    /// See [`Self::advance_write`] for the quiescence requirement.
     pub fn advance_read(&self) -> Result<(), GenerationChanged> {
         self.check_generation()?;
         self.header.advance_read();
         Ok(())
     }
 }
-
-verus! {
-
-/// Proof model for the lifecycle-visible part of a restartable ring.
-pub struct RestartRingModel {
-    pub write_idx: u32,
-    pub read_idx: u32,
-    pub capacity: u32,
-    pub generation: u32,
-    pub resynced: bool,
-}
-
-impl RestartRingModel {
-    pub open spec fn valid(&self) -> bool {
-        self.capacity > 0 &&
-        self.write_idx < self.capacity &&
-        self.read_idx < self.capacity &&
-        self.generation % 2 == 0
-    }
-
-    pub fn new(capacity: u32) -> (state: Self)
-        requires capacity > 0,
-        ensures
-            state.valid(),
-            state.write_idx == 0,
-            state.read_idx == 0,
-            state.generation == LEGACY_GENERATION,
-            !state.resynced,
-    {
-        Self {
-            write_idx: 0,
-            read_idx: 0,
-            capacity,
-            generation: LEGACY_GENERATION,
-            resynced: false,
-        }
-    }
-
-    /// Model the atomic result of the odd/clear/even reset sequence.  The
-    /// implementation's intermediate odd state is intentionally unreachable
-    /// to endpoints under the explicit quiescence precondition.
-    pub fn reset_quiescent(&mut self, endpoints_stopped: bool)
-        requires
-            old(self).valid(),
-            endpoints_stopped,
-        ensures
-            self.valid(),
-            self.write_idx == 0,
-            self.read_idx == 0,
-            self.capacity == old(self).capacity,
-            self.generation % 2 == 0,
-            !self.resynced,
-    {
-        self.write_idx = 0;
-        self.read_idx = 0;
-        self.generation = if self.generation >= 0xffff_fffe {
-            FIRST_STABLE_GENERATION
-        } else {
-            self.generation + 2
-        };
-        self.resynced = false;
-    }
-
-    pub fn resync(&mut self)
-        requires old(self).valid(),
-        ensures self.valid(), self.resynced,
-    {
-        self.resynced = true;
-    }
-
-    pub fn publish_write(&mut self)
-        requires
-            old(self).valid(),
-            old(self).resynced,
-            (old(self).write_idx + 1) % old(self).capacity != old(self).read_idx,
-        ensures
-            self.valid(),
-            self.resynced,
-            self.write_idx == (old(self).write_idx + 1) % old(self).capacity,
-    {
-        self.write_idx = (self.write_idx + 1) % self.capacity;
-    }
-
-    pub fn publish_read(&mut self)
-        requires
-            old(self).valid(),
-            old(self).resynced,
-            old(self).write_idx != old(self).read_idx,
-        ensures
-            self.valid(),
-            self.resynced,
-            self.read_idx == (old(self).read_idx + 1) % old(self).capacity,
-    {
-        self.read_idx = (self.read_idx + 1) % self.capacity;
-    }
-}
-
-} // verus!
 
 #[cfg(test)]
 mod tests {
@@ -356,12 +244,9 @@ mod tests {
     }
 
     #[test]
-    fn rejected_concurrent_reset_interleaving_invalidates_stale_handle() {
+    fn stale_handle_is_detected_after_quiescent_reset() {
         let header = header();
         let stale = header.resynced_endpoint().unwrap();
-
-        // This deliberately violates the safety contract to preserve the
-        // counterexample that killed the earlier concurrent-reset designs.
         unsafe { header.quiescent_reset(stopped()).unwrap() };
         assert_eq!(
             stale.advance_write(),
