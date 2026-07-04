@@ -1,0 +1,40 @@
+[package]
+name = "rpi4-llm"
+version = "0.1.0"
+edition = "2021"
+description = "Deterministic no_std tiny inference engine with execution receipts"
+license = "MIT"
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "llmdemo_pd"
+path = "src/bin/llmdemo_pd.rs"
+
+[[bin]]
+name = "llm-receipt-verify"
+path = "src/bin/llm-receipt-verify.rs"
+required-features = ["std"]
+
+[dependencies]
+rpi4-llm-loader = { path = "../rpi4-llm-loader" }
+sha2 = { version = "0.10", default-features = false }
+ed25519-dalek = { version = "2.1", default-features = false, features = ["digest"] }
+sel4-microkit = { git = "https://github.com/seL4/rust-sel4", rev = "3059c2d236bf56b066936dd48d8966255e172c3b", optional = true }
+hex = { version = "0.4", optional = true }
+
+[features]
+default = []
+pd = ["dep:sel4-microkit"]
+std = ["sha2/std", "ed25519-dalek/std", "dep:hex"]
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+debug = false
+panic = "abort"
+
+[profile.dev]
+panic = "abort"
