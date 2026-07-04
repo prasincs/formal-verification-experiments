@@ -10,6 +10,10 @@ use sel4_microkit::{debug_println, protection_domain, Channel, ChannelSet, Handl
 
 const SUPERVISOR_CHANNEL: Channel = Channel::new(SUPERVISOR_CHANNEL_ID);
 
+unsafe extern "C" {
+    fn __sel4_runtime_common__stack_init();
+}
+
 struct Worker {
     ring: &'static WorkRing,
 }
@@ -17,6 +21,7 @@ struct Worker {
 #[protection_domain]
 fn init() -> Worker {
     let ring = unsafe { WorkRing::mapped() };
+    ring.publish_restart_entry(__sel4_runtime_common__stack_init as usize as u64);
     let boot = ring
         .boot_generation()
         .expect("worker started during an odd reset generation");
