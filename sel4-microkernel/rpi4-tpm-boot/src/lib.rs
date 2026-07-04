@@ -156,15 +156,18 @@ macro_rules! verus_stub_impl {
 
 pub mod slb9670;
 pub mod boot_chain;
+pub mod commands;
 pub mod pcr;
 pub mod attestation;
 pub mod spi;
+pub mod transport;
 
 // Re-exports
 pub use slb9670::*;
 pub use boot_chain::*;
 pub use pcr::*;
 pub use attestation::*;
+pub use transport::{MockExchange, MockTransport, Tpm, TpmTransport};
 
 // ============================================================================
 // CORE TYPES
