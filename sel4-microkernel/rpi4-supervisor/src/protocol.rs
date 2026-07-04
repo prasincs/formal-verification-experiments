@@ -1,4 +1,4 @@
-use core::sync::atomic::{AtomicU32, Ordering};
+use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 pub const WORK_RING_VADDR: usize = 0x5_0400_0000;
 pub const WORK_RING_CAPACITY: u32 = 16;
@@ -23,6 +23,9 @@ pub struct WorkRing {
     pub command: AtomicU32,
     pub command_sequence: AtomicU32,
     pub reserved: AtomicU32,
+    /// Actual linked address of Rust's stack-reset runtime entry. The worker
+    /// publishes it on every boot; the supervisor captures it before reset.
+    pub restart_entry: AtomicU64,
     pub entries: [AtomicU32; WORK_RING_CAPACITY as usize],
 }
 
@@ -50,6 +53,7 @@ impl WorkRing {
         self.command.store(COMMAND_NONE, Ordering::Release);
         self.command_sequence.store(0, Ordering::Release);
         self.reserved.store(0, Ordering::Release);
+        self.restart_entry.store(0, Ordering::Release);
         for entry in &self.entries {
             entry.store(0, Ordering::Relaxed);
         }
@@ -82,6 +86,14 @@ impl WorkRing {
 
     pub fn command(&self) -> u32 {
         self.command.load(Ordering::Acquire)
+    }
+
+    pub fn publish_restart_entry(&self, entry: u64) {
+        self.restart_entry.store(entry, Ordering::Release);
+    }
+
+    pub fn restart_entry(&self) -> u64 {
+        self.restart_entry.load(Ordering::Acquire)
     }
 }
 
