@@ -3,10 +3,10 @@ use verus_builtin_macros::verus;
 #[cfg(verus_keep_ghost)]
 use vstd::prelude::*;
 
+verus! {
+
 pub const LEGACY_GENERATION: u32 = 0;
 pub const FIRST_STABLE_GENERATION: u32 = 2;
-
-verus! {
 
 pub fn validate_stable_generation(observed: u32) -> (result: Result<u32, u32>)
     ensures
