@@ -96,8 +96,14 @@ impl Supervisor {
                 if current == self.watchdog_snapshot {
                     debug_println!("WATCHDOG STALL DETECTED {}", current);
                     let child = Child::new(WORKER_CHILD_ID);
+                    let restart_entry = self.ring.restart_entry();
                     let stopped = lifecycle::stop(child)?;
-                    let generation = lifecycle::reset_and_restart(child, self.ring, stopped)?;
+                    let generation = lifecycle::reset_and_restart(
+                        child,
+                        self.ring,
+                        stopped,
+                        restart_entry,
+                    )?;
                     debug_println!("WATCHDOG RESTART GEN {}", generation);
                     self.stage = Stage::AwaitBoot3;
                 }
@@ -144,8 +150,14 @@ impl Handler for Supervisor {
         }
 
         debug_println!("FAULT CAUGHT child={}", child.index());
+        let restart_entry = self.ring.restart_entry();
         let stopped = unsafe { EndpointsStopped::new_unchecked() };
-        let generation = lifecycle::reset_and_restart(child, self.ring, stopped)?;
+        let generation = lifecycle::reset_and_restart(
+            child,
+            self.ring,
+            stopped,
+            restart_entry,
+        )?;
         debug_println!("FAULT RESTART GEN {}", generation);
         self.stage = Stage::AwaitBoot2;
 
