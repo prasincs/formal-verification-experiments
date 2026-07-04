@@ -10,7 +10,7 @@ PD_NAME := ipdemo_pd
 PD_ELF := $(BUILD_DIR)/$(PD_NAME).elf
 SYSTEM_DESC := $(PRODUCT_SRC_DIR)/ipdemo.system
 
-$(PD_ELF): CARGO_BUILD_STD += --features "net-virtio net-stack-smoltcp"
+$(PD_ELF): CARGO_BUILD_STD += --features "net-virtio net-stack-smoltcp qemu-time-fallback"
 
 PRODUCT_SOURCES := $(wildcard $(PRODUCT_SRC_DIR)/src/*.rs) \
                    $(wildcard $(PRODUCT_SRC_DIR)/src/**/*.rs) \
