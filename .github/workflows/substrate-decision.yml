@@ -1,0 +1,27 @@
+name: Substrate Compatibility
+
+on:
+  push:
+    branches: [main, "agent/*", "claude/*"]
+    paths:
+      - "sel4-microkernel/docs/substrate-decision.md"
+      - "sel4-microkernel/scripts/spikes/lionsos-compat.sh"
+      - "sel4-microkernel/build-system/config/versions.mk"
+      - ".github/workflows/substrate-decision.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "sel4-microkernel/docs/substrate-decision.md"
+      - "sel4-microkernel/scripts/spikes/lionsos-compat.sh"
+      - "sel4-microkernel/build-system/config/versions.mk"
+      - ".github/workflows/substrate-decision.yml"
+
+jobs:
+  compatibility:
+    name: Verify documented LionsOS mismatch
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run pinned compatibility probe
+        run: bash sel4-microkernel/scripts/spikes/lionsos-compat.sh --expect-incompatible
