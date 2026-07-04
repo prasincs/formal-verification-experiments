@@ -22,19 +22,27 @@ impl FrameIo for NetworkInterface {
     }
 }
 
-pub struct DriverDevice<D> {
+pub struct DeviceResources<'a> {
+    pub rx_buffer: &'a mut [u8; FRAME_CAPACITY],
+    pub tx_buffer: &'a mut [u8; FRAME_CAPACITY],
+}
+
+/// The handler stores only references to packet storage. Microkit products put
+/// the frame buffers in static data so large Ethernet frames never consume the
+/// protection-domain call stack during `init` or handler moves.
+pub struct DriverDevice<'a, D> {
     io: D,
-    rx_buffer: [u8; FRAME_CAPACITY],
-    tx_buffer: [u8; FRAME_CAPACITY],
+    rx_buffer: &'a mut [u8; FRAME_CAPACITY],
+    tx_buffer: &'a mut [u8; FRAME_CAPACITY],
     tx_failed: bool,
 }
 
-impl<D> DriverDevice<D> {
-    pub const fn new(io: D) -> Self {
+impl<'a, D> DriverDevice<'a, D> {
+    pub fn new(io: D, resources: DeviceResources<'a>) -> Self {
         Self {
             io,
-            rx_buffer: [0; FRAME_CAPACITY],
-            tx_buffer: [0; FRAME_CAPACITY],
+            rx_buffer: resources.rx_buffer,
+            tx_buffer: resources.tx_buffer,
             tx_failed: false,
         }
     }
@@ -81,7 +89,7 @@ impl<D: FrameIo> TxToken for DriverTxToken<'_, D> {
     }
 }
 
-impl<D: FrameIo> Device for DriverDevice<D> {
+impl<D: FrameIo> Device for DriverDevice<'_, D> {
     type RxToken<'a> = DriverRxToken<'a> where Self: 'a;
     type TxToken<'a> = DriverTxToken<'a, D> where Self: 'a;
 
@@ -92,7 +100,7 @@ impl<D: FrameIo> Device for DriverDevice<D> {
             tx_buffer,
             tx_failed,
         } = self;
-        let length = io.receive_frame(rx_buffer).ok()?;
+        let length = io.receive_frame(&mut rx_buffer[..]).ok()?;
         if length == 0 || length > rx_buffer.len() {
             return None;
         }
@@ -111,7 +119,7 @@ impl<D: FrameIo> Device for DriverDevice<D> {
     fn transmit(&mut self, _timestamp: Instant) -> Option<Self::TxToken<'_>> {
         Some(DriverTxToken {
             io: &mut self.io,
-            buffer: &mut self.tx_buffer,
+            buffer: self.tx_buffer,
             failed: &mut self.tx_failed,
         })
     }
@@ -157,7 +165,15 @@ mod tests {
             tx: [0; FRAME_CAPACITY],
             tx_len: 0,
         };
-        let mut device = DriverDevice::new(io);
+        let mut rx_storage = [0; FRAME_CAPACITY];
+        let mut tx_storage = [0; FRAME_CAPACITY];
+        let mut device = DriverDevice::new(
+            io,
+            DeviceResources {
+                rx_buffer: &mut rx_storage,
+                tx_buffer: &mut tx_storage,
+            },
+        );
         let (rx, tx) = device.receive(Instant::from_millis(0)).unwrap();
         rx.consume(|frame| assert_eq!(frame, FRAME));
         tx.consume(3, |frame| frame.copy_from_slice(&[9, 8, 7]));
