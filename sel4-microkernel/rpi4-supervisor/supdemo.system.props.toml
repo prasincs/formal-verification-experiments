@@ -1,0 +1,21 @@
+version = 1
+
+[[shared_only]]
+pds = ["supervisor", "worker"]
+regions = ["work_ring"]
+
+[[no_device_mmio]]
+pd = "worker"
+
+[[only_channels]]
+pd = "supervisor"
+peers = ["worker"]
+
+[[only_channels]]
+pd = "worker"
+peers = ["supervisor"]
+
+[[restartable_ring]]
+region = "work_ring"
+lifecycle_pd = "supervisor"
+endpoints = ["supervisor", "worker"]
