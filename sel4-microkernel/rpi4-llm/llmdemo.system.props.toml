@@ -1,0 +1,8 @@
+version = 1
+
+[[no_device_mmio]]
+pd = "llm"
+
+[[only_channels]]
+pd = "llm"
+peers = []
