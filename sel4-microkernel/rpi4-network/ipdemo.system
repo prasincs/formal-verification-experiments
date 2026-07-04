@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- QEMU virt DHCP + ICMP acceptance product. -->
+<system>
+    <memory_region name="virtio_mmio" size="0x4000" phys_addr="0xa000000" />
+    <memory_region name="net_dma" size="0x100000" phys_addr="0x50000000" />
+
+    <protection_domain name="network" priority="200">
+        <program_image path="ipdemo_pd.elf" />
+        <map mr="virtio_mmio" vaddr="0x5_0900_0000" perms="rw" cached="false" />
+        <map mr="net_dma" vaddr="0x5_0800_0000" perms="rw" cached="false" />
+        <irq irq="79" id="1" />
+    </protection_domain>
+</system>
