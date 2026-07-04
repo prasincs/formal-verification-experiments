@@ -1,6 +1,7 @@
 use verus_builtin_macros::verus;
 
-use crate::{FIRST_STABLE_GENERATION, LEGACY_GENERATION};
+pub const LEGACY_GENERATION: u32 = 0;
+pub const FIRST_STABLE_GENERATION: u32 = 2;
 
 verus! {
 
