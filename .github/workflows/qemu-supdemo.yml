@@ -20,7 +20,7 @@ env:
 
 jobs:
   qemu-supdemo:
-    name: Fault and watchdog child restart
+    name: Fault and timer-watchdog child restart
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -58,11 +58,12 @@ jobs:
           set -o pipefail
           make PRODUCT=supdemo PLATFORM=qemu-aarch64 MICROKIT_SDK=/opt/microkit-sdk all \
             2>&1 | tee ../../supdemo-build.log
+          grep -Eq "Worker restart entry: 0x[1-9a-fA-F][0-9a-fA-F]*" ../../supdemo-build.log
 
       - name: Boot and exercise restarts
         working-directory: sel4-microkernel
         run: |
-          timeout 30s qemu-system-aarch64 \
+          timeout 40s qemu-system-aarch64 \
             -machine virt,virtualization=on \
             -cpu cortex-a53 \
             -m 2G \
@@ -71,10 +72,13 @@ jobs:
             2>&1 | tee supdemo-boot.log || true
 
           grep -q "BOOT GEN 1" supdemo-boot.log
+          grep -q "POISON RING ENTRY RECEIVED" supdemo-boot.log
           grep -q "FAULT CAUGHT" supdemo-boot.log
           grep -q "BOOT GEN 2" supdemo-boot.log
           grep -q "POST-RESTART HEARTBEAT" supdemo-boot.log
-          grep -q "WATCHDOG STALL DETECTED" supdemo-boot.log
+          grep -q "WATCHDOG STALL ARMED" supdemo-boot.log
+          grep -q "WATCHDOG TIMER EXPIRED" supdemo-boot.log
+          grep -q "WATCHDOG RESTART GEN" supdemo-boot.log
           grep -q "BOOT GEN 3" supdemo-boot.log
           grep -q "POST-WATCHDOG HEARTBEAT" supdemo-boot.log
           grep -q "SUPDEMO PASS" supdemo-boot.log
