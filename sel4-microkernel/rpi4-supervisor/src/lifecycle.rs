@@ -6,12 +6,6 @@ use sel4_microkit::Child;
 
 use crate::protocol::{WorkRing, COMMAND_NONE};
 
-/// Microkit places the PD image at 0x200000. This is the same restart entry
-/// used by the upstream Microkit 2.1 hierarchy example. The worker's first
-/// instruction is the runtime entry stub, which re-establishes its stack and
-/// calls `init` again.
-pub const WORKER_ENTRY_POINT: usize = 0x20_0000;
-
 #[derive(Clone, Copy, Debug)]
 pub struct EndpointsStopped(());
 
@@ -27,6 +21,7 @@ impl EndpointsStopped {
 #[derive(Debug)]
 pub enum LifecycleError {
     OddGeneration(u32),
+    MissingRestartEntry,
     Kernel(sel4::Error),
 }
 
@@ -34,6 +29,7 @@ impl fmt::Display for LifecycleError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::OddGeneration(value) => write!(f, "ring reset already in progress ({value})"),
+            Self::MissingRestartEntry => write!(f, "worker did not publish its runtime restart entry"),
             Self::Kernel(error) => write!(f, "seL4 lifecycle invocation failed: {error:?}"),
         }
     }
@@ -73,6 +69,7 @@ pub fn quiescent_reset(
     ring.command.store(COMMAND_NONE, Ordering::Release);
     ring.command_sequence.store(0, Ordering::Release);
     ring.reserved.store(0, Ordering::Release);
+    ring.restart_entry.store(0, Ordering::Release);
     for entry in &ring.entries {
         entry.store(0, Ordering::Relaxed);
     }
@@ -80,9 +77,12 @@ pub fn quiescent_reset(
     Ok(next_even)
 }
 
-pub fn restart(child: Child) -> Result<(), LifecycleError> {
+pub fn restart(child: Child, restart_entry: u64) -> Result<(), LifecycleError> {
+    if restart_entry == 0 {
+        return Err(LifecycleError::MissingRestartEntry);
+    }
     let mut context = UserContext::default();
-    *context.pc_mut() = WORKER_ENTRY_POINT as u64;
+    *context.pc_mut() = restart_entry;
     child.tcb().tcb_write_registers(true, 1, &mut context)?;
     Ok(())
 }
@@ -91,8 +91,12 @@ pub fn reset_and_restart(
     child: Child,
     ring: &WorkRing,
     stopped: EndpointsStopped,
+    restart_entry: u64,
 ) -> Result<u32, LifecycleError> {
+    if restart_entry == 0 {
+        return Err(LifecycleError::MissingRestartEntry);
+    }
     let generation = quiescent_reset(ring, stopped)?;
-    restart(child)?;
+    restart(child, restart_entry)?;
     Ok(generation)
 }
