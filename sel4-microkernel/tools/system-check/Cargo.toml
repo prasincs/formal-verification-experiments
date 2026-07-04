@@ -6,8 +6,7 @@ description = "Authority-graph checker for seL4 Microkit .system files"
 license = "MIT"
 
 [lib]
-path = "src/lib.rs"
-test = false
+path = "src/checker.rs"
 
 [dependencies]
 roxmltree = "0.20"
