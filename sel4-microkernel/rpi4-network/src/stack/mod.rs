@@ -2,7 +2,7 @@
 
 mod device;
 
-pub use device::{DriverDevice, FrameIo};
+pub use device::{DeviceResources, DriverDevice, FrameIo, FRAME_CAPACITY};
 
 use smoltcp::iface::{Config, Interface, SocketHandle, SocketSet, SocketStorage};
 use smoltcp::phy::Device;
@@ -18,6 +18,7 @@ const PING_TARGET: Ipv4Address = Ipv4Address::new(10, 0, 2, 2);
 const PING_PAYLOAD: &[u8] = b"SAOSPING";
 
 pub struct StackResources<'a> {
+    pub device: DeviceResources<'a>,
     pub sockets: &'a mut [SocketStorage<'a>],
     pub icmp_rx_metadata: &'a mut [icmp::PacketMetadata],
     pub icmp_rx_payload: &'a mut [u8],
@@ -36,7 +37,7 @@ pub enum StackEvent {
 
 pub struct NetworkStack<'a, D: FrameIo> {
     iface: Interface,
-    device: DriverDevice<D>,
+    device: DriverDevice<'a, D>,
     sockets: SocketSet<'a>,
     dhcp_handle: SocketHandle,
     icmp_handle: SocketHandle,
@@ -52,7 +53,7 @@ impl<'a, D: FrameIo> NetworkStack<'a, D> {
         resources: StackResources<'a>,
         now: Instant,
     ) -> Self {
-        let mut device = DriverDevice::new(io);
+        let mut device = DriverDevice::new(io, resources.device);
         let mut config = Config::new(EthernetAddress(mac).into());
         config.random_seed = u64::from_le_bytes([
             mac[0], mac[1], mac[2], mac[3], mac[4], mac[5], 0x53, 0x41,
@@ -95,12 +96,10 @@ impl<'a, D: FrameIo> NetworkStack<'a, D> {
         let _ = self.iface.poll(now, &mut self.device, &mut self.sockets);
 
         let mut event = self.poll_dhcp();
-        if self.configured && !self.ping_sent {
-            if self.queue_ping() {
-                self.ping_sent = true;
-                event = event.or(Some(StackEvent::PingSent));
-                let _ = self.iface.poll(now, &mut self.device, &mut self.sockets);
-            }
+        if self.configured && !self.ping_sent && self.queue_ping() {
+            self.ping_sent = true;
+            event = event.or(Some(StackEvent::PingSent));
+            let _ = self.iface.poll(now, &mut self.device, &mut self.sockets);
         }
 
         if !self.ping_reply && self.take_ping_reply() {
@@ -183,15 +182,15 @@ impl<'a, D: FrameIo> NetworkStack<'a, D> {
             let Ok(repr) = Icmpv4Repr::parse(&packet, &self.device.capabilities().checksum) else {
                 continue;
             };
-            if matches!(
-                repr,
-                Icmpv4Repr::EchoReply {
-                    ident: PING_IDENT,
-                    seq_no: PING_SEQUENCE,
-                    data: PING_PAYLOAD,
+            if let Icmpv4Repr::EchoReply {
+                ident,
+                seq_no,
+                data,
+            } = repr
+            {
+                if ident == PING_IDENT && seq_no == PING_SEQUENCE && data == PING_PAYLOAD {
+                    return true;
                 }
-            ) {
-                return true;
             }
         }
         false
