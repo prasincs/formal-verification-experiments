@@ -18,7 +18,7 @@ path = "src/bin/netclient_pd.rs"
 [[bin]]
 name = "ipdemo_pd"
 path = "src/bin/ipdemo_pd.rs"
-required-features = ["net-virtio", "net-stack-smoltcp"]
+required-features = ["net-virtio", "net-stack-smoltcp", "qemu-time-fallback"]
 
 [features]
 default = []
@@ -31,6 +31,10 @@ net-wifi = []
 # IP stack selection. The former empty lwIP/picoTCP declarations are retired;
 # smoltcp is the supported no_std stack.
 net-stack-smoltcp = ["dep:smoltcp"]
+
+# QEMU's seL4 hypervisor configuration traps direct CNTVCT/CNTFRQ access. This
+# deterministic logical clock is restricted to the ipdemo acceptance product.
+qemu-time-fallback = []
 
 [dependencies]
 # sel4-microkit provides the Microkit runtime and API
