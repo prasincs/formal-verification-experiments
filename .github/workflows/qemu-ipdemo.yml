@@ -28,7 +28,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y qemu-system-arm gcc-aarch64-linux-gnu
+          sudo apt-get install -y qemu-system-arm libclang-dev gcc-aarch64-linux-gnu
 
       - name: Install pinned Rust nightly
         uses: dtolnay/rust-toolchain@master
