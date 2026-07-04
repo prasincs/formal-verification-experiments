@@ -5,5 +5,6 @@ mod legacy;
 
 pub use legacy::*;
 
+mod generation_contract;
 mod generation;
 pub use generation::*;
