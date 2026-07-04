@@ -7,7 +7,7 @@ pub const SUPERVISOR_CHANNEL_ID: usize = 1;
 pub const COMMAND_NONE: u32 = 0;
 pub const COMMAND_POISON: u32 = 0x504f_4953;
 pub const COMMAND_WATCHDOG_STALL: u32 = 0x5744_4f47;
-pub const COMMAND_WATCHDOG_KILL: u32 = 0x5744_4b4c;
+pub const COMMAND_WATCHDOG_EXPIRE: u32 = 0x5744_4558;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct OddGeneration(pub u32);
