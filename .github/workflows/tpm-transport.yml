@@ -25,7 +25,21 @@ jobs:
           toolchain: nightly-2026-07-02
 
       - name: Build no_std library
-        run: cargo build --manifest-path sel4-microkernel/rpi4-tpm-boot/Cargo.toml
+        run: |
+          set -o pipefail
+          cargo build --manifest-path sel4-microkernel/rpi4-tpm-boot/Cargo.toml \
+            2>&1 | tee tpm-transport-build.log
 
       - name: Run host transport tests
-        run: cargo test --manifest-path sel4-microkernel/rpi4-tpm-boot/Cargo.toml --features std
+        run: |
+          set -o pipefail
+          cargo test --manifest-path sel4-microkernel/rpi4-tpm-boot/Cargo.toml --features std \
+            2>&1 | tee tpm-transport-tests.log
+
+      - name: Upload transport logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tpm-transport-logs
+          path: tpm-transport-*.log
+          if-no-files-found: warn
