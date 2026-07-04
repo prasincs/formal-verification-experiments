@@ -11,6 +11,7 @@ path = "src/lib.rs"
 [[bin]]
 name = "llmdemo_pd"
 path = "src/bin/llmdemo_pd.rs"
+required-features = ["pd"]
 
 [[bin]]
 name = "llm-receipt-verify"
