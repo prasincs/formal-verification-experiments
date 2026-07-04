@@ -26,7 +26,8 @@ REPORT := $(BUILD_DIR)/report.txt
 
 $(SUPERVISOR_ELF): $(PD_ELF) $(PRODUCT_SOURCES) | $(BUILD_DIR)
 	@echo "=== Building supervisor_pd with trusted worker restart entry ==="
-	@restart_entry=`aarch64-linux-gnu-nm -n $(PD_ELF) | awk '$$3 == "worker_restart_entry" { print "0x" $$1; exit }'`; \
+	@set -eu; \
+		restart_entry=`aarch64-linux-gnu-nm -n $(PD_ELF) | awk '$$3 == "worker_restart_entry" { print "0x" $$1; exit }'`; \
 		test -n "$$restart_entry"; \
 		echo "Worker restart entry: $$restart_entry"; \
 		cd $(PRODUCT_SRC_DIR) && WORKER_RESTART_ENTRY=$$restart_entry $(CARGO) build \
