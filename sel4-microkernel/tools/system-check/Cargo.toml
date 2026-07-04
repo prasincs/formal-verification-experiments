@@ -5,14 +5,11 @@ edition = "2021"
 description = "Authority-graph checker for seL4 Microkit .system files"
 license = "MIT"
 
-[lib]
-path = "src/checker.rs"
-
 [dependencies]
-roxmltree = "0.20"
-serde = { version = "1", features = ["derive"] }
-toml = "0.8"
-walkdir = "2"
+roxmltree = "=0.20.0"
+serde = { version = "=1.0.219", features = ["derive"] }
+toml = "=0.8.23"
+walkdir = "=2.5.0"
 
 [dev-dependencies]
-pretty_assertions = "1"
+pretty_assertions = "=1.4.1"
