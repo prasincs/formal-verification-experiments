@@ -1,0 +1,41 @@
+name: Apply WP7 test import fix
+
+on:
+  push:
+    branches: ["agent/wp7-tpm-transport"]
+    paths:
+      - ".github/workflows/wp7-test-fix.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/wp7-tpm-transport
+
+      - name: Add test-only Vec import
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path("sel4-microkernel/rpi4-tpm-boot/src/pcr.rs")
+          source = path.read_text()
+          old = "#[cfg(test)]\nmod tests {\n    use super::*;\n"
+          new = "#[cfg(test)]\nmod tests {\n    use super::*;\n    use std::vec::Vec;\n"
+          if old not in source:
+              raise SystemExit("test module import block not found")
+          path.write_text(source.replace(old, new, 1))
+          Path(".github/workflows/wp7-test-fix.yml").unlink()
+          PY
+
+      - name: Commit patch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add sel4-microkernel/rpi4-tpm-boot/src/pcr.rs .github/workflows/wp7-test-fix.yml
+          git commit -m "wp7: import Vec in PCR host tests"
+          git push origin HEAD:agent/wp7-tpm-transport
