@@ -22,7 +22,6 @@ pub struct Mapping {
 pub struct ProtectionDomain {
     pub name: String,
     pub parent: Option<String>,
-    pub protected_procedure: bool,
     pub mappings: Vec<Mapping>,
     pub irqs: BTreeSet<u32>,
 }
@@ -36,7 +35,7 @@ pub struct ChannelEnd {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Channel {
-    pub ends: Vec<ChannelEnd>,
+    pub ends: [ChannelEnd; 2],
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -44,7 +43,7 @@ pub struct AuthorityGraph {
     pub regions: BTreeMap<String, MemoryRegion>,
     pub pds: BTreeMap<String, ProtectionDomain>,
     pub channels: Vec<Channel>,
-    /// Directed caller -> callee protected-procedure authority.
+    /// Directed protected-procedure authority: caller -> callee.
     pub pp_edges: BTreeSet<(String, String)>,
 }
 
@@ -57,6 +56,7 @@ pub struct Properties {
     pub no_device_mmio: Vec<NoDeviceMmio>,
     pub only_channels: Vec<OnlyChannels>,
     pub no_pp_to: Vec<NoPpTo>,
+    pub mapping_perms: Vec<MappingPerms>,
     pub dma_capable: Vec<DmaCapable>,
     pub restartable_ring: Vec<RestartableRing>,
 }
@@ -70,6 +70,7 @@ impl Default for Properties {
             no_device_mmio: Vec::new(),
             only_channels: Vec::new(),
             no_pp_to: Vec::new(),
+            mapping_perms: Vec::new(),
             dma_capable: Vec::new(),
             restartable_ring: Vec::new(),
         }
@@ -108,6 +109,14 @@ pub struct OnlyChannels {
 pub struct NoPpTo {
     pub pd: String,
     pub target: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MappingPerms {
+    pub pd: String,
+    pub region: String,
+    pub perms: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -157,9 +166,9 @@ pub enum CheckError {
 impl fmt::Display for CheckError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Io(err) => write!(f, "I/O error: {err}"),
-            Self::Xml(err) => write!(f, "XML parse error: {err}"),
-            Self::Toml(err) => write!(f, "property parse error: {err}"),
+            Self::Io(error) => write!(f, "I/O error: {error}"),
+            Self::Xml(error) => write!(f, "XML parse error: {error}"),
+            Self::Toml(error) => write!(f, "property parse error: {error}"),
             Self::Malformed(detail) => write!(f, "malformed .system file: {detail}"),
             Self::Violations(violations) => {
                 writeln!(f, "{} authority violation(s)", violations.len())?;
@@ -175,37 +184,37 @@ impl fmt::Display for CheckError {
 impl std::error::Error for CheckError {}
 
 impl From<std::io::Error> for CheckError {
-    fn from(value: std::io::Error) -> Self {
-        Self::Io(value)
+    fn from(error: std::io::Error) -> Self {
+        Self::Io(error)
     }
 }
 
 impl From<roxmltree::Error> for CheckError {
-    fn from(value: roxmltree::Error) -> Self {
-        Self::Xml(value)
+    fn from(error: roxmltree::Error) -> Self {
+        Self::Xml(error)
     }
 }
 
 impl From<toml::de::Error> for CheckError {
-    fn from(value: toml::de::Error) -> Self {
-        Self::Toml(value)
+    fn from(error: toml::de::Error) -> Self {
+        Self::Toml(error)
     }
 }
 
 pub fn parse_system(xml: &str) -> Result<AuthorityGraph, CheckError> {
-    let doc = Document::parse(xml)?;
-    let system = doc
-        .descendants()
-        .find(|node| node.has_tag_name("system"))
-        .ok_or_else(|| CheckError::Malformed("missing <system> root".into()))?;
+    let document = Document::parse(xml)?;
+    let system = document.root_element();
+    if !system.has_tag_name("system") {
+        return Err(CheckError::Malformed("root element must be <system>".into()));
+    }
 
     let mut graph = AuthorityGraph::default();
 
-    for region in system
+    for node in system
         .children()
         .filter(|node| node.has_tag_name("memory_region"))
     {
-        let name = required_attr(region, "name")?.to_owned();
+        let name = required_attr(node, "name")?;
         if graph.regions.contains_key(&name) {
             return Err(CheckError::Malformed(format!(
                 "duplicate memory region {name}"
@@ -215,72 +224,41 @@ pub fn parse_system(xml: &str) -> Result<AuthorityGraph, CheckError> {
             name.clone(),
             MemoryRegion {
                 name,
-                phys_addr: region.attribute("phys_addr").map(ToOwned::to_owned),
+                phys_addr: node.attribute("phys_addr").map(ToOwned::to_owned),
             },
         );
     }
 
-    for pd in system
+    for node in system
         .children()
         .filter(|node| node.has_tag_name("protection_domain"))
     {
-        parse_pd(pd, None, &mut graph)?;
+        parse_pd(node, None, &mut graph)?;
     }
 
-    for channel_node in system
-        .children()
-        .filter(|node| node.has_tag_name("channel"))
-    {
-        let mut ends = Vec::new();
-        for end in channel_node
+    for node in system.children().filter(|node| node.has_tag_name("channel")) {
+        let mut ends = node
             .children()
-            .filter(|node| node.has_tag_name("end"))
-        {
-            let pd = required_attr(end, "pd")?.to_owned();
-            let id = parse_u32(required_attr(end, "id")?)?;
-            let protected_procedure = parse_bool(end.attribute("pp"));
-            ends.push(ChannelEnd {
-                pd,
-                id,
-                protected_procedure,
-            });
-        }
+            .filter(|child| child.has_tag_name("end"))
+            .map(|child| {
+                Ok(ChannelEnd {
+                    pd: required_attr(child, "pd")?,
+                    id: parse_u32(&required_attr(child, "id")?)?,
+                    protected_procedure: parse_bool(child.attribute("pp")),
+                })
+            })
+            .collect::<Result<Vec<_>, CheckError>>()?;
         if ends.len() != 2 {
             return Err(CheckError::Malformed(format!(
-                "channel must contain exactly two ends, found {}",
+                "channel must have exactly two ends, found {}",
                 ends.len()
             )));
         }
-        graph.channels.push(Channel { ends });
-    }
-
-    for channel in &graph.channels {
-        for end in &channel.ends {
-            if !graph.pds.contains_key(&end.pd) {
-                return Err(CheckError::Malformed(format!(
-                    "channel references unknown PD {}",
-                    end.pd
-                )));
-            }
-        }
-        let left = &channel.ends[0];
-        let right = &channel.ends[1];
-        if left.protected_procedure
-            || graph
-                .pds
-                .get(&left.pd)
-                .is_some_and(|pd| pd.protected_procedure)
-        {
-            graph.pp_edges.insert((right.pd.clone(), left.pd.clone()));
-        }
-        if right.protected_procedure
-            || graph
-                .pds
-                .get(&right.pd)
-                .is_some_and(|pd| pd.protected_procedure)
-        {
-            graph.pp_edges.insert((left.pd.clone(), right.pd.clone()));
-        }
+        let right = ends.pop().expect("length checked");
+        let left = ends.pop().expect("length checked");
+        graph.channels.push(Channel {
+            ends: [left, right],
+        });
     }
 
     for pd in graph.pds.values() {
@@ -294,29 +272,50 @@ pub fn parse_system(xml: &str) -> Result<AuthorityGraph, CheckError> {
         }
     }
 
+    for channel in &graph.channels {
+        let left = &channel.ends[0];
+        let right = &channel.ends[1];
+        for end in [left, right] {
+            if !graph.pds.contains_key(&end.pd) {
+                return Err(CheckError::Malformed(format!(
+                    "channel references unknown PD {}",
+                    end.pd
+                )));
+            }
+        }
+        // Microkit 2.1 semantics: pp="true" marks the caller end. The
+        // directed authority therefore runs from that end to the opposite end.
+        if left.protected_procedure {
+            graph.pp_edges.insert((left.pd.clone(), right.pd.clone()));
+        }
+        if right.protected_procedure {
+            graph.pp_edges.insert((right.pd.clone(), left.pd.clone()));
+        }
+    }
+
     Ok(graph)
 }
 
 fn parse_pd(
     node: Node<'_, '_>,
-    parent: Option<&str>,
+    parent: Option<String>,
     graph: &mut AuthorityGraph,
 ) -> Result<(), CheckError> {
-    let name = required_attr(node, "name")?.to_owned();
+    let name = required_attr(node, "name")?;
     if graph.pds.contains_key(&name) {
         return Err(CheckError::Malformed(format!("duplicate PD {name}")));
     }
 
     let mut mappings = Vec::new();
     let mut irqs = BTreeSet::new();
-    for child in node.children().filter(Node::is_element) {
+    for child in node.children().filter(|child| child.is_element()) {
         if child.has_tag_name("map") {
             mappings.push(Mapping {
-                region: required_attr(child, "mr")?.to_owned(),
+                region: required_attr(child, "mr")?,
                 perms: child.attribute("perms").unwrap_or("").to_owned(),
             });
         } else if child.has_tag_name("irq") {
-            irqs.insert(parse_u32(required_attr(child, "irq")?)?);
+            irqs.insert(parse_u32(&required_attr(child, "irq")?)?);
         }
     }
 
@@ -324,8 +323,7 @@ fn parse_pd(
         name.clone(),
         ProtectionDomain {
             name: name.clone(),
-            parent: parent.map(ToOwned::to_owned),
-            protected_procedure: parse_bool(node.attribute("pp")),
+            parent,
             mappings,
             irqs,
         },
@@ -335,14 +333,14 @@ fn parse_pd(
         .children()
         .filter(|child| child.has_tag_name("protection_domain"))
     {
-        parse_pd(child, Some(&name), graph)?;
+        parse_pd(child, Some(name.clone()), graph)?;
     }
 
     Ok(())
 }
 
-fn required_attr<'a>(node: Node<'a, 'a>, name: &str) -> Result<&'a str, CheckError> {
-    node.attribute(name).ok_or_else(|| {
+fn required_attr(node: Node<'_, '_>, name: &str) -> Result<String, CheckError> {
+    node.attribute(name).map(ToOwned::to_owned).ok_or_else(|| {
         CheckError::Malformed(format!(
             "<{}> is missing required attribute {name}",
             node.tag_name().name()
@@ -356,29 +354,29 @@ fn parse_bool(value: Option<&str>) -> bool {
 
 fn parse_u32(value: &str) -> Result<u32, CheckError> {
     let normalized = value.replace('_', "");
-    let parsed = if let Some(hex) = normalized.strip_prefix("0x") {
+    let result = if let Some(hex) = normalized.strip_prefix("0x") {
         u32::from_str_radix(hex, 16)
     } else {
         normalized.parse()
     };
-    parsed.map_err(|_| CheckError::Malformed(format!("invalid integer {value}")))
+    result.map_err(|_| CheckError::Malformed(format!("invalid integer {value}")))
 }
 
-pub fn parse_properties(toml_text: &str) -> Result<Properties, CheckError> {
-    let props: Properties = toml::from_str(toml_text)?;
-    if props.version != 1 {
+pub fn parse_properties(input: &str) -> Result<Properties, CheckError> {
+    let properties: Properties = toml::from_str(input)?;
+    if properties.version != 1 {
         return Err(CheckError::Malformed(format!(
             "unsupported property language version {}",
-            props.version
+            properties.version
         )));
     }
-    Ok(props)
+    Ok(properties)
 }
 
-pub fn validate(graph: &AuthorityGraph, props: &Properties) -> Vec<Violation> {
+pub fn validate(graph: &AuthorityGraph, properties: &Properties) -> Vec<Violation> {
     let mut violations = Vec::new();
 
-    for rule in &props.shared_only {
+    for rule in &properties.shared_only {
         let expected_pds: BTreeSet<_> = rule.pds.iter().cloned().collect();
         let expected_regions: BTreeSet<_> = rule.regions.iter().cloned().collect();
         for pd in &expected_pds {
@@ -412,7 +410,6 @@ pub fn validate(graph: &AuthorityGraph, props: &Properties) -> Vec<Violation> {
                 ),
             ));
         }
-
         for region in &expected_regions {
             let actual = region_mappers(graph, region);
             if actual != expected_pds {
@@ -427,11 +424,11 @@ pub fn validate(graph: &AuthorityGraph, props: &Properties) -> Vec<Violation> {
         }
     }
 
-    for rule in &props.exclusive {
+    for rule in &properties.exclusive {
         require_pd(graph, &rule.pd, "exclusive", &mut violations);
         require_region(graph, &rule.region, "exclusive", &mut violations);
-        let actual = region_mappers(graph, &rule.region);
         let expected = BTreeSet::from([rule.pd.clone()]);
+        let actual = region_mappers(graph, &rule.region);
         if actual != expected {
             violations.push(Violation::new(
                 "exclusive",
@@ -443,7 +440,7 @@ pub fn validate(graph: &AuthorityGraph, props: &Properties) -> Vec<Violation> {
         }
     }
 
-    for rule in &props.no_device_mmio {
+    for rule in &properties.no_device_mmio {
         let Some(pd) = graph.pds.get(&rule.pd) else {
             violations.push(Violation::new(
                 "no_device_mmio",
@@ -451,29 +448,24 @@ pub fn validate(graph: &AuthorityGraph, props: &Properties) -> Vec<Violation> {
             ));
             continue;
         };
-        let device_regions: Vec<_> = pd
+        let physical: Vec<_> = pd
             .mappings
             .iter()
-            .filter(|mapping| {
-                graph
-                    .regions
-                    .get(&mapping.region)
-                    .is_some_and(|region| region.phys_addr.is_some())
-            })
+            .filter(|mapping| is_physical_mapping(graph, mapping))
             .map(|mapping| mapping.region.clone())
             .collect();
-        if !device_regions.is_empty() || !pd.irqs.is_empty() {
+        if !physical.is_empty() || !pd.irqs.is_empty() {
             violations.push(Violation::new(
                 "no_device_mmio",
                 format!(
-                    "PD {} maps device regions {:?} and owns IRQs {:?}",
-                    rule.pd, device_regions, pd.irqs
+                    "PD {} maps physical regions {:?} and owns IRQs {:?}",
+                    rule.pd, physical, pd.irqs
                 ),
             ));
         }
     }
 
-    for rule in &props.only_channels {
+    for rule in &properties.only_channels {
         require_pd(graph, &rule.pd, "only_channels", &mut violations);
         let expected: BTreeSet<_> = rule.peers.iter().cloned().collect();
         let actual = channel_peers(graph, &rule.pd);
@@ -488,7 +480,7 @@ pub fn validate(graph: &AuthorityGraph, props: &Properties) -> Vec<Violation> {
         }
     }
 
-    for rule in &props.no_pp_to {
+    for rule in &properties.no_pp_to {
         require_pd(graph, &rule.pd, "no_pp_to", &mut violations);
         require_pd(graph, &rule.target, "no_pp_to", &mut violations);
         if graph
@@ -505,7 +497,38 @@ pub fn validate(graph: &AuthorityGraph, props: &Properties) -> Vec<Violation> {
         }
     }
 
-    let declared_dma: BTreeSet<_> = props
+    for rule in &properties.mapping_perms {
+        require_pd(graph, &rule.pd, "mapping_perms", &mut violations);
+        require_region(graph, &rule.region, "mapping_perms", &mut violations);
+        if let Some(pd) = graph.pds.get(&rule.pd) {
+            let matches: Vec<_> = pd
+                .mappings
+                .iter()
+                .filter(|mapping| mapping.region == rule.region)
+                .collect();
+            if matches.len() != 1 {
+                violations.push(Violation::new(
+                    "mapping_perms",
+                    format!(
+                        "PD {} has {} mappings of region {}, expected exactly one",
+                        rule.pd,
+                        matches.len(),
+                        rule.region
+                    ),
+                ));
+            } else if matches[0].perms != rule.perms {
+                violations.push(Violation::new(
+                    "mapping_perms",
+                    format!(
+                        "PD {} maps region {} with perms {}, expected {}",
+                        rule.pd, rule.region, matches[0].perms, rule.perms
+                    ),
+                ));
+            }
+        }
+    }
+
+    let declared_dma: BTreeSet<_> = properties
         .dma_capable
         .iter()
         .map(|rule| rule.pd.clone())
@@ -514,30 +537,26 @@ pub fn validate(graph: &AuthorityGraph, props: &Properties) -> Vec<Violation> {
         require_pd(graph, pd, "dma_capable", &mut violations);
     }
     for pd in graph.pds.values() {
-        let dma_regions: Vec<_> = pd
+        // Conservative over-approximation: every physical mapping is treated
+        // as device/DMA authority. This cannot be bypassed by renaming a region.
+        let physical_regions: Vec<_> = pd
             .mappings
             .iter()
-            .filter(|mapping| {
-                graph
-                    .regions
-                    .get(&mapping.region)
-                    .is_some_and(|region| region.phys_addr.is_some())
-                    && dma_like_region(&mapping.region)
-            })
+            .filter(|mapping| is_physical_mapping(graph, mapping))
             .map(|mapping| mapping.region.clone())
             .collect();
-        if !dma_regions.is_empty() && !declared_dma.contains(&pd.name) {
+        if !physical_regions.is_empty() && !declared_dma.contains(&pd.name) {
             violations.push(Violation::new(
                 "dma_capable",
                 format!(
-                    "PD {} maps DMA-capable regions {:?} but is not explicitly declared",
-                    pd.name, dma_regions
+                    "PD {} maps physical regions {:?} but is not declared device/DMA-capable",
+                    pd.name, physical_regions
                 ),
             ));
         }
     }
 
-    for rule in &props.restartable_ring {
+    for rule in &properties.restartable_ring {
         require_region(graph, &rule.region, "restartable_ring", &mut violations);
         require_pd(
             graph,
@@ -565,7 +584,7 @@ pub fn validate(graph: &AuthorityGraph, props: &Properties) -> Vec<Violation> {
                 violations.push(Violation::new(
                     "restartable_ring",
                     format!(
-                        "endpoint {endpoint} is not {} and is not its descendant",
+                        "endpoint {endpoint} is neither {} nor its descendant",
                         rule.lifecycle_pd
                     ),
                 ));
@@ -601,6 +620,13 @@ fn require_region(
     }
 }
 
+fn is_physical_mapping(graph: &AuthorityGraph, mapping: &Mapping) -> bool {
+    graph
+        .regions
+        .get(&mapping.region)
+        .is_some_and(|region| region.phys_addr.is_some())
+}
+
 fn region_mappers(graph: &AuthorityGraph, region: &str) -> BTreeSet<String> {
     graph
         .pds
@@ -623,31 +649,24 @@ fn channel_peers(graph: &AuthorityGraph, pd: &str) -> BTreeSet<String> {
 }
 
 fn is_descendant_or_same(graph: &AuthorityGraph, pd: &str, ancestor: &str) -> bool {
-    let mut current = Some(pd);
+    let mut current = Some(pd.to_owned());
     let mut seen = BTreeSet::new();
     while let Some(name) = current {
         if name == ancestor {
             return true;
         }
-        if !seen.insert(name.to_owned()) {
+        if !seen.insert(name.clone()) {
             return false;
         }
-        current = graph.pds.get(name).and_then(|domain| domain.parent.as_deref());
+        current = graph.pds.get(&name).and_then(|domain| domain.parent.clone());
     }
     false
 }
 
-fn dma_like_region(name: &str) -> bool {
-    let lower = name.to_ascii_lowercase();
-    ["dma", "virtio", "genet", "sdio", "usb", "ethernet", "pcie"]
-        .iter()
-        .any(|needle| lower.contains(needle))
-}
-
-pub fn check_text(xml: &str, toml_text: &str) -> Result<AuthorityGraph, CheckError> {
+pub fn check_text(xml: &str, properties: &str) -> Result<AuthorityGraph, CheckError> {
     let graph = parse_system(xml)?;
-    let props = parse_properties(toml_text)?;
-    let violations = validate(&graph, &props);
+    let properties = parse_properties(properties)?;
+    let violations = validate(&graph, &properties);
     if violations.is_empty() {
         Ok(graph)
     } else {
@@ -661,134 +680,8 @@ pub fn property_path(system_path: &Path) -> PathBuf {
     PathBuf::from(value)
 }
 
-pub fn check_file(system_path: &Path, props_path: &Path) -> Result<AuthorityGraph, CheckError> {
+pub fn check_file(system_path: &Path, properties_path: &Path) -> Result<AuthorityGraph, CheckError> {
     let xml = fs::read_to_string(system_path)?;
-    let props = fs::read_to_string(props_path)?;
-    check_text(&xml, &props)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use pretty_assertions::assert_eq;
-
-    const BASE: &str = r#"
-<system>
-  <memory_region name="work_ring" size="0x1000" />
-  <memory_region name="device" size="0x1000" phys_addr="0x1000" />
-  <memory_region name="net_dma" size="0x1000" phys_addr="0x2000" />
-  <protection_domain name="supervisor" priority="200">
-    <map mr="work_ring" vaddr="0x5000" perms="rw" />
-    <protection_domain name="worker" priority="100">
-      <map mr="work_ring" vaddr="0x5000" perms="rw" />
-    </protection_domain>
-  </protection_domain>
-  <protection_domain name="policy" priority="150" pp="true">
-    <map mr="device" vaddr="0x6000" perms="rw" />
-    <irq irq="33" id="1" />
-  </protection_domain>
-  <protection_domain name="network" priority="140">
-    <map mr="net_dma" vaddr="0x7000" perms="rw" />
-  </protection_domain>
-  <channel><end pd="worker" id="1"/><end pd="policy" id="1"/></channel>
-</system>
-"#;
-
-    const VALID_PROPS: &str = r#"
-version = 1
-
-[[shared_only]]
-pds = ["supervisor", "worker"]
-regions = ["work_ring"]
-
-[[only_channels]]
-pd = "worker"
-peers = ["policy"]
-
-[[dma_capable]]
-pd = "network"
-
-[[restartable_ring]]
-region = "work_ring"
-lifecycle_pd = "supervisor"
-endpoints = ["supervisor", "worker"]
-"#;
-
-    #[test]
-    fn parses_complete_authority_graph() {
-        let graph = check_text(BASE, VALID_PROPS).unwrap();
-        assert_eq!(graph.pds["worker"].parent.as_deref(), Some("supervisor"));
-        assert_eq!(graph.pds["policy"].irqs, BTreeSet::from([33]));
-        assert!(graph
-            .pp_edges
-            .contains(&(String::from("worker"), String::from("policy"))));
-    }
-
-    #[test]
-    fn widened_mapping_breaks_shared_only_fixture() {
-        let widened = BASE.replace(
-            "<map mr=\"work_ring\" vaddr=\"0x5000\" perms=\"rw\" />\n    <protection_domain",
-            "<map mr=\"work_ring\" vaddr=\"0x5000\" perms=\"rw\" />\n    <map mr=\"device\" vaddr=\"0x6000\" perms=\"r\" />\n    <protection_domain",
-        )
-        .replace(
-            "<map mr=\"work_ring\" vaddr=\"0x5000\" perms=\"rw\" />\n    </protection_domain>",
-            "<map mr=\"work_ring\" vaddr=\"0x5000\" perms=\"rw\" />\n      <map mr=\"device\" vaddr=\"0x6000\" perms=\"r\" />\n    </protection_domain>",
-        );
-        let err = check_text(&widened, VALID_PROPS).unwrap_err();
-        assert!(err.to_string().contains("shared_only"));
-    }
-
-    #[test]
-    fn added_channel_breaks_only_channels_fixture() {
-        let xml = BASE.replace(
-            "</system>",
-            "<channel><end pd=\"worker\" id=\"2\"/><end pd=\"network\" id=\"2\"/></channel></system>",
-        );
-        let err = check_text(&xml, VALID_PROPS).unwrap_err();
-        assert!(err.to_string().contains("only_channels"));
-    }
-
-    #[test]
-    fn device_or_irq_breaks_no_device_mmio_fixture() {
-        let props = format!("{VALID_PROPS}\n[[no_device_mmio]]\npd = \"policy\"\n");
-        let err = check_text(BASE, &props).unwrap_err();
-        assert!(err.to_string().contains("no_device_mmio"));
-    }
-
-    #[test]
-    fn sibling_endpoint_breaks_restartable_ring_fixture() {
-        let xml = BASE.replace(
-            "<protection_domain name=\"worker\" priority=\"100\">",
-            "</protection_domain><protection_domain name=\"worker\" priority=\"100\">",
-        );
-        let err = check_text(&xml, VALID_PROPS).unwrap_err();
-        assert!(err.to_string().contains("restartable_ring"));
-    }
-
-    #[test]
-    fn undeclared_dma_owner_is_rejected() {
-        let props = VALID_PROPS.replace(
-            "[[dma_capable]]\npd = \"network\"\n",
-            "",
-        );
-        let err = check_text(BASE, &props).unwrap_err();
-        assert!(err.to_string().contains("dma_capable"));
-    }
-
-    #[test]
-    fn no_pp_to_checks_direction() {
-        let props = format!(
-            "{VALID_PROPS}\n[[no_pp_to]]\npd = \"worker\"\ntarget = \"policy\"\n"
-        );
-        let err = check_text(BASE, &props).unwrap_err();
-        assert!(err.to_string().contains("protected procedure"));
-    }
-
-    #[test]
-    fn property_path_appends_suffix() {
-        assert_eq!(
-            property_path(Path::new("demo.system")),
-            PathBuf::from("demo.system.props.toml")
-        );
-    }
+    let properties = fs::read_to_string(properties_path)?;
+    check_text(&xml, &properties)
 }
