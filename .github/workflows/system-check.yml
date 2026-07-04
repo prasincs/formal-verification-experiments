@@ -28,9 +28,9 @@ jobs:
 
       - name: Test checker and broken fixtures
         working-directory: sel4-microkernel/tools/system-check
-        run: cargo test --all-targets
+        run: cargo test --all-targets --quiet
 
       - name: Check every Microkit system
         run: |
-          cargo run --manifest-path sel4-microkernel/tools/system-check/Cargo.toml -- \
+          cargo run --quiet --manifest-path sel4-microkernel/tools/system-check/Cargo.toml -- \
             --all sel4-microkernel
