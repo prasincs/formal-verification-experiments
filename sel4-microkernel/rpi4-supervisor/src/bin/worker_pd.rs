@@ -1,6 +1,7 @@
 #![no_std]
 #![no_main]
 
+use core::arch::global_asm;
 use core::convert::Infallible;
 
 use rpi4_supervisor::protocol::{
@@ -9,20 +10,45 @@ use rpi4_supervisor::protocol::{
 use sel4_microkit::{debug_println, protection_domain, Channel, ChannelSet, Handler};
 
 const SUPERVISOR_CHANNEL: Channel = Channel::new(SUPERVISOR_CHANNEL_ID);
-const WORKER_STACK_SIZE: usize = 0x4000;
+
+// The repository-pinned rust-sel4 runtime predates its `stack_size` macro
+// support. This trampoline supplies the same restart property locally: reset
+// SP to a dedicated 16 KiB stack and branch to the generated Microkit main
+// symbol. Global runtime and IPC-buffer initialization were completed by the
+// initial boot and intentionally remain persistent across child restarts.
+global_asm!(
+    r#"
+    .section .bss.worker_restart_stack,"aw",%nobits
+    .balign 16
+worker_restart_stack:
+    .skip 16384
+worker_restart_stack_top:
+
+    .section .text.worker_restart_entry,"ax"
+    .balign 16
+    .global worker_restart_entry
+    .type worker_restart_entry, %function
+worker_restart_entry:
+    adrp x9, worker_restart_stack_top
+    add  x9, x9, :lo12:worker_restart_stack_top
+    mov  sp, x9
+    b    __sel4_microkit__main
+    .size worker_restart_entry, .-worker_restart_entry
+    "#
+);
 
 unsafe extern "C" {
-    fn __sel4_runtime_common__stack_init();
+    fn worker_restart_entry();
 }
 
 struct Worker {
     ring: &'static WorkRing,
 }
 
-#[protection_domain(stack_size = WORKER_STACK_SIZE)]
+#[protection_domain]
 fn init() -> Worker {
     let ring = unsafe { WorkRing::mapped() };
-    let restart_entry = __sel4_runtime_common__stack_init as *const () as usize as u64;
+    let restart_entry = worker_restart_entry as *const () as usize as u64;
     ring.publish_restart_entry(restart_entry);
     let boot = ring
         .boot_generation()
