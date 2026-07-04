@@ -1,5 +1,8 @@
 #![no_std]
 
+#[cfg(feature = "std")]
+extern crate std;
+
 use core::fmt;
 
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
@@ -28,6 +31,9 @@ impl fmt::Display for ModelBuildError {
     }
 }
 
+#[cfg(feature = "std")]
+impl std::error::Error for ModelBuildError {}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum InferenceError {
     Loader(loader::LoadError),
@@ -46,6 +52,9 @@ impl fmt::Display for InferenceError {
         }
     }
 }
+
+#[cfg(feature = "std")]
+impl std::error::Error for InferenceError {}
 
 impl From<loader::LoadError> for InferenceError {
     fn from(value: loader::LoadError) -> Self {
@@ -129,6 +138,9 @@ impl fmt::Display for ReceiptError {
         write!(f, "receipt verification failed: {self:?}")
     }
 }
+
+#[cfg(feature = "std")]
+impl std::error::Error for ReceiptError {}
 
 /// Build a compact, standards-shaped GGUF v3 file containing one 16x16 F32
 /// transition tensor. Row `i` has its unique maximum at `(i + 1) mod 16`.
