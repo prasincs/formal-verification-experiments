@@ -23,9 +23,9 @@ net-ethernet = []
 net-virtio = []
 net-wifi = []
 
-# IP stack selection
-net-stack-lwip = []
-net-stack-picotcp = []
+# IP stack selection. The former empty lwIP/picoTCP declarations are retired;
+# smoltcp is the supported no_std stack.
+net-stack-smoltcp = ["dep:smoltcp"]
 
 [dependencies]
 # sel4-microkit provides the Microkit runtime and API
@@ -33,6 +33,14 @@ sel4-microkit = { git = "https://github.com/seL4/rust-sel4", rev = "3059c2d236bf
 
 # Shared IPC protocol between the Network PD and client PDs
 rpi4-network-protocol = { path = "../rpi4-network-protocol" }
+
+smoltcp = { version = "=0.13.1", default-features = false, optional = true, features = [
+    "medium-ethernet",
+    "proto-ipv4",
+    "proto-dhcpv4",
+    "socket-dhcpv4",
+    "socket-icmp",
+] }
 
 [profile.release]
 opt-level = "z"
