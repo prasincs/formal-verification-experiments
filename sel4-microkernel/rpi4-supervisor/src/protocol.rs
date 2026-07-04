@@ -1,32 +1,31 @@
-use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use core::sync::atomic::{AtomicU32, Ordering};
 
 pub const WORK_RING_VADDR: usize = 0x5_0400_0000;
 pub const WORK_RING_CAPACITY: u32 = 16;
 pub const SUPERVISOR_CHANNEL_ID: usize = 1;
+pub const WATCHDOG_IRQ_CHANNEL_ID: usize = 2;
+
+pub const ENTRY_BOOT_GENERATION: usize = 0;
+pub const ENTRY_HEARTBEAT: usize = 1;
+pub const ENTRY_COMMAND: usize = 2;
+pub const ENTRY_COMMAND_SEQUENCE: usize = 3;
 
 pub const COMMAND_NONE: u32 = 0;
 pub const COMMAND_POISON: u32 = 0x504f_4953;
 pub const COMMAND_WATCHDOG_STALL: u32 = 0x5744_4f47;
-pub const COMMAND_WATCHDOG_EXPIRE: u32 = 0x5744_4558;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct OddGeneration(pub u32);
 
-/// IC-1 header followed by demo control words. The header offsets remain the
-/// canonical `write_idx`, `read_idx`, `capacity`, `generation` layout.
-#[repr(C, align(64))]
+/// Canonical IC-1 layout: the 16-byte generation header is followed
+/// immediately by entries. Boot generation, heartbeat, and demo commands are
+/// ordinary entries rather than extra header fields.
+#[repr(C, align(16))]
 pub struct WorkRing {
     pub write_idx: AtomicU32,
     pub read_idx: AtomicU32,
     pub capacity: u32,
     pub generation: AtomicU32,
-    pub heartbeat: AtomicU32,
-    pub command: AtomicU32,
-    pub command_sequence: AtomicU32,
-    pub reserved: AtomicU32,
-    /// Linked address of the worker-local stack-reset trampoline. The worker
-    /// publishes it on every boot; the supervisor captures it before reset.
-    pub restart_entry: AtomicU64,
     pub entries: [AtomicU32; WORK_RING_CAPACITY as usize],
 }
 
@@ -44,17 +43,11 @@ impl WorkRing {
         &*(WORK_RING_VADDR as *const Self)
     }
 
-    /// Called by the supervisor before the child can run.
     pub fn initialize(&mut self) {
         self.write_idx.store(0, Ordering::Relaxed);
         self.read_idx.store(0, Ordering::Relaxed);
         self.capacity = WORK_RING_CAPACITY;
         self.generation.store(0, Ordering::Release);
-        self.heartbeat.store(0, Ordering::Release);
-        self.command.store(COMMAND_NONE, Ordering::Release);
-        self.command_sequence.store(0, Ordering::Release);
-        self.reserved.store(0, Ordering::Release);
-        self.restart_entry.store(0, Ordering::Release);
         for entry in &self.entries {
             entry.store(0, Ordering::Relaxed);
         }
@@ -72,31 +65,32 @@ impl WorkRing {
         Ok(self.resync()? / 2 + 1)
     }
 
+    pub fn publish_boot_generation(&self, boot: u32) {
+        self.entries[ENTRY_BOOT_GENERATION].store(boot, Ordering::Release);
+    }
+
+    pub fn observed_boot_generation(&self) -> u32 {
+        self.entries[ENTRY_BOOT_GENERATION].load(Ordering::Acquire)
+    }
+
     pub fn publish_heartbeat(&self) -> u32 {
-        self.heartbeat.fetch_add(1, Ordering::Release) + 1
+        self.entries[ENTRY_HEARTBEAT].fetch_add(1, Ordering::Release) + 1
     }
 
     pub fn heartbeat(&self) -> u32 {
-        self.heartbeat.load(Ordering::Acquire)
+        self.entries[ENTRY_HEARTBEAT].load(Ordering::Acquire)
     }
 
     pub fn set_command(&self, command: u32) -> u32 {
-        self.command.store(command, Ordering::Release);
-        self.command_sequence.fetch_add(1, Ordering::AcqRel) + 1
+        self.entries[ENTRY_COMMAND].store(command, Ordering::Release);
+        self.entries[ENTRY_COMMAND_SEQUENCE].fetch_add(1, Ordering::AcqRel) + 1
     }
 
     pub fn command(&self) -> u32 {
-        self.command.load(Ordering::Acquire)
-    }
-
-    pub fn publish_restart_entry(&self, entry: u64) {
-        self.restart_entry.store(entry, Ordering::Release);
-    }
-
-    pub fn restart_entry(&self) -> u64 {
-        self.restart_entry.load(Ordering::Acquire)
+        self.entries[ENTRY_COMMAND].load(Ordering::Acquire)
     }
 }
 
 const _: () = assert!(core::mem::offset_of!(WorkRing, generation) == 0x0c);
+const _: () = assert!(core::mem::offset_of!(WorkRing, entries) == 0x10);
 const _: () = assert!(core::mem::size_of::<WorkRing>() <= 0x1000);
