@@ -10,11 +10,11 @@
 #
 # Options:
 #   NET_DRIVER   - ethernet, wifi, both, or none (default: none)
-#   NET_STACK    - lwip or picotcp (default: lwip)
+#   NET_STACK    - smoltcp or none (default: smoltcp)
 
 # Default values
 NET_DRIVER ?= none
-NET_STACK ?= lwip
+NET_STACK ?= smoltcp
 
 # Validate NET_DRIVER option
 ifneq ($(filter $(NET_DRIVER),none ethernet wifi both),$(NET_DRIVER))
@@ -22,8 +22,8 @@ $(error Invalid NET_DRIVER='$(NET_DRIVER)'. Valid options: none, ethernet, wifi,
 endif
 
 # Validate NET_STACK option
-ifneq ($(filter $(NET_STACK),lwip picotcp),$(NET_STACK))
-$(error Invalid NET_STACK='$(NET_STACK)'. Valid options: lwip, picotcp)
+ifneq ($(filter $(NET_STACK),none smoltcp),$(NET_STACK))
+$(error Invalid NET_STACK='$(NET_STACK)'. Valid options: none, smoltcp)
 endif
 
 # Skip networking setup if disabled
@@ -54,11 +54,10 @@ ifeq ($(NET_DRIVER),both)
 NETWORK_FEATURES += net-ethernet net-wifi
 endif
 
-# Add IP stack feature
-ifeq ($(NET_STACK),lwip)
-NETWORK_FEATURES += net-stack-lwip
-else ifeq ($(NET_STACK),picotcp)
-NETWORK_FEATURES += net-stack-picotcp
+# Add the supported no_std IP stack feature. Legacy lwIP/picoTCP declarations
+# were empty and are intentionally retired.
+ifeq ($(NET_STACK),smoltcp)
+NETWORK_FEATURES += net-stack-smoltcp
 endif
 
 # Convert features to Cargo format
