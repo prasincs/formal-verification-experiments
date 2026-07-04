@@ -9,6 +9,7 @@ use rpi4_supervisor::protocol::{
 use sel4_microkit::{debug_println, protection_domain, Channel, ChannelSet, Handler};
 
 const SUPERVISOR_CHANNEL: Channel = Channel::new(SUPERVISOR_CHANNEL_ID);
+const WORKER_STACK_SIZE: usize = 0x4000;
 
 unsafe extern "C" {
     fn __sel4_runtime_common__stack_init();
@@ -18,10 +19,11 @@ struct Worker {
     ring: &'static WorkRing,
 }
 
-#[protection_domain]
+#[protection_domain(stack_size = WORKER_STACK_SIZE)]
 fn init() -> Worker {
     let ring = unsafe { WorkRing::mapped() };
-    ring.publish_restart_entry(__sel4_runtime_common__stack_init as usize as u64);
+    let restart_entry = __sel4_runtime_common__stack_init as *const () as usize as u64;
+    ring.publish_restart_entry(restart_entry);
     let boot = ring
         .boot_generation()
         .expect("worker started during an odd reset generation");
