@@ -15,6 +15,11 @@ path = "src/main.rs"
 name = "netclient_pd"
 path = "src/bin/netclient_pd.rs"
 
+[[bin]]
+name = "ipdemo_pd"
+path = "src/bin/ipdemo_pd.rs"
+required-features = ["net-virtio", "net-stack-smoltcp"]
+
 [features]
 default = []
 
