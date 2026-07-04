@@ -16,6 +16,7 @@ on:
 
 env:
   VERUS_RELEASE: "0.2026.06.28.1847ab3"
+  VERUS_RUST: "1.96.0"
 
 jobs:
   verify-generation:
@@ -23,6 +24,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Install pinned Verus Rust runtime
+        run: rustup toolchain install "${VERUS_RUST}" --profile minimal
 
       - name: Download pinned Verus release
         run: |
