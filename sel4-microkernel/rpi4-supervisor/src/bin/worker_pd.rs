@@ -5,18 +5,15 @@ use core::arch::global_asm;
 use core::convert::Infallible;
 
 use rpi4_supervisor::protocol::{
-    WorkRing, COMMAND_POISON, COMMAND_WATCHDOG_EXPIRE, COMMAND_WATCHDOG_STALL,
-    SUPERVISOR_CHANNEL_ID,
+    WorkRing, COMMAND_POISON, COMMAND_WATCHDOG_STALL, SUPERVISOR_CHANNEL_ID,
 };
 use sel4_microkit::{debug_println, protection_domain, Channel, ChannelSet, Handler};
 
 const SUPERVISOR_CHANNEL: Channel = Channel::new(SUPERVISOR_CHANNEL_ID);
 
-// The repository-pinned rust-sel4 runtime predates its `stack_size` macro
-// support. This trampoline supplies the same restart property locally: reset
-// SP to a dedicated 16 KiB stack and branch to the generated Microkit main
-// symbol. Global runtime and IPC-buffer initialization were completed by the
-// initial boot and intentionally remain persistent across child restarts.
+// Microkit 2.1's pinned Rust runtime has no restartable-stack macro. The
+// trusted build extracts this symbol from the linked worker ELF and injects its
+// address into the supervisor build; the child never supplies the restart PC.
 global_asm!(
     r#"
     .section .bss.worker_restart_stack,"aw",%nobits
@@ -38,10 +35,6 @@ worker_restart_entry:
     "#
 );
 
-unsafe extern "C" {
-    fn worker_restart_entry();
-}
-
 struct Worker {
     ring: &'static WorkRing,
 }
@@ -49,11 +42,11 @@ struct Worker {
 #[protection_domain]
 fn init() -> Worker {
     let ring = unsafe { WorkRing::mapped() };
-    let restart_entry = worker_restart_entry as *const () as usize as u64;
-    ring.publish_restart_entry(restart_entry);
     let boot = ring
         .boot_generation()
         .expect("worker started during an odd reset generation");
+    // The boot-generation marker is the first canonical ring entry.
+    ring.publish_boot_generation(boot);
     let heartbeat = ring.publish_heartbeat();
     debug_println!("BOOT GEN {}", boot);
     debug_println!("WORKER HEARTBEAT {}", heartbeat);
@@ -71,22 +64,17 @@ impl Handler for Worker {
 
         match self.ring.command() {
             COMMAND_POISON => {
-                debug_println!("POISON RECEIVED");
+                debug_println!("POISON RING ENTRY RECEIVED");
                 unsafe {
                     core::ptr::write_volatile(0x10usize as *mut u32, 1);
                 }
             }
             COMMAND_WATCHDOG_STALL => {
                 debug_println!("WATCHDOG STALL ARMED");
-                // Notify the higher-priority supervisor, then return from this
-                // callback so rust-sel4 releases its IPC-buffer borrow before
-                // the supervisor delivers the separate expiry command.
-                SUPERVISOR_CHANNEL.notify();
-            }
-            COMMAND_WATCHDOG_EXPIRE => {
-                debug_println!("WATCHDOG EXPIRY RECEIVED");
-                unsafe {
-                    core::ptr::write_volatile(0x10usize as *mut u32, 2);
+                // No notification is sent. A PL031 timer interrupt owned by the
+                // supervisor independently detects the unchanged heartbeat.
+                loop {
+                    core::hint::spin_loop();
                 }
             }
             _ => {}
