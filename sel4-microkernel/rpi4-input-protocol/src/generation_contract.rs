@@ -1,6 +1,7 @@
 use verus_builtin_macros::verus;
 
-use crate::{FIRST_STABLE_GENERATION, LEGACY_GENERATION};
+pub const LEGACY_GENERATION: u32 = 0;
+pub const FIRST_STABLE_GENERATION: u32 = 2;
 
 verus! {
 
@@ -19,10 +20,6 @@ pub fn validate_stable_generation(observed: u32) -> (result: Result<u32, u32>)
 }
 
 /// Executable arithmetic used by the atomic reset implementation.
-///
-/// The caller supplies the linear `EndpointsStopped` token; this function
-/// proves the resulting publication plan is odd followed by stable nonzero
-/// even, including wraparound away from legacy generation zero.
 pub fn reset_plan(current: u32) -> (result: Result<(u32, u32), u32>)
     ensures
         result.is_err() <==> current % 2 == 1,
