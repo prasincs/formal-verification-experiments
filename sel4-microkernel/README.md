@@ -37,6 +37,17 @@ sel4-microkernel/
 
 ## Quick Start
 
+### Containerized QEMU E2E
+
+From the repository root, run the full QEMU acceptance path inside Docker or Podman:
+
+```bash
+scripts/qemu-e2e-container.sh
+```
+
+This builds the container image, installs the pinned Microkit SDK and Rust
+toolchain, then boots `microkit-hello`, `netdemo`, and `ipdemo` in QEMU.
+
 ### Prerequisites
 
 **macOS:**
