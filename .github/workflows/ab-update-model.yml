@@ -12,6 +12,12 @@ on:
       - "sel4-microkernel/formal/ab-update/**"
       - ".github/workflows/ab-update-model.yml"
 
+env:
+  # Pinned: a TLC behavior change must not silently change what this
+  # gate proves. Bump deliberately, updating the checksum alongside.
+  TLA_VERSION: v1.7.4
+  TLA_SHA256: ""
+
 jobs:
   tlc:
     name: Check crash safety
@@ -19,8 +25,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Download TLC
-        run: curl --fail --location --retry 3 --output /tmp/tla2tools.jar https://github.com/tlaplus/tlaplus/releases/latest/download/tla2tools.jar
+      - name: Download TLC (pinned)
+        run: |
+          curl --fail --location --retry 3 --output /tmp/tla2tools.jar \
+            "https://github.com/tlaplus/tlaplus/releases/download/${TLA_VERSION}/tla2tools.jar"
+          actual="$(sha256sum /tmp/tla2tools.jar | cut -d' ' -f1)"
+          echo "tla2tools.jar ${TLA_VERSION} sha256: ${actual}"
+          if [[ -n "${TLA_SHA256}" && "${actual}" != "${TLA_SHA256}" ]]; then
+            echo "checksum mismatch: expected ${TLA_SHA256}" >&2
+            exit 1
+          fi
 
       - name: Run model checks
         working-directory: sel4-microkernel/formal/ab-update
@@ -33,5 +47,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ab-update-tlc-logs
-          path: sel4-microkernel/formal/ab-update/*-model.log
+          path: sel4-microkernel/formal/ab-update/*.log
           if-no-files-found: warn
