@@ -40,23 +40,23 @@ with `<0xXX>` byte fallback — whatever the checkpoint carries.
 SHA-256 `c0d530a1…f50ad`) is a stories260K-class llama (264,256 tensor
 parameters: dim 64, 5 layers, 8 heads GQA-4, byte-level vocab 259)
 trained by `fixtures/generate_fixture.py` on a deterministic synthetic
-tiny-stories corpus and written by the same script's self-contained
-GGUF v3 writer with llama.cpp metadata/tensor-name conventions.
+tiny-stories corpus and written with llama.cpp's `gguf` Python writer
+using llama.cpp metadata/tensor-name conventions.
 
-Why not the canonical `stories15M` from Hugging Face: that host is not
-reachable from the CI/build sandboxes this repo targets (source forges
-and package registries only), and the workplan's alternative — LFS —
-buys nothing for a 1 MiB file. The generator script keeps the artifact
-reproducible-by-construction; a real stories15M GGUF drops in unchanged
-(same architecture family, F32) wherever the network allows it, and the
-loader/engine already validate everything they consume from it.
+This fixture is intentionally small enough to commit and boot quickly in
+QEMU, so it is a regression target rather than the final model-size
+claim. The generator script keeps the artifact reproducible by
+construction; run it with `uv run --script`. A real stories15M-class
+GGUF should be pinned by SHA-256 and either fetched or committed via LFS
+when selected; the loader/engine path is the same and validates the
+bytes it consumes.
 
 ## Host demo
 
 ```bash
 cargo run --release -p llmdemo-host -- \
     fixtures/tinystories-260k-f32.gguf --steps 64 \
-    --expect d6271ec4ebcfa51bec2664c1d784fbba7911eb6cb31b4f93b1a57adf0ee968bb
+    --expect 7b2b33323cba78f90b50f6ac02d980f46c7e5920f1d00ba2ef736e2fe64e6dce
 ```
 
 prints the model hash, the validated config, the arena sizes, the
@@ -64,12 +64,26 @@ generated story text, and `TOKENS SHA256 <hex>` — the line CI asserts.
 Regenerating the fixture means re-pinning that hash here, in
 `tests/generate.rs`, in the loader's fixture test, and in the workflow.
 
+## QEMU receipt demo
+
+`llmdemo_pd` embeds the committed fixture in a Microkit protection
+domain, generates 64 tokens with the same runner as the host demo,
+prints the token-id bytes beside a canonical 128-byte receipt, and signs
+that receipt with a QEMU-only test application key. Verify a serial log:
+
+```bash
+cargo run --features std --bin llm-receipt-verify -- llmdemo-boot.log
+```
+
+The verifier checks the signature, prompt/model/output digests, fixed
+greedy config, and deterministic reexecution.
+
 ## WP-6 status / follow-ups
 
 Done: verified-surface loader, arena engine, tokenizer, host demo with
 pinned deterministic output, malformed corpus + fuzz target, reference
-cross-check, CI. Follow-ups tracked in the workplan: the QEMU `llmdemo`
-PD product (embedding this stack unchanged behind a Microkit PD),
-signed execution receipts + `llm-receipt-verify` (re-execution
-challenge), quantized kernels (Q8_0/Q4_0), and extending Verus totality
-through the container walk.
+cross-check, QEMU PD product, signed receipts, host reexecution
+verifier, CI. Follow-ups tracked in the workplan: pinning the chosen
+stories15M-class artifact, production receipt-key hierarchy, quantized
+kernels (Q8_0/Q4_0), and extending Verus totality through the container
+walk.

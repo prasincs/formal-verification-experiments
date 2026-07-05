@@ -1,33 +1,36 @@
-#!/usr/bin/env python3
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = [
+#   "gguf==0.19.0",
+#   "torch>=2.4,<3",
+# ]
+# ///
 """Generate the committed tinystories GGUF fixture for the WP-6 llmdemo.
 
-The canonical WP-6 checkpoint is a stories15M-class model fetched from
-Hugging Face, but that host is not reachable from every build
-environment (the remote CI sandbox allowlists only source forges and
-package registries). This script therefore produces an equivalent,
-fully reproducible stand-in with the same architecture family
-(llama: RMSNorm + RoPE + GQA + SwiGLU, F32 tensors, GGUF v3, llama.cpp
-metadata and tensor-name conventions):
+The canonical WP-6 follow-up checkpoint should be a pinned
+stories15M-class model, but this committed fixture is intentionally
+small enough to keep in git and boot quickly under QEMU. It has the same
+architecture family (llama: RMSNorm + RoPE + GQA + SwiGLU, F32 tensors,
+GGUF v3, llama.cpp metadata and tensor-name conventions):
 
   1. synthesize a deterministic tiny-stories corpus from templates
      (seeded PRNG, no external data),
   2. train a ~250K-parameter byte-level llama on it (torch, CPU,
      seeded, a few minutes),
-  3. write `tinystories-260k-f32.gguf` with a self-contained GGUF v3
-     writer (no gguf pip dependency).
+  3. write `tinystories-260k-f32.gguf` with llama.cpp's `gguf` Python
+     writer.
 
 Determinism note: the *committed artifact* is what CI pins by SHA-256.
 Re-running this script on a different torch/BLAS build may produce a
 bitwise-different (but behaviorally equivalent) model; regenerating the
 fixture means re-pinning the hash in the demo test and CI.
 
-Usage:  python3 generate_fixture.py [--iters N] [--out PATH]
+Usage:  uv run --script generate_fixture.py [--iters N] [--out PATH]
 """
 
 import argparse
-import math
 import random
-import struct
 
 # --------------------------------------------------------------------------
 # 1. Deterministic synthetic corpus
@@ -213,49 +216,12 @@ def build_and_train(corpus: list[str], iters: int, seed: int):
 
 
 # --------------------------------------------------------------------------
-# 4. Self-contained GGUF v3 writer (little-endian, alignment 32)
+# 4. GGUF v3 writer (little-endian, alignment 32)
 # --------------------------------------------------------------------------
-
-GGUF_MAGIC = b"GGUF"
-GGUF_VERSION = 3
-ALIGNMENT = 32
-# metadata value types
-T_U8, T_I8, T_U16, T_I16, T_U32, T_I32, T_F32, T_BOOL, T_STR, T_ARR, T_U64 = range(11)
-GGML_F32 = 0
-
-
-def _s(b: bytes) -> bytes:
-    return struct.pack("<Q", len(b)) + b
-
-
-def _kv_str(key: str, val: str) -> bytes:
-    return _s(key.encode()) + struct.pack("<I", T_STR) + _s(val.encode())
-
-
-def _kv_u32(key: str, val: int) -> bytes:
-    return _s(key.encode()) + struct.pack("<II", T_U32, val)
-
-
-def _kv_f32(key: str, val: float) -> bytes:
-    return _s(key.encode()) + struct.pack("<If", T_F32, val)
-
-
-def _kv_arr_str(key: str, vals: list[str]) -> bytes:
-    out = _s(key.encode()) + struct.pack("<IIQ", T_ARR, T_STR, len(vals))
-    return out + b"".join(_s(v.encode()) for v in vals)
-
-
-def _kv_arr_f32(key: str, vals: list[float]) -> bytes:
-    out = _s(key.encode()) + struct.pack("<IIQ", T_ARR, T_F32, len(vals))
-    return out + struct.pack(f"<{len(vals)}f", *vals)
-
-
-def _kv_arr_i32(key: str, vals: list[int]) -> bytes:
-    out = _s(key.encode()) + struct.pack("<IIQ", T_ARR, T_I32, len(vals))
-    return out + struct.pack(f"<{len(vals)}i", *vals)
 
 
 def write_gguf(path: str, model, cfg: dict) -> None:
+    import gguf
     import torch
 
     sd = {k: v.detach().to(torch.float32) for k, v in model.state_dict().items()}
@@ -290,61 +256,33 @@ def write_gguf(path: str, model, cfg: dict) -> None:
     # llama.cpp token types: 2 = unknown, 3 = control, 6 = byte
     ttypes = [2, 3, 3] + [6] * 256
 
-    meta_entries = [
-            _kv_str("general.architecture", "llama"),
-            _kv_str("general.name", "tinystories-260k"),
-            _kv_u32("general.alignment", ALIGNMENT),
-            _kv_u32("llama.context_length", cfg["seq_len"]),
-            _kv_u32("llama.embedding_length", cfg["dim"]),
-            _kv_u32("llama.block_count", cfg["n_layers"]),
-            _kv_u32("llama.feed_forward_length", cfg["hidden"]),
-            _kv_u32("llama.attention.head_count", cfg["n_heads"]),
-            _kv_u32("llama.attention.head_count_kv", cfg["n_kv_heads"]),
-            _kv_u32("llama.rope.dimension_count", cfg["head"]),
-            _kv_f32("llama.attention.layer_norm_rms_epsilon", cfg["eps"]),
-            _kv_f32("llama.rope.freq_base", cfg["rope_theta"]),
-            _kv_str("tokenizer.ggml.model", "llama"),
-            _kv_arr_str("tokenizer.ggml.tokens", tokens),
-            _kv_arr_f32("tokenizer.ggml.scores", scores),
-            _kv_arr_i32("tokenizer.ggml.token_type", ttypes),
-            _kv_u32("tokenizer.ggml.bos_token_id", BOS),
-            _kv_u32("tokenizer.ggml.eos_token_id", EOS),
-            _kv_u32("tokenizer.ggml.unknown_token_id", UNK),
-    ]
-    meta = b"".join(meta_entries)
-    n_meta = len(meta_entries)
+    writer = gguf.GGUFWriter(path, "llama")
+    writer.add_name("tinystories-260k")
+    writer.add_custom_alignment(32)
+    writer.add_uint32("llama.context_length", cfg["seq_len"])
+    writer.add_embedding_length(cfg["dim"])
+    writer.add_block_count(cfg["n_layers"])
+    writer.add_feed_forward_length(cfg["hidden"])
+    writer.add_head_count(cfg["n_heads"])
+    writer.add_head_count_kv(cfg["n_kv_heads"])
+    writer.add_rope_dimension_count(cfg["head"])
+    writer.add_layer_norm_rms_eps(cfg["eps"])
+    writer.add_rope_freq_base(cfg["rope_theta"])
+    writer.add_tokenizer_model("llama")
+    writer.add_token_list(tokens)
+    writer.add_token_scores(scores)
+    writer.add_token_types(ttypes)
+    writer.add_bos_token_id(BOS)
+    writer.add_eos_token_id(EOS)
+    writer.add_unk_token_id(UNK)
 
-    # Tensor infos, computing aligned data offsets.
-    infos = b""
-    blobs = []
-    offset = 0
     for name, ten in tensors:
-        dims = list(ten.shape)[::-1]  # GGUF ne order: fastest-varying first
-        infos += _s(name.encode())
-        infos += struct.pack("<I", len(dims))
-        infos += struct.pack(f"<{len(dims)}Q", *dims)
-        infos += struct.pack("<I", GGML_F32)
-        infos += struct.pack("<Q", offset)
-        raw = ten.numpy().astype("<f4").tobytes()
-        blobs.append((offset, raw))
-        offset += len(raw)
-        offset = (offset + ALIGNMENT - 1) // ALIGNMENT * ALIGNMENT
+        writer.add_tensor(name, ten.numpy().astype("<f4", copy=False))
 
-    header = GGUF_MAGIC + struct.pack("<IQQ", GGUF_VERSION, len(tensors), n_meta)
-    pre = header + meta + infos
-    pad = (-len(pre)) % ALIGNMENT
-
-    with open(path, "wb") as f:
-        f.write(pre)
-        f.write(b"\x00" * pad)
-        pos = 0
-        for off, raw in blobs:
-            assert pos == off, (pos, off)
-            f.write(raw)
-            pos += len(raw)
-            padn = (-pos) % ALIGNMENT
-            f.write(b"\x00" * padn)
-            pos += padn
+    writer.write_header_to_file()
+    writer.write_kv_data_to_file()
+    writer.write_tensors_to_file()
+    writer.close()
     print(f"wrote {path}")
 
 

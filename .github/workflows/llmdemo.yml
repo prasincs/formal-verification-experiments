@@ -6,21 +6,25 @@ on:
     paths:
       - "sel4-microkernel/rpi4-llm-loader/**"
       - "sel4-microkernel/rpi4-llm/**"
+      - "sel4-microkernel/build-system/config/products/llmdemo.mk"
       - ".github/workflows/llmdemo.yml"
   pull_request:
     branches: [main]
     paths:
       - "sel4-microkernel/rpi4-llm-loader/**"
       - "sel4-microkernel/rpi4-llm/**"
+      - "sel4-microkernel/build-system/config/products/llmdemo.mk"
       - ".github/workflows/llmdemo.yml"
 
 env:
   # Keep in sync with .github/workflows/verus-generation.yml
   VERUS_RELEASE: "0.2026.06.28.1847ab3"
   VERUS_RUST: "1.96.0"
+  MICROKIT_VERSION: "2.1.0"
+  MICROKIT_SDK_SHA256: "faff1b6d6b546cbb0bfea134588499533130d406ae2a5e533e791ddf23ac7599"
   # Pinned output of llmdemo-host on the committed fixture (determinism
   # is a tested property; re-pin when the fixture is regenerated).
-  TOKENS_SHA256: "d6271ec4ebcfa51bec2664c1d784fbba7911eb6cb31b4f93b1a57adf0ee968bb"
+  TOKENS_SHA256: "7b2b33323cba78f90b50f6ac02d980f46c7e5920f1d00ba2ef736e2fe64e6dce"
 
 jobs:
   loader:
@@ -158,3 +162,82 @@ jobs:
       - name: Run fuzzer
         working-directory: sel4-microkernel/rpi4-llm-loader
         run: cargo fuzz run parse -- -max_total_time=60
+
+  qemu-llmdemo:
+    name: QEMU PD receipt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential qemu-system-arm gcc-aarch64-linux-gnu
+
+      - name: Install Rust nightly
+        uses: dtolnay/rust-toolchain@master
+        with:
+          # Pinned nightly - keep in sync with sel4-microkernel/rust-toolchain.toml
+          toolchain: nightly-2026-07-02
+          components: rust-src
+
+      - name: Cache Microkit SDK
+        id: cache-microkit
+        uses: actions/cache@v4
+        with:
+          path: /opt/microkit-sdk
+          key: microkit-sdk-${{ env.MICROKIT_VERSION }}-linux-x86-64
+
+      - name: Download Microkit SDK
+        if: steps.cache-microkit.outputs.cache-hit != 'true'
+        run: |
+          curl -L -o /tmp/microkit-sdk.tar.gz \
+            "https://github.com/seL4/microkit/releases/download/${{ env.MICROKIT_VERSION }}/microkit-sdk-${{ env.MICROKIT_VERSION }}-linux-x86-64.tar.gz"
+          echo "${{ env.MICROKIT_SDK_SHA256 }}  /tmp/microkit-sdk.tar.gz" | sha256sum -c -
+          sudo mkdir -p /opt/microkit-sdk
+          sudo tar -xzf /tmp/microkit-sdk.tar.gz -C /opt/microkit-sdk --strip-components=1
+
+      - name: Build llmdemo product
+        working-directory: sel4-microkernel/build-system
+        run: make PRODUCT=llmdemo PLATFORM=qemu-aarch64 MICROKIT_SDK=/opt/microkit-sdk all
+
+      - name: Boot inference PD
+        working-directory: sel4-microkernel
+        run: |
+          set -o pipefail
+          set +e
+          timeout 120s qemu-system-aarch64 \
+            -machine virt,virtualization=on \
+            -cpu cortex-a53 \
+            -m 2G \
+            -nographic \
+            -device loader,file=build/qemu-aarch64/llmdemo/loader.img,addr=0x70000000,cpu-num=0 \
+            2>&1 | tee llmdemo-boot.log
+          status=$?
+          set -e
+          if [ "$status" -ne 0 ] && [ "$status" -ne 124 ]; then
+            exit "$status"
+          fi
+
+          grep -q "generated 64 tokens" llmdemo-boot.log
+          grep -q "TOKENS SHA256 $TOKENS_SHA256" llmdemo-boot.log
+          grep -q "LLMDEMO PASS" llmdemo-boot.log
+
+      - name: Verify signed receipt and deterministic reexecution
+        run: |
+          set -o pipefail
+          cargo run --manifest-path sel4-microkernel/rpi4-llm/Cargo.toml \
+            --features std --bin llm-receipt-verify -- \
+            sel4-microkernel/llmdemo-boot.log | tee receipt-verification.log
+          grep -q "RECEIPT VERIFIED" receipt-verification.log
+          grep -q "REEXECUTION OK" receipt-verification.log
+
+      - name: Upload QEMU evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: llmdemo-receipt-evidence
+          path: |
+            sel4-microkernel/llmdemo-boot.log
+            receipt-verification.log
+          retention-days: 7

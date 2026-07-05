@@ -566,7 +566,7 @@ full spec when scheduled.
 | WP-3 | `agent/wp3-supervisor-restart` | #26 | hierarchical supervisor restart demo; QEMU supdemo validation |
 | WP-4 | — | — | not started |
 | WP-5 | — | — | not started |
-| WP-6 | `claude/wp6-small-llm-gguf-dm64d1` | — | loader + arena engine + deterministic host demo on a committed GGUF; QEMU PD product and receipts follow-up |
+| WP-6 | `claude/wp6-small-llm-gguf-dm64d1` | — | loader + arena engine + deterministic host/QEMU demo on a committed GGUF, signed receipts, and host re-execution verifier; stories15M-class artifact and quantized kernels follow-up |
 | WP-7 | `claude/wave-1-formal-verification-zsee9k` | #28 | in review |
 | WP-8 | `claude/wave-1-formal-verification-zsee9k` | #28 | in review |
 | WP-10 | `agent/wp10-ab-update-model` | [#21](https://github.com/prasincs/formal-verification-experiments/pull/21) | in review |

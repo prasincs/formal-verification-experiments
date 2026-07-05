@@ -30,7 +30,13 @@
 
 mod engine;
 mod math;
+pub mod receipt;
+pub mod run;
 mod tokenizer;
 
 pub use engine::{ArenaPlan, Engine, EngineError};
+pub use run::{
+    generate_into, token_ids_to_le_bytes, Generated, RunBuffers, RunError, DEFAULT_PROMPT,
+    DEFAULT_STEPS, EXPECTED_TOKENS_SHA256,
+};
 pub use tokenizer::VocabEntry;

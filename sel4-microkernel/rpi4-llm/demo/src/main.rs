@@ -10,10 +10,13 @@
 
 use std::process::ExitCode;
 
-use rpi4_llm::{ArenaPlan, Engine, VocabEntry};
+use rpi4_llm::{
+    generate_into, token_ids_to_le_bytes, ArenaPlan, RunBuffers, VocabEntry, DEFAULT_PROMPT,
+    DEFAULT_STEPS,
+};
 
 fn sha256_hex(data: &[u8]) -> String {
-    libcrux_sha2::sha256(data)
+    rpi4_llm::receipt::sha256(data)
         .iter()
         .map(|b| format!("{b:02x}"))
         .collect()
@@ -29,8 +32,8 @@ fn main() -> ExitCode {
     let Some(model_path) = args.next() else {
         return fail("usage: llmdemo-host MODEL.gguf [--prompt TEXT] [--steps N] [--expect HEX]");
     };
-    let mut prompt = String::from("One day, Tom the cat");
-    let mut steps: u32 = 64;
+    let mut prompt = String::from(std::str::from_utf8(DEFAULT_PROMPT).expect("ASCII prompt"));
+    let mut steps: usize = DEFAULT_STEPS;
     let mut expect: Option<String> = None;
     while let Some(flag) = args.next() {
         let val = args.next();
@@ -52,7 +55,7 @@ fn main() -> ExitCode {
     println!("MODEL SHA256 {}", sha256_hex(&buf));
 
     let desc = match rpi4_llm_loader::parse(&buf) {
-        Ok(d) => Box::new(d),
+        Ok(d) => d,
         Err(e) => return fail(&format!("GGUF rejected: {e:?}")),
     };
     let c = desc.config;
@@ -81,46 +84,38 @@ fn main() -> ExitCode {
     let mut arena = vec![0.0f32; plan.f32_len];
     let mut vocab = vec![VocabEntry::default(); plan.vocab_len];
 
-    let mut engine = match Engine::new(&desc, &buf, &mut arena, &mut vocab) {
-        Ok(e) => e,
-        Err(e) => return fail(&format!("engine bind: {e:?}")),
-    };
-
     let mut ids = vec![0u32; c.seq_len as usize];
-    let n_prompt = match engine.encode(prompt.as_bytes(), &mut ids) {
-        Ok(n) => n,
-        Err(e) => return fail(&format!("encode: {e:?}")),
+    let mut generated = vec![0u32; steps];
+    let mut text = vec![0u8; steps * 128];
+    let out = match generate_into(
+        &buf,
+        prompt.as_bytes(),
+        steps,
+        RunBuffers {
+            arena: &mut arena,
+            vocab_arena: &mut vocab,
+            prompt_ids: &mut ids,
+            output_ids: &mut generated,
+            output_text: &mut text,
+        },
+    ) {
+        Ok(out) => out,
+        Err(e) => return fail(&format!("generate: {e:?}")),
     };
-
-    let total = (n_prompt as u32 + steps).min(c.seq_len);
-    let mut generated: Vec<u32> = Vec::new();
-    let mut text = Vec::new();
-    let mut piece = [0u8; 128];
-    let mut next = ids[0];
-    for pos in 0..total {
-        if let Err(e) = engine.forward(next, pos) {
-            return fail(&format!("forward at {pos}: {e:?}"));
-        }
-        next = if (pos as usize + 1) < n_prompt {
-            ids[pos as usize + 1]
-        } else {
-            let id = engine.argmax_logits();
-            if id == c.eos_id {
-                break;
-            }
-            generated.push(id);
-            let n = engine.decode(id, &mut piece);
-            text.extend_from_slice(&piece[..n]);
-            id
-        };
-    }
 
     println!("prompt: {prompt:?}");
-    println!("output: {:?}", String::from_utf8_lossy(&text));
-    println!("generated {} tokens", generated.len());
+    println!(
+        "output: {:?}",
+        String::from_utf8_lossy(&text[..out.text_len])
+    );
+    println!("generated {} tokens", out.token_count);
 
-    let id_bytes: Vec<u8> = generated.iter().flat_map(|t| t.to_le_bytes()).collect();
-    let hash = sha256_hex(&id_bytes);
+    let mut id_bytes = vec![0u8; out.token_count * 4];
+    let byte_len = match token_ids_to_le_bytes(&generated[..out.token_count], &mut id_bytes) {
+        Ok(len) => len,
+        Err(e) => return fail(&format!("token-id encoding: {e:?}")),
+    };
+    let hash = sha256_hex(&id_bytes[..byte_len]);
     println!("TOKENS SHA256 {hash}");
 
     if let Some(want) = expect {
