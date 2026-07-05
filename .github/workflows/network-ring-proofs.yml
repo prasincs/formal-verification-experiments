@@ -37,10 +37,13 @@ jobs:
           cargo test --manifest-path sel4-microkernel/rpi4-network-protocol/Cargo.toml
 
       - name: Download pinned Verus release
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           api="https://api.github.com/repos/verus-lang/verus/releases/tags/release%2F${VERUS_RELEASE}"
-          asset_url="$(curl --fail --silent --show-error --location "$api" \
+          asset_url="$(curl --fail --silent --show-error --location --retry 3 \
+            --header "Authorization: Bearer ${GH_TOKEN}" "$api" \
             | jq -r '.assets[] | select(.name | endswith("x86-linux.zip")) | .browser_download_url' \
             | head -n1)"
           test -n "$asset_url"
