@@ -26,18 +26,18 @@ impl EntryOwnership {
         Self { consumer_owned: false }
     }
 
-    pub fn publish(&mut self)
-        requires !old(self).consumer_owned,
-        ensures final(self).consumer_owned,
+    pub fn publish(self) -> (next: Self)
+        requires !self.consumer_owned,
+        ensures next.consumer_owned,
     {
-        self.consumer_owned = true;
+        Self { consumer_owned: true }
     }
 
-    pub fn release(&mut self)
-        requires old(self).consumer_owned,
-        ensures !final(self).consumer_owned,
+    pub fn release(self) -> (next: Self)
+        requires self.consumer_owned,
+        ensures !next.consumer_owned,
     {
-        self.consumer_owned = false;
+        Self { consumer_owned: false }
     }
 }
 
@@ -64,29 +64,35 @@ impl SpscCounters {
         }
     }
 
-    pub fn publish(&mut self)
+    pub fn publish(self) -> (next: Self)
         requires
-            old(self).valid(),
-            old(self).write_counter < u64::MAX,
-            old(self).write_counter - old(self).read_counter < VERIFIED_RING_SIZE as u64,
+            self.valid(),
+            self.write_counter < u64::MAX,
+            self.write_counter - self.read_counter < VERIFIED_RING_SIZE as u64,
         ensures
-            final(self).valid(),
-            final(self).write_counter == old(self).write_counter + 1u64,
-            final(self).read_counter == old(self).read_counter,
+            next.valid(),
+            next.write_counter == self.write_counter + 1u64,
+            next.read_counter == self.read_counter,
     {
-        self.write_counter = self.write_counter + 1u64;
+        Self {
+            write_counter: self.write_counter + 1u64,
+            read_counter: self.read_counter,
+        }
     }
 
-    pub fn release(&mut self)
+    pub fn release(self) -> (next: Self)
         requires
-            old(self).valid(),
-            old(self).read_counter < old(self).write_counter,
+            self.valid(),
+            self.read_counter < self.write_counter,
         ensures
-            final(self).valid(),
-            final(self).read_counter == old(self).read_counter + 1u64,
-            final(self).write_counter == old(self).write_counter,
+            next.valid(),
+            next.read_counter == self.read_counter + 1u64,
+            next.write_counter == self.write_counter,
     {
-        self.read_counter = self.read_counter + 1u64;
+        Self {
+            write_counter: self.write_counter,
+            read_counter: self.read_counter + 1u64,
+        }
     }
 }
 
