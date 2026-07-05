@@ -1,0 +1,21 @@
+[package]
+name = "rpi4-llm"
+version = "0.1.0"
+edition = "2021"
+description = "Arena-based no_std llama inference engine (WP-6): single-threaded, deterministic, sized from the verified descriptor"
+
+[workspace]
+members = ["demo"]
+
+[dependencies]
+rpi4-llm-loader = { path = "../rpi4-llm-loader" }
+# Pure-Rust math (no_std has no expf/sqrtf). Pinned exactly: these
+# functions are part of the determinism envelope the demo hash asserts.
+libm = "=0.2.15"
+
+[dev-dependencies]
+# Same formally verified SHA-256 the update-capsule crate pins.
+libcrux-sha2 = { version = "0.0.7", default-features = false }
+
+[features]
+default = []
