@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<system>
+    <protection_domain name="llmdemo" priority="200" stack_size="0x40000">
+        <program_image path="llmdemo_pd.elf" />
+    </protection_domain>
+</system>

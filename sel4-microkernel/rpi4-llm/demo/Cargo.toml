@@ -1,0 +1,13 @@
+[package]
+name = "llmdemo-host"
+version = "0.1.0"
+edition = "2021"
+description = "Host runner for the WP-6 inference stack: load GGUF, generate, print TOKENS SHA256"
+
+[[bin]]
+name = "llmdemo-host"
+path = "src/main.rs"
+
+[dependencies]
+rpi4-llm = { path = ".." }
+rpi4-llm-loader = { path = "../../rpi4-llm-loader" }

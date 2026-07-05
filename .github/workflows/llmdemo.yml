@@ -1,0 +1,243 @@
+name: WP-6 LLM Demo
+
+on:
+  push:
+    branches: [main, "agent/*", "claude/*"]
+    paths:
+      - "sel4-microkernel/rpi4-llm-loader/**"
+      - "sel4-microkernel/rpi4-llm/**"
+      - "sel4-microkernel/build-system/config/products/llmdemo.mk"
+      - ".github/workflows/llmdemo.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "sel4-microkernel/rpi4-llm-loader/**"
+      - "sel4-microkernel/rpi4-llm/**"
+      - "sel4-microkernel/build-system/config/products/llmdemo.mk"
+      - ".github/workflows/llmdemo.yml"
+
+env:
+  # Keep in sync with .github/workflows/verus-generation.yml
+  VERUS_RELEASE: "0.2026.06.28.1847ab3"
+  VERUS_RUST: "1.96.0"
+  MICROKIT_VERSION: "2.1.0"
+  MICROKIT_SDK_SHA256: "faff1b6d6b546cbb0bfea134588499533130d406ae2a5e533e791ddf23ac7599"
+  # Pinned output of llmdemo-host on the committed fixture (determinism
+  # is a tested property; re-pin when the fixture is regenerated).
+  TOKENS_SHA256: "7b2b33323cba78f90b50f6ac02d980f46c7e5920f1d00ba2ef736e2fe64e6dce"
+
+jobs:
+  loader:
+    name: GGUF Loader
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust nightly
+        uses: dtolnay/rust-toolchain@master
+        with:
+          # Pinned nightly - keep in sync with sel4-microkernel/rust-toolchain.toml
+          toolchain: nightly-2026-07-02
+          components: rust-src, rustfmt, clippy
+          targets: aarch64-unknown-none
+
+      - name: Build no_std (aarch64-unknown-none)
+        working-directory: sel4-microkernel/rpi4-llm-loader
+        run: cargo build --target aarch64-unknown-none
+
+      - name: Test (bounds, malformed corpus, fixture pin)
+        working-directory: sel4-microkernel/rpi4-llm-loader
+        run: cargo test
+
+      - name: Clippy
+        working-directory: sel4-microkernel/rpi4-llm-loader
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Check formatting
+        working-directory: sel4-microkernel/rpi4-llm-loader
+        run: cargo fmt --check
+
+  engine:
+    name: Engine + llmdemo
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust nightly
+        uses: dtolnay/rust-toolchain@master
+        with:
+          # Pinned nightly - keep in sync with sel4-microkernel/rust-toolchain.toml
+          toolchain: nightly-2026-07-02
+          components: rust-src, rustfmt, clippy
+          targets: aarch64-unknown-none
+
+      - name: Build no_std (aarch64-unknown-none)
+        working-directory: sel4-microkernel/rpi4-llm
+        run: cargo build --target aarch64-unknown-none
+
+      - name: Test (reference cross-check, determinism, arenas, tokenizer)
+        working-directory: sel4-microkernel/rpi4-llm
+        run: cargo test --workspace
+
+      - name: Run llmdemo (>=32 tokens, pinned output hash)
+        working-directory: sel4-microkernel/rpi4-llm
+        run: |
+          set -o pipefail
+          cargo run --release -p llmdemo-host -- \
+            fixtures/tinystories-260k-f32.gguf --steps 64 \
+            --expect "$TOKENS_SHA256" | tee demo.log
+          grep -q "TOKENS SHA256 $TOKENS_SHA256" demo.log
+          tokens=$(sed -n 's/^generated \([0-9]*\) tokens$/\1/p' demo.log)
+          test "$tokens" -ge 32
+
+      - name: Clippy
+        working-directory: sel4-microkernel/rpi4-llm
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Check formatting
+        working-directory: sel4-microkernel/rpi4-llm
+        run: cargo fmt --all --check
+
+  verus:
+    name: Verus (loader bounds surface)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pinned Verus Rust runtime
+        run: rustup toolchain install "${VERUS_RUST}" --profile minimal
+
+      - name: Download pinned Verus release
+        run: |
+          set -euo pipefail
+          api="https://api.github.com/repos/verus-lang/verus/releases/tags/release%2F${VERUS_RELEASE}"
+          asset_url="$(curl --fail --silent --show-error --location "$api" \
+            | jq -r '.assets[] | select(.name | endswith("x86-linux.zip")) | .browser_download_url' \
+            | head -n1)"
+          test -n "$asset_url"
+          curl --fail --location --retry 3 --output /tmp/verus.zip "$asset_url"
+          mkdir -p /tmp/verus
+          unzip -q /tmp/verus.zip -d /tmp/verus
+          find /tmp/verus -type f -name verus -exec chmod +x {} \;
+
+      - name: Verify loader bounds surface
+        run: |
+          set -o pipefail
+          VERUS_BIN="$(find /tmp/verus -type f -name verus | head -n1)"
+          test -x "$VERUS_BIN"
+          "$VERUS_BIN" --crate-type lib \
+            sel4-microkernel/rpi4-llm-loader/src/bounds.rs \
+            2>&1 | tee verus-llm-loader.log
+
+      - name: Upload Verus diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: wp6-verus-diagnostics
+          path: verus-*.log
+          if-no-files-found: warn
+
+  fuzz:
+    name: Fuzz (loader parse, 60s)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust nightly
+        uses: dtolnay/rust-toolchain@master
+        with:
+          # Pinned nightly - keep in sync with sel4-microkernel/rust-toolchain.toml
+          toolchain: nightly-2026-07-02
+          components: rust-src
+
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz --locked
+
+      - name: Seed corpus with the committed fixture
+        working-directory: sel4-microkernel/rpi4-llm-loader
+        run: |
+          mkdir -p fuzz/corpus/parse
+          cp ../rpi4-llm/fixtures/tinystories-260k-f32.gguf fuzz/corpus/parse/
+
+      - name: Run fuzzer
+        working-directory: sel4-microkernel/rpi4-llm-loader
+        run: cargo fuzz run parse -- -max_total_time=60
+
+  qemu-llmdemo:
+    name: QEMU PD receipt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential qemu-system-arm gcc-aarch64-linux-gnu
+
+      - name: Install Rust nightly
+        uses: dtolnay/rust-toolchain@master
+        with:
+          # Pinned nightly - keep in sync with sel4-microkernel/rust-toolchain.toml
+          toolchain: nightly-2026-07-02
+          components: rust-src
+
+      - name: Cache Microkit SDK
+        id: cache-microkit
+        uses: actions/cache@v4
+        with:
+          path: /opt/microkit-sdk
+          key: microkit-sdk-${{ env.MICROKIT_VERSION }}-linux-x86-64
+
+      - name: Download Microkit SDK
+        if: steps.cache-microkit.outputs.cache-hit != 'true'
+        run: |
+          curl -L -o /tmp/microkit-sdk.tar.gz \
+            "https://github.com/seL4/microkit/releases/download/${{ env.MICROKIT_VERSION }}/microkit-sdk-${{ env.MICROKIT_VERSION }}-linux-x86-64.tar.gz"
+          echo "${{ env.MICROKIT_SDK_SHA256 }}  /tmp/microkit-sdk.tar.gz" | sha256sum -c -
+          sudo mkdir -p /opt/microkit-sdk
+          sudo tar -xzf /tmp/microkit-sdk.tar.gz -C /opt/microkit-sdk --strip-components=1
+
+      - name: Build llmdemo product
+        working-directory: sel4-microkernel/build-system
+        run: make PRODUCT=llmdemo PLATFORM=qemu-aarch64 MICROKIT_SDK=/opt/microkit-sdk all
+
+      - name: Boot inference PD
+        working-directory: sel4-microkernel
+        run: |
+          set -o pipefail
+          set +e
+          timeout 120s qemu-system-aarch64 \
+            -machine virt,virtualization=on \
+            -cpu cortex-a53 \
+            -m 2G \
+            -nographic \
+            -device loader,file=build/qemu-aarch64/llmdemo/loader.img,addr=0x70000000,cpu-num=0 \
+            2>&1 | tee llmdemo-boot.log
+          status=$?
+          set -e
+          if [ "$status" -ne 0 ] && [ "$status" -ne 124 ]; then
+            exit "$status"
+          fi
+
+          grep -q "generated 64 tokens" llmdemo-boot.log
+          grep -q "TOKENS SHA256 $TOKENS_SHA256" llmdemo-boot.log
+          grep -q "LLMDEMO PASS" llmdemo-boot.log
+
+      - name: Verify signed receipt and deterministic reexecution
+        run: |
+          set -o pipefail
+          cargo run --manifest-path sel4-microkernel/rpi4-llm/Cargo.toml \
+            --features std --bin llm-receipt-verify -- \
+            sel4-microkernel/llmdemo-boot.log | tee receipt-verification.log
+          grep -q "RECEIPT VERIFIED" receipt-verification.log
+          grep -q "REEXECUTION OK" receipt-verification.log
+
+      - name: Upload QEMU evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: llmdemo-receipt-evidence
+          path: |
+            sel4-microkernel/llmdemo-boot.log
+            receipt-verification.log
+          retention-days: 7
