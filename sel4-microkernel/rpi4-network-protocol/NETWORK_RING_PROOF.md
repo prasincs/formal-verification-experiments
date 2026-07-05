@@ -71,11 +71,11 @@ spec anchors:
 
 - **Weak-memory publication order.** VirtIO 1.2 requires "a suitable memory
   barrier before the idx update" so the peer never observes the index advance
-  before the entry contents. The client TX path issues a `SeqCst` fence before
-  bumping `tx_write_idx`; the network PD's RX publish path advances
-  `rx_write_idx` with a plain store and no barrier between filling the entry
-  and publishing it. The Verus contract models sequential ownership only and
-  says nothing about ordering.
+  before the entry contents. Both PDs now issue a `SeqCst` fence between
+  writing entry contents and setting `VALID`, and between the flag update and
+  the index publication — but this discipline lives in the PD code, not the
+  proof. The Verus contract models sequential ownership only and says nothing
+  about ordering.
 
 - **Payload length trust.** The `length` clamp in the network PD is executable
   defense (the CVE-2019-14835-class mitigation) but is not itself covered by

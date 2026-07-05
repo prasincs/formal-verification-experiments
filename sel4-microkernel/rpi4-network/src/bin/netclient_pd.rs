@@ -22,7 +22,9 @@ use core::fmt;
 
 use sel4_microkit::{debug_println, protection_domain, Channel, ChannelSet, Handler};
 
-use rpi4_network_protocol::{ring_flags, NetSharedMemory, NET_CLIENT_CHANNEL_ID, RING_SIZE};
+use rpi4_network_protocol::arp;
+use rpi4_network_protocol::proof::{consumer_permit, producer_permit, slot_for};
+use rpi4_network_protocol::{ring_flags, NetSharedMemory, NET_CLIENT_CHANNEL_ID};
 
 /// Shared memory with the Network PD (must match netdemo.system)
 const NET_RING_VADDR: usize = 0x5_0700_0000;
@@ -30,38 +32,18 @@ const NET_RING_VADDR: usize = 0x5_0700_0000;
 /// Channel to the Network PD
 const NET_CHANNEL: Channel = Channel::new(NET_CLIENT_CHANNEL_ID);
 
-/// QEMU user-networking guest address (slirp default)
+/// QEMU user-mode networking (slirp) topology. QEMU fixes these addresses
+/// for a default `-netdev user` and the CI harness relies on them: the boot
+/// test in qemu-mockpi.yml greps the log for the gateway's ARP reply. Change
+/// them only together with that workflow. Clients that need a discovered
+/// (rather than fixture) configuration should use DHCP like `ipdemo_pd`.
 const GUEST_IP: [u8; 4] = [10, 0, 2, 15];
-/// QEMU user-networking gateway address (slirp default)
 const GATEWAY_IP: [u8; 4] = [10, 0, 2, 2];
 
 /// Client state
 struct NetClientHandler {
     shared: *mut NetSharedMemory,
     frames_seen: u32,
-}
-
-/// Build an ARP request for the QEMU gateway into `buf`; returns length
-fn build_arp_request(buf: &mut [u8], mac: &[u8; 6]) -> usize {
-    // Ethernet header: broadcast dst, our src, EtherType 0x0806 (ARP)
-    buf[0..6].fill(0xff);
-    buf[6..12].copy_from_slice(mac);
-    buf[12] = 0x08;
-    buf[13] = 0x06;
-    // ARP: htype 1 (Ethernet), ptype 0x0800 (IPv4), hlen 6, plen 4, op 1
-    buf[14] = 0x00;
-    buf[15] = 0x01;
-    buf[16] = 0x08;
-    buf[17] = 0x00;
-    buf[18] = 6;
-    buf[19] = 4;
-    buf[20] = 0x00;
-    buf[21] = 0x01; // request
-    buf[22..28].copy_from_slice(mac); // sender MAC
-    buf[28..32].copy_from_slice(&GUEST_IP); // sender IP
-    buf[32..38].fill(0x00); // target MAC (unknown)
-    buf[38..42].copy_from_slice(&GATEWAY_IP); // target IP
-    42
 }
 
 impl NetClientHandler {
@@ -85,13 +67,27 @@ impl NetClientHandler {
             mac[5]
         );
 
-        let idx = (shared.tx_write_idx as usize) % RING_SIZE;
-        let entry = &mut shared.tx_ring[idx];
-        let len = build_arp_request(&mut entry.data, &mac);
+        // The Network PD writes tx_read_idx; read it volatilely. The permit
+        // refuses a full ring and an entry the consumer has not released.
+        let write = shared.tx_write_idx;
+        let read = core::ptr::read_volatile(&shared.tx_read_idx);
+        let probe_slot = slot_for(write);
+        let flags = core::ptr::read_volatile(&shared.tx_ring[probe_slot].flags);
+        let permit = match producer_permit(write, read, flags) {
+            Ok(permit) => permit,
+            Err(err) => {
+                debug_println!("netclient: TX ring refused ARP probe: {:?}", err);
+                return;
+            }
+        };
+
+        let entry = &mut shared.tx_ring[permit.slot()];
+        let len = arp::build_request(&mut entry.data, &mac, &GUEST_IP, &GATEWAY_IP);
         core::ptr::write_volatile(&mut entry.length, len as u16);
+        core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
         core::ptr::write_volatile(&mut entry.flags, ring_flags::VALID);
         core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
-        core::ptr::write_volatile(&mut shared.tx_write_idx, shared.tx_write_idx.wrapping_add(1));
+        core::ptr::write_volatile(&mut shared.tx_write_idx, write.wrapping_add(1));
 
         NET_CHANNEL.notify();
         debug_println!("netclient: ARP probe sent to 10.0.2.2");
@@ -104,40 +100,44 @@ impl NetClientHandler {
     unsafe fn drain_rx(&mut self) {
         let shared = &mut *self.shared;
 
-        // The Network PD writes rx_write_idx; read it volatilely
-        while shared.rx_read_idx != core::ptr::read_volatile(&shared.rx_write_idx) {
-            let idx = (shared.rx_read_idx as usize) % RING_SIZE;
-            let entry = &mut shared.rx_ring[idx];
+        loop {
+            // The Network PD writes rx_write_idx; read it volatilely
+            let write = core::ptr::read_volatile(&shared.rx_write_idx);
+            let read = shared.rx_read_idx;
+            let next_slot = slot_for(read);
+            let flags = core::ptr::read_volatile(&shared.rx_ring[next_slot].flags);
 
-            let flags = core::ptr::read_volatile(&entry.flags);
-            if flags & ring_flags::VALID != 0 {
-                let len = core::ptr::read_volatile(&entry.length) as usize;
-                self.frames_seen += 1;
-                debug_println!("netclient: received frame ({} bytes)", len);
+            // Empty ring ends the drain. An unpublished entry inside the
+            // occupied window is a protocol violation by the producer; stop
+            // rather than touch an entry we do not own.
+            let permit = match consumer_permit(write, read, flags) {
+                Ok(permit) => permit,
+                Err(_) => break,
+            };
 
-                // Is it the ARP reply from the gateway?
-                let d = &entry.data;
-                if len >= 42
-                    && d[12] == 0x08
-                    && d[13] == 0x06
-                    && d[20] == 0x00
-                    && d[21] == 0x02
-                    && d[28..32] == GATEWAY_IP
-                {
+            let entry = &mut shared.rx_ring[permit.slot()];
+            let len = core::ptr::read_volatile(&entry.length) as usize;
+            let len = len.min(entry.data.len());
+            self.frames_seen += 1;
+            debug_println!("netclient: received frame ({} bytes)", len);
+
+            // Is it the ARP reply from the gateway?
+            if let Some(reply) = arp::parse_reply(&entry.data[..len]) {
+                if reply.sender_ip == GATEWAY_IP {
+                    let m = reply.sender_mac;
                     debug_println!(
-                        "netclient: ARP reply from 10.0.2.2 ({:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x})",
-                        d[22], d[23], d[24], d[25], d[26], d[27]
+                        "netclient: ARP reply from {}.{}.{}.{} ({:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x})",
+                        GATEWAY_IP[0], GATEWAY_IP[1], GATEWAY_IP[2], GATEWAY_IP[3],
+                        m[0], m[1], m[2], m[3], m[4], m[5]
                     );
                 }
-
-                // Hand the entry back to the Network PD
-                core::ptr::write_volatile(&mut entry.flags, 0);
             }
 
-            core::ptr::write_volatile(
-                &mut shared.rx_read_idx,
-                shared.rx_read_idx.wrapping_add(1),
-            );
+            // Hand the entry back to the Network PD before publishing the
+            // new read index.
+            core::ptr::write_volatile(&mut entry.flags, 0);
+            core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
+            core::ptr::write_volatile(&mut shared.rx_read_idx, read.wrapping_add(1));
         }
     }
 }

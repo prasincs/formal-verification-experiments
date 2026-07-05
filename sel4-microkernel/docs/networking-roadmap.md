@@ -16,7 +16,7 @@ where the gap lives in the code.
 | Graphics PD network client (`network` feature) | ✅ Done | Compile + feature-flag wiring |
 | IP stack | ❌ Not started | — |
 | WiFi driver (CYW43455) | 🟡 Skeleton only | Compile only |
-| Formal verification of ring protocol | ❌ Not started | — |
+| Formal verification of ring protocol | ✅ Ring invariants done | Verus in CI (`network-ring-proofs.yml`) |
 
 Landed so far on `claude/rpi-sel4-networking-Bbp2s`:
 scaffolding + build flags (`08a50ce`), structural fixes (`c57bad9`),
@@ -126,14 +126,17 @@ rpi4-networking.md before investing here.
       for WL_ON (see NOTEs in `main.rs` ~lines 75–80) — required before
       the driver can even power the chip
 
-## Phase 7: Formal Verification — ❌ Not Started
+## Phase 7: Formal Verification — 🟡 In Progress
 
 The repo's pattern: `rpi4-input-protocol` is Verus-verified; the network
-ring protocol is not.
+ring protocol now is too.
 
-- [ ] Verus verification of `rpi4-network-protocol` ring invariants
+- [x] Verus verification of `rpi4-network-protocol` ring invariants
       (index bounds, single-producer/single-consumer ownership, no
-      entry reuse before release) — mirror `rpi4-input-protocol`
+      entry reuse before release) — `src/ring_contract.rs`, verified in
+      CI by `network-ring-proofs.yml`; the PDs route ring access through
+      the executable permits in `src/proof.rs` (threat-model mapping in
+      `NETWORK_RING_PROOF.md`)
 - [ ] Packet parser verification (ARP today; IP/TCP headers once the
       stack lands)
 - [ ] Document the security argument for the Network PD's isolation
@@ -143,9 +146,24 @@ ring protocol is not.
 
 - [ ] Multi-client support (per-client rings or a mux PD; today the
       protocol assumes exactly one client)
-- [ ] Use or remove the unused `ring_flags::IN_USE` flag
+- [x] Use or remove the unused `ring_flags::IN_USE` flag — deprecated as
+      an ABI-reserved bit; SPSC index ownership plus `VALID` fully
+      determines ownership (see `NETWORK_RING_PROOF.md`)
 - [ ] Request/response channel (MAC, link status, stats queries are
       defined in the protocol but only the shared header is served)
+- [ ] netclient: replace the slirp fixture constants (`GUEST_IP`,
+      `GATEWAY_IP` in `netclient_pd.rs`) with DHCP-discovered
+      configuration, as `ipdemo_pd` already does — the constants are
+      pinned to QEMU's `-netdev user` defaults and to the boot-log grep
+      in `qemu-mockpi.yml`, so both must change together
+- [ ] Thread network addressing through the Microkit system description
+      (a read-only config memory region per client PD) instead of
+      compile-time constants, so one binary serves differently
+      configured deployments
+- [ ] Model the wrapping u32 counters directly in the Verus ring
+      contract (today `SpscCounters` abstracts them as monotonic u64,
+      sound because 64 divides 2^32 and occupancy uses `wrapping_sub` —
+      see `NETWORK_RING_PROOF.md`)
 - [ ] Graphics/tvdemo UI: surface link status + IP in the About screen
 - [ ] Modern (non-legacy) virtio-mmio support, `VIRTIO_NET_F_STATUS`
       link detection

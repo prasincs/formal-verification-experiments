@@ -40,7 +40,7 @@ use core::fmt;
 use sel4_microkit::{debug_println, protection_domain, Channel, ChannelSet, Handler};
 
 use netif::{NetifConfig, NetworkInterface};
-use rpi4_network_protocol::{ring_flags, NetSharedMemory, NET_CLIENT_CHANNEL_ID, RING_SIZE};
+use rpi4_network_protocol::{proof, ring_flags, NetSharedMemory, NET_CLIENT_CHANNEL_ID};
 
 /// GENET (Ethernet) registers, mapped by Microkit
 #[cfg(feature = "net-ethernet")]
@@ -106,23 +106,33 @@ impl NetworkPdHandler {
     unsafe fn process_tx_ring(&mut self) {
         let shared = &mut *self.shared;
 
-        // The client PD writes tx_write_idx; read it volatilely each iteration
-        while shared.tx_read_idx != core::ptr::read_volatile(&shared.tx_write_idx) {
-            let idx = (shared.tx_read_idx as usize) % RING_SIZE;
-            let entry = &mut shared.tx_ring[idx];
+        loop {
+            // The client PD writes tx_write_idx; read it volatilely each iteration
+            let write = core::ptr::read_volatile(&shared.tx_write_idx);
+            let read = shared.tx_read_idx;
+            let next_slot = proof::slot_for(read);
+            let flags = core::ptr::read_volatile(&shared.tx_ring[next_slot].flags);
 
-            let flags = core::ptr::read_volatile(&entry.flags);
-            if flags & ring_flags::VALID != 0 {
-                let len = core::ptr::read_volatile(&entry.length) as usize;
-                let len = len.min(entry.data.len());
-                if self.netif.transmit(&entry.data[..len]).is_err() {
-                    core::ptr::write_volatile(&mut entry.flags, ring_flags::ERROR);
-                } else {
-                    core::ptr::write_volatile(&mut entry.flags, 0);
-                }
+            // Empty ring ends the drain. An unpublished entry inside the
+            // occupied window is a protocol violation by the client; stop
+            // rather than touch an entry we do not own.
+            let permit = match proof::consumer_permit(write, read, flags) {
+                Ok(permit) => permit,
+                Err(_) => break,
+            };
+
+            let entry = &mut shared.tx_ring[permit.slot()];
+            let len = core::ptr::read_volatile(&entry.length) as usize;
+            let len = len.min(entry.data.len());
+            if self.netif.transmit(&entry.data[..len]).is_err() {
+                core::ptr::write_volatile(&mut entry.flags, ring_flags::ERROR);
+            } else {
+                core::ptr::write_volatile(&mut entry.flags, 0);
             }
 
-            shared.tx_read_idx = shared.tx_read_idx.wrapping_add(1);
+            // Release the entry before publishing the new read index.
+            core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
+            core::ptr::write_volatile(&mut shared.tx_read_idx, read.wrapping_add(1));
         }
     }
 
@@ -136,21 +146,29 @@ impl NetworkPdHandler {
         let mut received = false;
 
         loop {
-            let idx = (shared.rx_write_idx as usize) % RING_SIZE;
-            // Stop if the ring is full (client hasn't consumed yet).
-            // The client PD writes rx_read_idx; read it volatilely.
+            let write = shared.rx_write_idx;
+            // The client PD writes rx_read_idx; read it volatilely. The
+            // permit refuses a full ring and an entry the client has not
+            // released yet.
             let rx_read = core::ptr::read_volatile(&shared.rx_read_idx);
-            if shared.rx_write_idx.wrapping_sub(rx_read) as usize >= RING_SIZE {
-                break;
-            }
-            let entry = &mut shared.rx_ring[idx];
+            let next_slot = proof::slot_for(write);
+            let flags = core::ptr::read_volatile(&shared.rx_ring[next_slot].flags);
+            let permit = match proof::producer_permit(write, rx_read, flags) {
+                Ok(permit) => permit,
+                Err(_) => break,
+            };
+            let entry = &mut shared.rx_ring[permit.slot()];
 
             match self.netif.receive(&mut entry.data) {
                 Ok(0) | Err(_) => break,
                 Ok(len) => {
                     core::ptr::write_volatile(&mut entry.length, len as u16);
+                    // Publish the entry contents before VALID, and VALID
+                    // before the index the client polls.
+                    core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
                     core::ptr::write_volatile(&mut entry.flags, ring_flags::VALID);
-                    shared.rx_write_idx = shared.rx_write_idx.wrapping_add(1);
+                    core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
+                    core::ptr::write_volatile(&mut shared.rx_write_idx, write.wrapping_add(1));
                     received = true;
                 }
             }
