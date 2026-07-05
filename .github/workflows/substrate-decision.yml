@@ -1,0 +1,35 @@
+name: Substrate Decision (WP-0)
+
+# Tripwire for docs/substrate-decision.md: the memo's PARTIAL decision
+# rests on sDDF requiring a newer Microkit than this repo pins. Re-run the
+# spike on a schedule and on changes to the memo/probe; --expect-incompatible
+# makes the job FAIL (exit 2) if that mismatch ever disappears, forcing a
+# revisit instead of letting the memo silently rot.
+
+on:
+  push:
+    branches: [main, "claude/*", "agent/*", "wp0-*"]
+    paths:
+      - "sel4-microkernel/scripts/spikes/sddf-compat.sh"
+      - "sel4-microkernel/docs/substrate-decision.md"
+      - ".github/workflows/substrate-decision.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "sel4-microkernel/scripts/spikes/sddf-compat.sh"
+      - "sel4-microkernel/docs/substrate-decision.md"
+  schedule:
+    - cron: "0 6 * * 1"   # weekly, Mondays 06:00 UTC
+  workflow_dispatch:
+
+jobs:
+  sddf-compat:
+    name: sDDF compatibility probe
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # clang is preinstalled on ubuntu-latest runners; the probe uses it
+      # to compile sDDF's device-independent C against the extern OS shim.
+      - name: Run substrate spike (fails if the documented mismatch is stale)
+        run: sel4-microkernel/scripts/spikes/sddf-compat.sh --expect-incompatible
