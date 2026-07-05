@@ -28,14 +28,14 @@ impl EntryOwnership {
 
     pub fn publish(&mut self)
         requires !old(self).consumer_owned,
-        ensures self.consumer_owned,
+        ensures final(self).consumer_owned,
     {
         self.consumer_owned = true;
     }
 
     pub fn release(&mut self)
         requires old(self).consumer_owned,
-        ensures !self.consumer_owned,
+        ensures !final(self).consumer_owned,
     {
         self.consumer_owned = false;
     }
@@ -70,9 +70,9 @@ impl SpscCounters {
             old(self).write_counter < u64::MAX,
             old(self).write_counter - old(self).read_counter < VERIFIED_RING_SIZE as u64,
         ensures
-            self.valid(),
-            self.write_counter == old(self).write_counter + 1u64,
-            self.read_counter == old(self).read_counter,
+            final(self).valid(),
+            final(self).write_counter == old(self).write_counter + 1u64,
+            final(self).read_counter == old(self).read_counter,
     {
         self.write_counter = self.write_counter + 1u64;
     }
@@ -82,9 +82,9 @@ impl SpscCounters {
             old(self).valid(),
             old(self).read_counter < old(self).write_counter,
         ensures
-            self.valid(),
-            self.read_counter == old(self).read_counter + 1u64,
-            self.write_counter == old(self).write_counter,
+            final(self).valid(),
+            final(self).read_counter == old(self).read_counter + 1u64,
+            final(self).write_counter == old(self).write_counter,
     {
         self.read_counter = self.read_counter + 1u64;
     }
