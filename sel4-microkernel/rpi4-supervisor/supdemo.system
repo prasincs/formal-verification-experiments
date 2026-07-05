@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<system>
+    <memory_region name="work_ring" size="0x1000" />
+    <memory_region name="rtc_regs" size="0x1000" phys_addr="0x09010000" />
+
+    <protection_domain name="supervisor" priority="200">
+        <program_image path="supervisor_pd.elf" />
+        <map mr="work_ring" vaddr="0x5_0400_0000" perms="rw" />
+        <map mr="rtc_regs" vaddr="0x5_0500_0000" perms="rw" cached="false" />
+        <!-- QEMU virt PL031: GIC SPI 2, global interrupt ID 34. -->
+        <irq irq="34" id="2" />
+
+        <protection_domain name="worker" priority="100" id="1">
+            <program_image path="worker_pd.elf" />
+            <map mr="work_ring" vaddr="0x5_0400_0000" perms="rw" />
+        </protection_domain>
+    </protection_domain>
+
+    <channel>
+        <end pd="supervisor" id="1" />
+        <end pd="worker" id="1" />
+    </channel>
+</system>
