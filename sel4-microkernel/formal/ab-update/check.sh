@@ -20,7 +20,7 @@ if ! grep -q "Model checking completed. No error has been found" safe-model.log;
   echo "safe model exited 0 but did not report exhaustive completion" >&2
   exit 1
 fi
-if ! grep -q "Checking temporal properties" safe-model.log; then
+if ! grep -q "Finished checking temporal properties" safe-model.log; then
   echo "safe model never checked the temporal properties" >&2
   exit 1
 fi
