@@ -1,0 +1,67 @@
+name: Verus Generation Contracts
+
+on:
+  push:
+    branches: [main, "agent/*", "claude/*"]
+    paths:
+      - "sel4-microkernel/rpi4-input-protocol/**"
+      - "sel4-microkernel/rpi4-network-protocol/**"
+      - ".github/workflows/verus-generation.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "sel4-microkernel/rpi4-input-protocol/**"
+      - "sel4-microkernel/rpi4-network-protocol/**"
+      - ".github/workflows/verus-generation.yml"
+
+env:
+  VERUS_RELEASE: "0.2026.06.28.1847ab3"
+  VERUS_RUST: "1.96.0"
+
+jobs:
+  verify-generation:
+    name: Verify reset and resync contracts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pinned Verus Rust runtime
+        run: rustup toolchain install "${VERUS_RUST}" --profile minimal
+
+      - name: Download pinned Verus release
+        run: |
+          set -euo pipefail
+          api="https://api.github.com/repos/verus-lang/verus/releases/tags/release%2F${VERUS_RELEASE}"
+          asset_url="$(curl --fail --silent --show-error --location "$api" \
+            | jq -r '.assets[] | select(.name | endswith("x86-linux.zip")) | .browser_download_url' \
+            | head -n1)"
+          test -n "$asset_url"
+          curl --fail --location --retry 3 --output /tmp/verus.zip "$asset_url"
+          mkdir -p /tmp/verus
+          unzip -q /tmp/verus.zip -d /tmp/verus
+          find /tmp/verus -type f -name verus -exec chmod +x {} \;
+
+      - name: Verify executable input generation contract
+        run: |
+          set -o pipefail
+          VERUS_BIN="$(find /tmp/verus -type f -name verus | head -n1)"
+          test -x "$VERUS_BIN"
+          "$VERUS_BIN" --crate-type lib \
+            sel4-microkernel/rpi4-input-protocol/src/generation_contract.rs \
+            2>&1 | tee verus-input.log
+
+      - name: Verify executable network generation contract
+        run: |
+          set -o pipefail
+          VERUS_BIN="$(find /tmp/verus -type f -name verus | head -n1)"
+          "$VERUS_BIN" --crate-type lib \
+            sel4-microkernel/rpi4-network-protocol/src/generation_contract.rs \
+            2>&1 | tee verus-network.log
+
+      - name: Upload Verus diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: wp4-verus-diagnostics
+          path: verus-*.log
+          if-no-files-found: warn

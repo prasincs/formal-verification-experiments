@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main, "claude/*"]
+    branches: [main, "claude/*", "agent/*"]
   pull_request:
     branches: [main]
 
@@ -131,6 +131,25 @@ jobs:
           cargo test --all-features
           cargo build --no-default-features
           cargo build --features usb
+
+  # Wave 1 WP-4: restart-safe generation rings
+  generation-rings:
+    name: Generation Rings
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pinned Rust nightly
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-07-02
+
+      - name: Test input and network protocol crates
+        run: |
+          cargo test --manifest-path sel4-microkernel/rpi4-input-protocol/Cargo.toml
+          cargo test --manifest-path sel4-microkernel/rpi4-network-protocol/Cargo.toml
+          cargo build --manifest-path sel4-microkernel/rpi4-input-protocol/Cargo.toml
+          cargo build --manifest-path sel4-microkernel/rpi4-network-protocol/Cargo.toml
 
   # Lint check
   clippy:

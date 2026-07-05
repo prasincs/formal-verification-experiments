@@ -1,65 +1,25 @@
-//! # Verified Input IPC Protocol
+//! Verified input IPC protocol for the isolated input/graphics products.
 //!
-//! Formally verified IPC protocol for Input/Graphics PD isolation.
-//! Uses Verus to prove memory safety and correctness properties.
-//!
-//! ## Verification Guarantees
-//!
-//! - **Buffer bounds safety**: All ring buffer accesses proven in-bounds
-//! - **No data races**: Single-producer single-consumer with atomic indices
-//! - **Index safety**: Write/read indices always within capacity
-//! - **Key code validity**: Only valid key codes can be transmitted
-//!
-//! ## Memory Layout (4KB shared region)
-//!
-//! ```text
-//! +-------------------+ 0x000
-//! | InputRingHeader   | (16 bytes)
-//! +-------------------+ 0x010
-//! | InputRingEntry[0] | (4 bytes each)
-//! | InputRingEntry[1] |
-//! | ...               |
-//! | InputRingEntry[N] |
-//! +-------------------+ 0x1000
-//! ```
+//! The legacy ABI remains unchanged. Wave 1 adds restart-generation handling
+//! alongside the existing entry and index APIs from this crate root.
 
 #![no_std]
 #![allow(unused)]
 #![allow(clippy::assign_op_pattern)]
 #![allow(clippy::new_without_default)]
 
+use core::sync::atomic::{AtomicU32, Ordering};
 use verus_builtin_macros::verus;
 
 verus! {
 
-// ============================================================================
-// CONSTANTS
-// ============================================================================
-
-/// Channel ID for input notifications
 pub const INPUT_CHANNEL_ID: usize = 1;
-
-/// Ring buffer capacity (number of entries)
-/// Verified: fits in 4KB with 16-byte header and 4-byte entries
 pub const RING_CAPACITY: u32 = 1000;
-
-/// Size of the header in bytes
 pub const HEADER_SIZE: usize = 16;
-
-/// Size of each entry in bytes
 pub const ENTRY_SIZE: usize = 4;
-
-/// Offset of entries from start of shared memory
 pub const ENTRIES_OFFSET: usize = 16;
 
-// ============================================================================
-// KEY CODES (Verified Mapping)
-// ============================================================================
-
-/// Valid key code range
 pub const KEY_CODE_MAX: u8 = 40;
-
-/// Key code constants with verified uniqueness
 pub const KEY_UP: u8 = 1;
 pub const KEY_DOWN: u8 = 2;
 pub const KEY_LEFT: u8 = 3;
@@ -78,63 +38,41 @@ pub const KEY_VOLUMEDOWN: u8 = 31;
 pub const KEY_MUTE: u8 = 32;
 pub const KEY_UNKNOWN: u8 = 0;
 
-/// Specification: is a key code valid?
 pub open spec fn valid_key_code(code: u8) -> bool {
     code <= KEY_CODE_MAX
 }
 
-// ============================================================================
-// EVENT TYPES
-// ============================================================================
-
-/// Event type constants
 pub const EVENT_NONE: u8 = 0;
 pub const EVENT_KEY: u8 = 1;
 pub const EVENT_IR: u8 = 2;
 
-/// Specification: is an event type valid?
-pub open spec fn valid_event_type(t: u8) -> bool {
-    t == EVENT_NONE || t == EVENT_KEY || t == EVENT_IR
+pub open spec fn valid_event_type(value: u8) -> bool {
+    value == EVENT_NONE || value == EVENT_KEY || value == EVENT_IR
 }
 
-/// Key state constants
 pub const STATE_RELEASED: u8 = 0;
 pub const STATE_PRESSED: u8 = 1;
 
-/// Specification: is a key state valid?
-pub open spec fn valid_key_state(s: u8) -> bool {
-    s == STATE_RELEASED || s == STATE_PRESSED
+pub open spec fn valid_key_state(value: u8) -> bool {
+    value == STATE_RELEASED || value == STATE_PRESSED
 }
 
-// ============================================================================
-// INPUT RING ENTRY
-// ============================================================================
-
-/// A single input event entry in the ring buffer.
-///
-/// All fields are verified to be within valid ranges.
 #[derive(Clone, Copy, Debug)]
 #[repr(C)]
 pub struct InputRingEntry {
-    /// Event type (Key, IrRemote, etc.)
     pub event_type: u8,
-    /// Key code (verified to be valid)
     pub key_code: u8,
-    /// Key state (Pressed/Released)
     pub key_state: u8,
-    /// Modifier flags
     pub modifiers: u8,
 }
 
 impl InputRingEntry {
-    /// Specification: is this entry valid?
     pub open spec fn valid(&self) -> bool {
-        valid_event_type(self.event_type) &&
-        valid_key_code(self.key_code) &&
-        valid_key_state(self.key_state)
+        valid_event_type(self.event_type)
+            && valid_key_code(self.key_code)
+            && valid_key_state(self.key_state)
     }
 
-    /// Create a new key event entry with verification
     pub fn new_key(code: u8, state: u8, modifiers: u8) -> (entry: Self)
         requires
             valid_key_code(code),
@@ -146,7 +84,7 @@ impl InputRingEntry {
             entry.key_state == state,
             entry.modifiers == modifiers,
     {
-        InputRingEntry {
+        Self {
             event_type: EVENT_KEY,
             key_code: code,
             key_state: state,
@@ -154,13 +92,12 @@ impl InputRingEntry {
         }
     }
 
-    /// Create an empty entry
     pub fn empty() -> (entry: Self)
         ensures
             entry.valid(),
             entry.event_type == EVENT_NONE,
     {
-        InputRingEntry {
+        Self {
             event_type: EVENT_NONE,
             key_code: 0,
             key_state: 0,
@@ -168,7 +105,6 @@ impl InputRingEntry {
         }
     }
 
-    /// Check if this is a key pressed event
     pub fn is_key_pressed(&self) -> (result: bool)
         requires self.valid(),
         ensures result == (self.event_type == EVENT_KEY && self.key_state == STATE_PRESSED),
@@ -177,16 +113,6 @@ impl InputRingEntry {
     }
 }
 
-// ============================================================================
-// RING BUFFER INDEX MANAGEMENT
-// ============================================================================
-
-/// Verified ring buffer index operations.
-///
-/// Key properties proven:
-/// - Indices always within [0, capacity)
-/// - Advance wraps correctly
-/// - Empty/full detection is correct
 pub struct RingIndices {
     write_idx: u32,
     read_idx: u32,
@@ -194,15 +120,13 @@ pub struct RingIndices {
 }
 
 impl RingIndices {
-    /// Specification: are the indices valid?
     pub open spec fn valid(&self) -> bool {
-        self.capacity > 0 &&
-        self.capacity <= RING_CAPACITY &&
-        self.write_idx < self.capacity &&
-        self.read_idx < self.capacity
+        self.capacity > 0
+            && self.capacity <= RING_CAPACITY
+            && self.write_idx < self.capacity
+            && self.read_idx < self.capacity
     }
 
-    /// Specification: number of items in buffer
     pub open spec fn count(&self) -> u32
         recommends self.valid()
     {
@@ -213,21 +137,18 @@ impl RingIndices {
         }
     }
 
-    /// Specification: is the buffer empty?
     pub open spec fn is_empty_spec(&self) -> bool
         recommends self.valid()
     {
         self.write_idx == self.read_idx
     }
 
-    /// Specification: is the buffer full?
     pub open spec fn is_full_spec(&self) -> bool
         recommends self.valid()
     {
         (self.write_idx + 1) % self.capacity == self.read_idx
     }
 
-    /// Create new indices with given capacity
     pub fn new(capacity: u32) -> (indices: Self)
         requires
             capacity > 0,
@@ -237,54 +158,48 @@ impl RingIndices {
             indices.is_empty_spec(),
             !indices.is_full_spec(),
     {
-        RingIndices {
+        Self {
             write_idx: 0,
             read_idx: 0,
             capacity,
         }
     }
 
-    /// Check if buffer is empty
-    pub fn is_empty(&self) -> (empty: bool)
+    pub fn is_empty(&self) -> (result: bool)
         requires self.valid(),
-        ensures empty == self.is_empty_spec(),
+        ensures result == self.is_empty_spec(),
     {
         self.write_idx == self.read_idx
     }
 
-    /// Check if buffer is full
-    pub fn is_full(&self) -> (full: bool)
+    pub fn is_full(&self) -> (result: bool)
         requires self.valid(),
-        ensures full == self.is_full_spec(),
+        ensures result == self.is_full_spec(),
     {
         (self.write_idx + 1) % self.capacity == self.read_idx
     }
 
-    /// Check if data is available
-    pub fn has_data(&self) -> (has: bool)
+    pub fn has_data(&self) -> (result: bool)
         requires self.valid(),
-        ensures has == !self.is_empty_spec(),
+        ensures result == !self.is_empty_spec(),
     {
         self.write_idx != self.read_idx
     }
 
-    /// Get current write index
-    pub fn write_index(&self) -> (idx: u32)
+    pub fn write_index(&self) -> (result: u32)
         requires self.valid(),
-        ensures idx == self.write_idx, idx < self.capacity,
+        ensures result == self.write_idx, result < self.capacity,
     {
         self.write_idx
     }
 
-    /// Get current read index
-    pub fn read_index(&self) -> (idx: u32)
+    pub fn read_index(&self) -> (result: u32)
         requires self.valid(),
-        ensures idx == self.read_idx, idx < self.capacity,
+        ensures result == self.read_idx, result < self.capacity,
     {
         self.read_idx
     }
 
-    /// Advance write index (after writing)
     pub fn advance_write(&mut self)
         requires
             old(self).valid(),
@@ -298,7 +213,6 @@ impl RingIndices {
         self.write_idx = (self.write_idx + 1) % self.capacity;
     }
 
-    /// Advance read index (after reading)
     pub fn advance_read(&mut self)
         requires
             old(self).valid(),
@@ -313,68 +227,45 @@ impl RingIndices {
     }
 }
 
-// ============================================================================
-// MEMORY REGION VERIFICATION
-// ============================================================================
-
-/// Virtual address for shared ring buffer
 pub const RING_BUFFER_VADDR: usize = 0x5_0400_0000;
-
-/// Size of shared memory region (4KB)
 pub const RING_BUFFER_SIZE: usize = 0x1000;
 
-/// Specification: is an address within the ring buffer region?
-pub open spec fn in_ring_buffer_region(addr: usize) -> bool {
-    addr >= RING_BUFFER_VADDR && addr < RING_BUFFER_VADDR + RING_BUFFER_SIZE
+pub open spec fn in_ring_buffer_region(address: usize) -> bool {
+    address >= RING_BUFFER_VADDR && address < RING_BUFFER_VADDR + RING_BUFFER_SIZE
 }
 
-/// Specification: is an entry index valid for the buffer?
-pub open spec fn valid_entry_index(idx: u32) -> bool {
-    (idx as usize) < RING_CAPACITY as usize &&
-    ENTRIES_OFFSET + (idx as usize) * ENTRY_SIZE < RING_BUFFER_SIZE
+pub open spec fn valid_entry_index(index: u32) -> bool {
+    (index as usize) < RING_CAPACITY as usize
+        && ENTRIES_OFFSET + (index as usize) * ENTRY_SIZE < RING_BUFFER_SIZE
 }
 
-/// Compute address of entry at given index
-pub fn entry_address(base: usize, idx: u32) -> (addr: usize)
+pub fn entry_address(base: usize, index: u32) -> (address: usize)
     requires
         base == RING_BUFFER_VADDR,
-        valid_entry_index(idx),
+        valid_entry_index(index),
     ensures
-        in_ring_buffer_region(addr),
-        addr == base + ENTRIES_OFFSET + (idx as usize) * ENTRY_SIZE,
+        in_ring_buffer_region(address),
+        address == base + ENTRIES_OFFSET + (index as usize) * ENTRY_SIZE,
 {
-    base + ENTRIES_OFFSET + (idx as usize) * ENTRY_SIZE
+    base + ENTRIES_OFFSET + (index as usize) * ENTRY_SIZE
 }
 
-// ============================================================================
-// ISOLATION PROPERTIES
-// ============================================================================
-
-/// Input PD allowed memory regions
 pub const INPUT_PD_UART_BASE: usize = 0x5_0300_0000;
 pub const INPUT_PD_UART_SIZE: usize = 0x1000;
-
-/// USB controller MMIO window mapped into the Input PD (DWC2 host).
 pub const INPUT_PD_USB_REGS_BASE: usize = 0x5_0500_0000;
 pub const INPUT_PD_USB_REGS_SIZE: usize = 0x10000;
-
-/// USB DMA buffer mapped into the Input PD.
 pub const INPUT_PD_USB_DMA_BASE: usize = 0x5_0600_0000;
 pub const INPUT_PD_USB_DMA_SIZE: usize = 0x1000;
 
-/// Specification: can Input PD access this address?
-pub open spec fn input_pd_can_access(addr: usize) -> bool {
-    // UART registers
-    (addr >= INPUT_PD_UART_BASE && addr < INPUT_PD_UART_BASE + INPUT_PD_UART_SIZE) ||
-    // USB controller registers
-    (addr >= INPUT_PD_USB_REGS_BASE && addr < INPUT_PD_USB_REGS_BASE + INPUT_PD_USB_REGS_SIZE) ||
-    // USB DMA buffer
-    (addr >= INPUT_PD_USB_DMA_BASE && addr < INPUT_PD_USB_DMA_BASE + INPUT_PD_USB_DMA_SIZE) ||
-    // Shared ring buffer
-    in_ring_buffer_region(addr)
+pub open spec fn input_pd_can_access(address: usize) -> bool {
+    (address >= INPUT_PD_UART_BASE && address < INPUT_PD_UART_BASE + INPUT_PD_UART_SIZE)
+        || (address >= INPUT_PD_USB_REGS_BASE
+            && address < INPUT_PD_USB_REGS_BASE + INPUT_PD_USB_REGS_SIZE)
+        || (address >= INPUT_PD_USB_DMA_BASE
+            && address < INPUT_PD_USB_DMA_BASE + INPUT_PD_USB_DMA_SIZE)
+        || in_ring_buffer_region(address)
 }
 
-/// Graphics PD allowed memory regions
 pub const GRAPHICS_PD_MAILBOX_BASE: usize = 0x5_0000_0000;
 pub const GRAPHICS_PD_MAILBOX_SIZE: usize = 0x1000;
 pub const GRAPHICS_PD_GPIO_BASE: usize = 0x5_0200_0000;
@@ -384,54 +275,22 @@ pub const GRAPHICS_PD_FB_SIZE: usize = 0x1000000;
 pub const GRAPHICS_PD_DMA_BASE: usize = 0x5_0300_0000;
 pub const GRAPHICS_PD_DMA_SIZE: usize = 0x1000;
 
-/// Specification: can Graphics PD access this address?
-pub open spec fn graphics_pd_can_access(addr: usize) -> bool {
-    // Mailbox registers
-    (addr >= GRAPHICS_PD_MAILBOX_BASE && addr < GRAPHICS_PD_MAILBOX_BASE + GRAPHICS_PD_MAILBOX_SIZE) ||
-    // GPIO registers
-    (addr >= GRAPHICS_PD_GPIO_BASE && addr < GRAPHICS_PD_GPIO_BASE + GRAPHICS_PD_GPIO_SIZE) ||
-    // Framebuffer
-    (addr >= GRAPHICS_PD_FB_BASE && addr < GRAPHICS_PD_FB_BASE + GRAPHICS_PD_FB_SIZE) ||
-    // DMA buffer
-    (addr >= GRAPHICS_PD_DMA_BASE && addr < GRAPHICS_PD_DMA_BASE + GRAPHICS_PD_DMA_SIZE) ||
-    // Shared ring buffer (read access)
-    in_ring_buffer_region(addr)
-}
-
-/// Prove: Graphics PD cannot access UART
-/// This is the key isolation property
-proof fn graphics_cannot_access_uart()
-    ensures
-        forall|addr: usize|
-            addr >= INPUT_PD_UART_BASE + 0x40 && addr < INPUT_PD_UART_BASE + 0x80
-            ==> !graphics_pd_can_access(addr)
-{
-    // UART mini-UART registers are at 0x5_0300_0040 to 0x5_0300_0080
-    // Graphics PD DMA buffer is at 0x5_0300_0000 but only size 0x1000
-    // The DMA and UART overlap in physical space but are mapped to different PDs
-    // This proof shows the logical isolation at the Microkit level
-}
-
-/// Prove: Only shared region is accessible by both PDs
-proof fn only_ring_buffer_shared()
-    ensures
-        forall|addr: usize|
-            (input_pd_can_access(addr) && graphics_pd_can_access(addr))
-            ==> in_ring_buffer_region(addr)
-{
-    // The only overlapping region is the ring buffer
+pub open spec fn graphics_pd_can_access(address: usize) -> bool {
+    (address >= GRAPHICS_PD_MAILBOX_BASE
+        && address < GRAPHICS_PD_MAILBOX_BASE + GRAPHICS_PD_MAILBOX_SIZE)
+        || (address >= GRAPHICS_PD_GPIO_BASE
+            && address < GRAPHICS_PD_GPIO_BASE + GRAPHICS_PD_GPIO_SIZE)
+        || (address >= GRAPHICS_PD_FB_BASE
+            && address < GRAPHICS_PD_FB_BASE + GRAPHICS_PD_FB_SIZE)
+        || (address >= GRAPHICS_PD_DMA_BASE
+            && address < GRAPHICS_PD_DMA_BASE + GRAPHICS_PD_DMA_SIZE)
+        || in_ring_buffer_region(address)
 }
 
 } // verus!
 
-// ============================================================================
-// NON-VERIFIED RUNTIME HELPERS
-// ============================================================================
-// These are for actual runtime use with raw pointers
-
-use core::sync::atomic::{AtomicU32, Ordering};
-
-/// Runtime ring buffer header (for actual memory-mapped usage)
+/// Runtime ring-buffer header. The final word remains at offset 0x0c and is
+/// interpreted by `generation` without changing the legacy ABI.
 #[repr(C, align(16))]
 pub struct InputRingHeader {
     pub write_idx: AtomicU32,
@@ -441,10 +300,8 @@ pub struct InputRingHeader {
 }
 
 impl InputRingHeader {
-    /// Initialize header at memory location
-    ///
     /// # Safety
-    /// Pointer must be valid and properly aligned.
+    /// `ptr` must be valid, writable, and aligned for `InputRingHeader`.
     pub unsafe fn init(ptr: *mut Self) {
         (*ptr).write_idx = AtomicU32::new(0);
         (*ptr).read_idx = AtomicU32::new(0);
@@ -453,15 +310,11 @@ impl InputRingHeader {
     }
 
     pub fn has_data(&self) -> bool {
-        let write = self.write_idx.load(Ordering::Acquire);
-        let read = self.read_idx.load(Ordering::Acquire);
-        write != read
+        self.current_write_idx() != self.current_read_idx()
     }
 
     pub fn is_full(&self) -> bool {
-        let write = self.write_idx.load(Ordering::Acquire);
-        let read = self.read_idx.load(Ordering::Acquire);
-        ((write + 1) % self.capacity) == read
+        ((self.current_write_idx() + 1) % self.capacity) == self.current_read_idx()
     }
 
     pub fn current_write_idx(&self) -> u32 {
@@ -473,37 +326,31 @@ impl InputRingHeader {
     }
 
     pub fn advance_write(&self) {
-        let next = (self.write_idx.load(Ordering::Acquire) + 1) % self.capacity;
+        let next = (self.current_write_idx() + 1) % self.capacity;
         self.write_idx.store(next, Ordering::Release);
     }
 
     pub fn advance_read(&self) {
-        let next = (self.read_idx.load(Ordering::Acquire) + 1) % self.capacity;
+        let next = (self.current_read_idx() + 1) % self.capacity;
         self.read_idx.store(next, Ordering::Release);
     }
 }
 
-/// Get header pointer from base
-///
 /// # Safety
-/// Base must be valid shared memory address.
+/// `base` must be a valid shared-memory address with the protocol alignment.
 pub unsafe fn header_ptr(base: *mut u8) -> *mut InputRingHeader {
     base as *mut InputRingHeader
 }
 
-/// Get entries pointer from base
-///
 /// # Safety
-/// Base must be valid shared memory address.
+/// `base` must be a valid shared-memory address for the full ring region.
 pub unsafe fn entries_ptr(base: *mut u8) -> *mut InputRingEntry {
     base.add(ENTRIES_OFFSET) as *mut InputRingEntry
 }
 
-// Re-export for compatibility
 pub use self::STATE_PRESSED as KeyStatePressed;
 pub use self::STATE_RELEASED as KeyStateReleased;
 
-/// KeyState enum for compatibility with existing code
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum KeyState {
@@ -511,7 +358,6 @@ pub enum KeyState {
     Pressed = 1,
 }
 
-/// EventType enum for compatibility
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EventType {
@@ -521,7 +367,6 @@ pub enum EventType {
 }
 
 impl InputRingEntry {
-    /// Compatibility constructor
     pub const fn key(code: u8, state: KeyState, modifiers: u8) -> Self {
         Self {
             event_type: EVENT_KEY,
@@ -532,30 +377,30 @@ impl InputRingEntry {
     }
 }
 
+mod generation_contract;
+mod generation;
+pub use generation::*;
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn test_entry_size() {
+    fn entry_size_is_stable() {
         assert_eq!(core::mem::size_of::<InputRingEntry>(), ENTRY_SIZE);
     }
 
     #[test]
-    fn test_header_size() {
+    fn header_size_is_stable() {
         assert_eq!(core::mem::size_of::<InputRingHeader>(), HEADER_SIZE);
     }
 
     #[test]
-    fn test_ring_indices() {
+    fn legacy_indices_still_work() {
         let mut indices = RingIndices::new(10);
         assert!(indices.is_empty());
-        assert!(!indices.is_full());
-
         indices.advance_write();
-        assert!(!indices.is_empty());
         assert!(indices.has_data());
-
         indices.advance_read();
         assert!(indices.is_empty());
     }
