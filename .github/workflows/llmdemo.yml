@@ -1,0 +1,160 @@
+name: WP-6 LLM Demo
+
+on:
+  push:
+    branches: [main, "agent/*", "claude/*"]
+    paths:
+      - "sel4-microkernel/rpi4-llm-loader/**"
+      - "sel4-microkernel/rpi4-llm/**"
+      - ".github/workflows/llmdemo.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "sel4-microkernel/rpi4-llm-loader/**"
+      - "sel4-microkernel/rpi4-llm/**"
+      - ".github/workflows/llmdemo.yml"
+
+env:
+  # Keep in sync with .github/workflows/verus-generation.yml
+  VERUS_RELEASE: "0.2026.06.28.1847ab3"
+  VERUS_RUST: "1.96.0"
+  # Pinned output of llmdemo-host on the committed fixture (determinism
+  # is a tested property; re-pin when the fixture is regenerated).
+  TOKENS_SHA256: "d6271ec4ebcfa51bec2664c1d784fbba7911eb6cb31b4f93b1a57adf0ee968bb"
+
+jobs:
+  loader:
+    name: GGUF Loader
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust nightly
+        uses: dtolnay/rust-toolchain@master
+        with:
+          # Pinned nightly - keep in sync with sel4-microkernel/rust-toolchain.toml
+          toolchain: nightly-2026-07-02
+          components: rust-src, rustfmt, clippy
+          targets: aarch64-unknown-none
+
+      - name: Build no_std (aarch64-unknown-none)
+        working-directory: sel4-microkernel/rpi4-llm-loader
+        run: cargo build --target aarch64-unknown-none
+
+      - name: Test (bounds, malformed corpus, fixture pin)
+        working-directory: sel4-microkernel/rpi4-llm-loader
+        run: cargo test
+
+      - name: Clippy
+        working-directory: sel4-microkernel/rpi4-llm-loader
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Check formatting
+        working-directory: sel4-microkernel/rpi4-llm-loader
+        run: cargo fmt --check
+
+  engine:
+    name: Engine + llmdemo
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust nightly
+        uses: dtolnay/rust-toolchain@master
+        with:
+          # Pinned nightly - keep in sync with sel4-microkernel/rust-toolchain.toml
+          toolchain: nightly-2026-07-02
+          components: rust-src, rustfmt, clippy
+          targets: aarch64-unknown-none
+
+      - name: Build no_std (aarch64-unknown-none)
+        working-directory: sel4-microkernel/rpi4-llm
+        run: cargo build --target aarch64-unknown-none
+
+      - name: Test (reference cross-check, determinism, arenas, tokenizer)
+        working-directory: sel4-microkernel/rpi4-llm
+        run: cargo test --workspace
+
+      - name: Run llmdemo (>=32 tokens, pinned output hash)
+        working-directory: sel4-microkernel/rpi4-llm
+        run: |
+          set -o pipefail
+          cargo run --release -p llmdemo-host -- \
+            fixtures/tinystories-260k-f32.gguf --steps 64 \
+            --expect "$TOKENS_SHA256" | tee demo.log
+          grep -q "TOKENS SHA256 $TOKENS_SHA256" demo.log
+          tokens=$(sed -n 's/^generated \([0-9]*\) tokens$/\1/p' demo.log)
+          test "$tokens" -ge 32
+
+      - name: Clippy
+        working-directory: sel4-microkernel/rpi4-llm
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Check formatting
+        working-directory: sel4-microkernel/rpi4-llm
+        run: cargo fmt --all --check
+
+  verus:
+    name: Verus (loader bounds surface)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pinned Verus Rust runtime
+        run: rustup toolchain install "${VERUS_RUST}" --profile minimal
+
+      - name: Download pinned Verus release
+        run: |
+          set -euo pipefail
+          api="https://api.github.com/repos/verus-lang/verus/releases/tags/release%2F${VERUS_RELEASE}"
+          asset_url="$(curl --fail --silent --show-error --location "$api" \
+            | jq -r '.assets[] | select(.name | endswith("x86-linux.zip")) | .browser_download_url' \
+            | head -n1)"
+          test -n "$asset_url"
+          curl --fail --location --retry 3 --output /tmp/verus.zip "$asset_url"
+          mkdir -p /tmp/verus
+          unzip -q /tmp/verus.zip -d /tmp/verus
+          find /tmp/verus -type f -name verus -exec chmod +x {} \;
+
+      - name: Verify loader bounds surface
+        run: |
+          set -o pipefail
+          VERUS_BIN="$(find /tmp/verus -type f -name verus | head -n1)"
+          test -x "$VERUS_BIN"
+          "$VERUS_BIN" --crate-type lib \
+            sel4-microkernel/rpi4-llm-loader/src/bounds.rs \
+            2>&1 | tee verus-llm-loader.log
+
+      - name: Upload Verus diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: wp6-verus-diagnostics
+          path: verus-*.log
+          if-no-files-found: warn
+
+  fuzz:
+    name: Fuzz (loader parse, 60s)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust nightly
+        uses: dtolnay/rust-toolchain@master
+        with:
+          # Pinned nightly - keep in sync with sel4-microkernel/rust-toolchain.toml
+          toolchain: nightly-2026-07-02
+          components: rust-src
+
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz --locked
+
+      - name: Seed corpus with the committed fixture
+        working-directory: sel4-microkernel/rpi4-llm-loader
+        run: |
+          mkdir -p fuzz/corpus/parse
+          cp ../rpi4-llm/fixtures/tinystories-260k-f32.gguf fuzz/corpus/parse/
+
+      - name: Run fuzzer
+        working-directory: sel4-microkernel/rpi4-llm-loader
+        run: cargo fuzz run parse -- -max_total_time=60
