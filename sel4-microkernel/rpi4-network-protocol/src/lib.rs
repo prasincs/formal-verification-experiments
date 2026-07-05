@@ -1,7 +1,7 @@
 //! Shared network IPC protocol between the Network PD and client PDs.
 //!
 //! The existing `NetSharedMemory` layout is retained. Restart-aware generation
-//! APIs are additive and live alongside the legacy TX/RX rings.
+//! and verified SPSC ownership APIs are additive.
 
 #![no_std]
 
@@ -82,10 +82,8 @@ pub mod ring_flags {
     /// Producer has finished the entry and transferred ownership to consumer.
     pub const VALID: u32 = 1 << 0;
 
-    /// Reserved ABI bit. The SPSC protocol does not use this as a lock: index
-    /// ownership already grants exclusive access to the producer's current
-    /// free slot and the consumer's current valid slot. New code must not set
-    /// `IN_USE`; it remains defined only for source/ABI compatibility.
+    /// Reserved ABI bit. SPSC index ownership plus `VALID` fully determines
+    /// ownership; new code must not set this second mutable-owner bit.
     #[deprecated(note = "SPSC index ownership makes IN_USE unnecessary; do not set it")]
     pub const IN_USE: u32 = 1 << 1;
 
@@ -207,6 +205,8 @@ impl Default for RxRingEntry {
 mod generation_contract;
 mod generation;
 pub use generation::*;
+
+pub mod proof;
 
 #[cfg(test)]
 mod compatibility_tests {

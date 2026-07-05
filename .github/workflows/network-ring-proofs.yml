@@ -1,0 +1,69 @@
+name: Network Ring Proofs
+
+on:
+  push:
+    branches: [main, "agent/*", "claude/*"]
+    paths:
+      - "sel4-microkernel/rpi4-network-protocol/**"
+      - ".github/workflows/network-ring-proofs.yml"
+  pull_request:
+    branches: [main, "agent/wp4-generation-rings"]
+    paths:
+      - "sel4-microkernel/rpi4-network-protocol/**"
+      - ".github/workflows/network-ring-proofs.yml"
+
+env:
+  VERUS_RELEASE: "0.2026.06.28.1847ab3"
+  VERUS_RUST: "1.96.0"
+
+jobs:
+  network-ring:
+    name: Verify concrete TX/RX ownership
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pinned project nightly
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-07-02
+
+      - name: Install pinned Verus runtime
+        run: rustup toolchain install "${VERUS_RUST}" --profile minimal
+
+      - name: Build and test protocol crate
+        run: |
+          cargo build --manifest-path sel4-microkernel/rpi4-network-protocol/Cargo.toml
+          cargo test --manifest-path sel4-microkernel/rpi4-network-protocol/Cargo.toml
+
+      - name: Download pinned Verus release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          api="https://api.github.com/repos/verus-lang/verus/releases/tags/release%2F${VERUS_RELEASE}"
+          asset_url="$(curl --fail --silent --show-error --location --retry 3 \
+            --header "Authorization: Bearer ${GH_TOKEN}" "$api" \
+            | jq -r '.assets[] | select(.name | endswith("x86-linux.zip")) | .browser_download_url' \
+            | head -n1)"
+          test -n "$asset_url"
+          curl --fail --location --retry 3 --output /tmp/verus.zip "$asset_url"
+          mkdir -p /tmp/verus
+          unzip -q /tmp/verus.zip -d /tmp/verus
+          find /tmp/verus -type f -name verus -exec chmod +x {} \;
+
+      - name: Verify concrete ring contract
+        run: |
+          set -o pipefail
+          VERUS_BIN="$(find /tmp/verus -type f -name verus | head -n1)"
+          "$VERUS_BIN" --crate-type lib \
+            sel4-microkernel/rpi4-network-protocol/src/ring_contract.rs \
+            2>&1 | tee network-ring-verus.log
+
+      - name: Upload verification log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: network-ring-verus-log
+          path: network-ring-verus.log
+          if-no-files-found: warn
