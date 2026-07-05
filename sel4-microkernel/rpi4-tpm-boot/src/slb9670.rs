@@ -404,19 +404,28 @@ impl Slb9670Tpm {
         // Read response
         self.buffer_pos = 0;
         unsafe {
-            // Read header first (10 bytes minimum)
-            self.tis_read_fifo(&mut self.buffer[0..10]);
+            // Read header first (10 bytes minimum) into a local: the FIFO
+            // helpers borrow &self, so they cannot write into self.buffer
+            // directly.
+            let mut header = [0u8; 10];
+            self.tis_read_fifo(&mut header);
+            self.buffer[0..10].copy_from_slice(&header);
 
             // Parse response size from header
-            let size = u32::from_be_bytes([
-                self.buffer[2],
-                self.buffer[3],
-                self.buffer[4],
-                self.buffer[5],
-            ]) as usize;
+            let size = u32::from_be_bytes([header[2], header[3], header[4], header[5]]) as usize;
 
-            if size > 10 && size <= self.buffer.len() {
-                self.tis_read_fifo(&mut self.buffer[10..size]);
+            // The size field comes from the device — never trust it: a
+            // value outside [10, buffer.len()] would otherwise put
+            // buffer_pos out of bounds and panic in response().
+            if size < 10 || size > self.buffer.len() {
+                self.state = TpmState::Error(TpmRc::Failure);
+                return Err(TpmRc::Failure);
+            }
+
+            if size > 10 {
+                let mut body = self.buffer; // [u8; 4096] is Copy
+                self.tis_read_fifo(&mut body[10..size]);
+                self.buffer = body;
             }
 
             self.buffer_pos = size;
@@ -453,7 +462,7 @@ impl Slb9670Tpm {
         self.request_locality(0)?;
 
         // Build TPM2_Startup command
-        let cmd = build_startup_command(TPM2_SU_CLEAR);
+        let cmd = crate::commands::build_startup(TPM2_SU_CLEAR);
         self.execute_command(&cmd)?;
 
         self.state = TpmState::Ready;
@@ -462,32 +471,32 @@ impl Slb9670Tpm {
 
     /// Run TPM self-test
     pub fn self_test(&mut self, full_test: bool) -> TpmResult<()> {
-        let cmd = build_self_test_command(full_test);
+        let cmd = crate::commands::build_self_test(full_test);
         self.execute_command(&cmd)?;
         Ok(())
     }
 
     /// Extend a PCR with a SHA-256 digest
     pub fn pcr_extend(&mut self, pcr_index: u8, digest: &Sha256Digest) -> TpmResult<()> {
-        if pcr_index > MAX_PCR_INDEX {
-            return Err(TpmRc::BadParam);
-        }
-
-        let cmd = build_pcr_extend_command(pcr_index, digest);
+        // build_pcr_extend validates the index (the previous local
+        // builder emitted a truncated 51-byte command).
+        let cmd = crate::commands::build_pcr_extend(pcr_index, digest)?;
         self.execute_command(&cmd)?;
         Ok(())
     }
 
     /// Read PCR values
     pub fn pcr_read(&mut self, pcr_selection: u32) -> TpmResult<[Sha256Digest; PCR_COUNT]> {
-        let cmd = build_pcr_read_command(pcr_selection);
+        let selection = crate::pcr::PcrSelection::from_bitmap(pcr_selection);
+        let cmd = crate::commands::build_pcr_read(selection);
         self.execute_command(&cmd)?;
 
-        // Parse response (simplified)
+        // Parse the digests the TPM returned; unread PCRs stay zero.
+        let result = crate::commands::parse_pcr_read(self.response())?;
         let mut pcrs = [Sha256Digest::zero(); PCR_COUNT];
-
-        // Response parsing would go here
-        // For now, return zeros
+        for &(index, digest) in result.values() {
+            pcrs[index as usize] = digest;
+        }
 
         Ok(pcrs)
     }
@@ -498,16 +507,15 @@ impl Slb9670Tpm {
             return Err(TpmRc::BadParam);
         }
 
-        let cmd = build_get_random_command(buf.len() as u16);
-        let resp_len = self.execute_command(&cmd)?;
+        let cmd = crate::commands::build_get_random(buf.len() as u16);
+        self.execute_command(&cmd)?;
 
-        // Copy random data from response
-        if resp_len >= 12 + buf.len() {
-            buf.copy_from_slice(&self.buffer[12..12 + buf.len()]);
-            Ok(buf.len())
-        } else {
-            Err(TpmRc::Failure)
+        let random = crate::commands::parse_get_random(self.response())?;
+        if random.len() < buf.len() {
+            return Err(TpmRc::Failure);
         }
+        buf.copy_from_slice(&random[..buf.len()]);
+        Ok(buf.len())
     }
 
     /// Read vendor/device ID
@@ -539,95 +547,7 @@ impl Slb9670Tpm {
     }
 }
 
-// ============================================================================
-// COMMAND BUILDERS
-// ============================================================================
-
-/// Build TPM2_Startup command
-fn build_startup_command(startup_type: u16) -> [u8; 12] {
-    let mut cmd = [0u8; 12];
-
-    // Tag
-    cmd[0..2].copy_from_slice(&TPM2_ST_NO_SESSIONS.to_be_bytes());
-    // Size
-    cmd[2..6].copy_from_slice(&12u32.to_be_bytes());
-    // Command code
-    cmd[6..10].copy_from_slice(&TPM2_CC_STARTUP.to_be_bytes());
-    // Startup type
-    cmd[10..12].copy_from_slice(&startup_type.to_be_bytes());
-
-    cmd
-}
-
-/// Build TPM2_SelfTest command
-fn build_self_test_command(full_test: bool) -> [u8; 11] {
-    let mut cmd = [0u8; 11];
-
-    cmd[0..2].copy_from_slice(&TPM2_ST_NO_SESSIONS.to_be_bytes());
-    cmd[2..6].copy_from_slice(&11u32.to_be_bytes());
-    cmd[6..10].copy_from_slice(&TPM2_CC_SELF_TEST.to_be_bytes());
-    cmd[10] = if full_test { 1 } else { 0 };
-
-    cmd
-}
-
-/// Build TPM2_PCR_Extend command
-fn build_pcr_extend_command(pcr_index: u8, digest: &Sha256Digest) -> [u8; 51] {
-    let mut cmd = [0u8; 51];
-
-    // Header
-    cmd[0..2].copy_from_slice(&TPM2_ST_SESSIONS.to_be_bytes());
-    cmd[2..6].copy_from_slice(&51u32.to_be_bytes());
-    cmd[6..10].copy_from_slice(&TPM2_CC_PCR_EXTEND.to_be_bytes());
-
-    // PCR handle (0x00000000 + pcr_index)
-    cmd[10..14].copy_from_slice(&(pcr_index as u32).to_be_bytes());
-
-    // Authorization (password session, empty auth)
-    cmd[14..18].copy_from_slice(&9u32.to_be_bytes()); // Auth size
-    cmd[18..22].copy_from_slice(&0x40000009u32.to_be_bytes()); // TPM_RS_PW
-    cmd[22..24].copy_from_slice(&0u16.to_be_bytes()); // Nonce size
-    cmd[24] = 0; // Session attributes
-    cmd[25..27].copy_from_slice(&0u16.to_be_bytes()); // Auth size
-
-    // TPML_DIGEST_VALUES
-    cmd[27..31].copy_from_slice(&1u32.to_be_bytes()); // Count = 1
-
-    // TPMT_HA
-    cmd[31..33].copy_from_slice(&TPM2_ALG_SHA256.to_be_bytes());
-    cmd[33..65].copy_from_slice(&digest.bytes);
-
-    // Note: Array is 51 bytes but command uses 65, would need larger buffer
-    // This is simplified - real implementation needs proper sizing
-
-    cmd
-}
-
-/// Build TPM2_PCR_Read command
-fn build_pcr_read_command(pcr_selection: u32) -> [u8; 17] {
-    let mut cmd = [0u8; 17];
-
-    cmd[0..2].copy_from_slice(&TPM2_ST_NO_SESSIONS.to_be_bytes());
-    cmd[2..6].copy_from_slice(&17u32.to_be_bytes());
-    cmd[6..10].copy_from_slice(&TPM2_CC_PCR_READ.to_be_bytes());
-
-    // PCR selection
-    cmd[10..14].copy_from_slice(&1u32.to_be_bytes()); // Count
-    cmd[14..16].copy_from_slice(&TPM2_ALG_SHA256.to_be_bytes());
-    cmd[16] = 3; // Size of select (3 bytes = 24 PCRs)
-    // Would need more bytes for actual selection bitmap
-
-    cmd
-}
-
-/// Build TPM2_GetRandom command
-fn build_get_random_command(bytes_requested: u16) -> [u8; 12] {
-    let mut cmd = [0u8; 12];
-
-    cmd[0..2].copy_from_slice(&TPM2_ST_NO_SESSIONS.to_be_bytes());
-    cmd[2..6].copy_from_slice(&12u32.to_be_bytes());
-    cmd[6..10].copy_from_slice(&TPM2_CC_GET_RANDOM.to_be_bytes());
-    cmd[10..12].copy_from_slice(&bytes_requested.to_be_bytes());
-
-    cmd
-}
+// Command construction and response parsing live in `crate::commands`
+// (transport-agnostic, shared with the generic `Tpm<T: TpmTransport>`
+// layer). The private builders that used to sit here included a
+// truncated 51-byte PCR_Extend command that panicked on use.

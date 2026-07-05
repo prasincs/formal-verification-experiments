@@ -1,0 +1,32 @@
+[package]
+name = "update-capsule"
+version = "0.1.0"
+edition = "2021"
+description = "Verified update capsule format (workplan IC-2): totality-parsed header + verification pipeline producing one-shot install authorizations"
+
+[workspace]
+members = ["cli"]
+exclude = ["fuzz"]
+
+[dependencies]
+# Verus verification support (same pinned version as the other verified crates)
+verus_builtin_macros = "=0.0.0-2025-12-07-0054"
+verus_builtin = "=0.0.0-2025-12-07-0054"
+vstd = { version = "=0.0.0-2025-12-07-0054", default-features = false }
+
+# Formally verified crypto (HACL* extractions via libcrux) — see README
+# "Crypto backend" for the seam if these ever fail to build on the pinned
+# nightly.
+libcrux-sha2 = { version = "0.0.7", default-features = false }
+libcrux-ed25519 = { version = "0.0.8", default-features = false }
+
+[features]
+default = []
+# Capsule construction + signing (for the host CLI and tests; verifier PDs
+# must not enable this).
+mint = []
+# Enable Verus verification (requires verus toolchain)
+verus = []
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(verus_keep_ghost)'] }

@@ -1,0 +1,13 @@
+[package]
+name = "update-capsule-cli"
+version = "0.1.0"
+edition = "2021"
+description = "Host CLI to generate keys and mint/inspect/verify signed update capsules (WP-8)"
+
+[[bin]]
+name = "update-capsule-cli"
+path = "src/main.rs"
+
+[dependencies]
+update-capsule = { path = "..", features = ["mint"] }
+getrandom = "0.3"
