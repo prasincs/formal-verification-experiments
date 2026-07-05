@@ -1,0 +1,12 @@
+version = 1
+
+[[exclusive]]
+region = "virtio_mmio"
+pd = "network"
+
+[[exclusive]]
+region = "net_dma"
+pd = "network"
+
+[[dma_capable]]
+pd = "network"
