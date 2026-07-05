@@ -562,7 +562,7 @@ full spec when scheduled.
 | WP | Branch | PR | Status |
 |---|---|---|---|
 | WP-0 | — | — | not started |
-| WP-1 | — | — | not started |
+| WP-1 | `agent/wp1-smoltcp-time` | #25 | DHCP/ICMP in QEMU; timer-driven renewal follow-up tracked |
 | WP-3 | — | — | not started |
 | WP-4 | — | — | not started |
 | WP-5 | — | — | not started |

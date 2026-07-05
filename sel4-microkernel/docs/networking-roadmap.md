@@ -56,23 +56,33 @@ DMA + client wiring (`a79bbfc`), virtio-net + CI boot test (`6a2a73f`).
       TX ring, slirp reply back through the RX ring, IRQ 79 exercised
 - [x] Toolchain drift fixes so all CI builds work on current nightlies
 
-## Phase 4: IP Stack — ❌ Next Up
+## Phase 4: IP Stack — 🚧 DHCP/ICMP in QEMU
 
 The `net-stack-lwip` / `net-stack-picotcp` cargo features are declared
 but empty (`NET_STACK` in the build system selects between stubs).
 Recommendation: **smoltcp** instead — pure no_std Rust, fits the
 codebase, avoids C FFI in a PD.
 
-- [ ] Decide stack: smoltcp (recommended) vs lwIP vs picoTCP
-- [ ] Implement `smoltcp::phy::Device` over `NetworkDriver`
-- [ ] Time source for stack timers (e.g. `CNTVCT_EL0`/`CNTFRQ_EL0` —
-      no timer driver exists in the PD today)
-- [ ] DHCP client (testable against QEMU slirp's built-in DHCP in CI)
-- [ ] ICMP echo (CI: ping 10.0.2.2)
+- [x] Decide stack: smoltcp, with lwIP/picoTCP retired
+- [x] Implement `smoltcp::phy::Device` over `NetworkDriver`
+- [x] Time source for stack timers: `CNTVCT_EL0`/`CNTFRQ_EL0` when
+      available, with a QEMU logical-time fallback
+- [x] DHCP client (testable against QEMU slirp's built-in DHCP in CI)
+- [x] ICMP echo (CI: ping 10.0.2.2)
+- [ ] Replace or prove the QEMU logical-time fallback: current QEMU
+      `ipdemo` builds use `qemu-time-fallback` because direct
+      `CNTVCT_EL0`/`CNTFRQ_EL0` reads trap under the current seL4/QEMU
+      configuration (likely no `EXPORT_VCNT_USER`). Either demonstrate
+      and document the exact config bit needed for direct reads, or add
+      a Timer PD/timer-IRQ driven time source.
+- [ ] Drive smoltcp polls from a timer as well as virtio IRQs. The QEMU
+      demo currently polls on startup and virtio interrupts, so DHCP
+      retransmission and lease renewal are not handled if packets are
+      lost or the lease expires.
 - [ ] TCP/UDP socket service exposed to client PDs — extend
       `rpi4-network-protocol` (the `NetRequestType`/`NetResponseType`
       message types are defined but not yet carried over any channel)
-- [ ] Retire or implement the `net-stack-lwip`/`net-stack-picotcp`
+- [x] Retire or implement the `net-stack-lwip`/`net-stack-picotcp`
       feature declarations once the decision is made
 
 ## Phase 5: Hardware Validation (RPi4) — ❌ Blocked on Hardware
@@ -158,7 +168,8 @@ ring protocol is not.
 | Driver feature combos compile (`ethernet`/`wifi`/`both`/`virtio`) | local cargo | ✅ manual (not in CI) |
 | GENET on real RPi4 | hardware | ❌ pending |
 | WiFi anything | hardware | ❌ pending |
-| DHCP/ICMP/TCP via slirp | CI | ❌ pending Phase 4 |
+| DHCP/ICMP via slirp | CI (`qemu-ipdemo`) | ✅ automated |
+| TCP via slirp | CI | ❌ pending Phase 4 |
 
 Candidate CI additions: build the tvdemo `NET_DRIVER=ethernet` image and
 the driver feature-combo compile checks (both currently manual-only).
