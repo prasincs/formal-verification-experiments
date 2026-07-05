@@ -1,0 +1,12 @@
+version = 1
+
+[[exclusive]]
+region = "spi0_regs"
+pd = "display"
+
+[[exclusive]]
+region = "gpio_regs"
+pd = "display"
+
+[[dma_capable]]
+pd = "display"

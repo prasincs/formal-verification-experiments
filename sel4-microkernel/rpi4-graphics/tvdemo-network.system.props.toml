@@ -1,0 +1,38 @@
+version = 1
+
+[[shared_only]]
+pds = ["input", "graphics"]
+regions = ["input_ring"]
+
+[[shared_only]]
+pds = ["network", "graphics"]
+regions = ["net_ring"]
+
+[[exclusive]]
+region = "genet_regs"
+pd = "network"
+
+[[exclusive]]
+region = "net_dma"
+pd = "network"
+
+[[only_channels]]
+pd = "input"
+peers = ["graphics"]
+
+[[only_channels]]
+pd = "network"
+peers = ["graphics"]
+
+[[only_channels]]
+pd = "graphics"
+peers = ["input", "network"]
+
+[[dma_capable]]
+pd = "input"
+
+[[dma_capable]]
+pd = "network"
+
+[[dma_capable]]
+pd = "graphics"

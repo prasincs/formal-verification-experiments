@@ -1,0 +1,27 @@
+version = 1
+
+[[shared_only]]
+pds = ["network", "netclient"]
+regions = ["net_ring"]
+
+[[exclusive]]
+region = "virtio_mmio"
+pd = "network"
+
+[[exclusive]]
+region = "net_dma"
+pd = "network"
+
+[[no_device_mmio]]
+pd = "netclient"
+
+[[only_channels]]
+pd = "network"
+peers = ["netclient"]
+
+[[only_channels]]
+pd = "netclient"
+peers = ["network"]
+
+[[dma_capable]]
+pd = "network"

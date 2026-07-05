@@ -1,0 +1,38 @@
+name: Microkit Authority Graph
+
+on:
+  push:
+    branches: [main, "agent/*", "claude/*"]
+    paths:
+      - "sel4-microkernel/**/*.system"
+      - "sel4-microkernel/**/*.system.props.toml"
+      - "sel4-microkernel/tools/system-check/**"
+      - ".github/workflows/system-check.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "sel4-microkernel/**/*.system"
+      - "sel4-microkernel/**/*.system.props.toml"
+      - "sel4-microkernel/tools/system-check/**"
+      - ".github/workflows/system-check.yml"
+
+jobs:
+  system-check:
+    name: Check capability topology
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pinned Rust nightly
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-07-02
+
+      - name: Test checker and reviewed failure fixtures
+        working-directory: sel4-microkernel/tools/system-check
+        run: cargo test --all-targets --quiet
+
+      - name: Check every Microkit system
+        run: |
+          cargo run --quiet --manifest-path sel4-microkernel/tools/system-check/Cargo.toml -- \
+            --all sel4-microkernel

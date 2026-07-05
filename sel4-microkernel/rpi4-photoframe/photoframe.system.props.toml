@@ -1,0 +1,19 @@
+version = 1
+
+[[shared_only]]
+pds = ["input", "photoframe"]
+regions = ["input_ring"]
+
+[[only_channels]]
+pd = "input"
+peers = ["photoframe"]
+
+[[only_channels]]
+pd = "photoframe"
+peers = ["input"]
+
+[[dma_capable]]
+pd = "input"
+
+[[dma_capable]]
+pd = "photoframe"

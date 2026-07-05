@@ -1,0 +1,4 @@
+version = 1
+
+[[dma_capable]]
+pd = "graphics"
