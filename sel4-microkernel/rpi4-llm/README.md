@@ -83,7 +83,10 @@ greedy config, and deterministic reexecution.
 Done: verified-surface loader, arena engine, tokenizer, host demo with
 pinned deterministic output, malformed corpus + fuzz target, reference
 cross-check, QEMU PD product, signed receipts, host reexecution
-verifier, CI. Follow-ups tracked in the workplan: pinning the chosen
-stories15M-class artifact, production receipt-key hierarchy, quantized
-kernels (Q8_0/Q4_0), and extending Verus totality through the container
-walk.
+verifier, CI.
+
+Follow-ups are tracked in [`docs/llm-roadmap.md`](../docs/llm-roadmap.md):
+pinning the chosen stories15M-class artifact, moving model bytes out of
+the PD image, production receipt-key hierarchy, agent-core request
+protocol, quantized kernels (Q8_0/Q4_0), and coordination with
+networking, capsules, TPM/attestation, policy, and CI.

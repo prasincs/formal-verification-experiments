@@ -48,8 +48,9 @@ Wave 1 branches.
    assumptions as TODOs in the style of `docs/networking-roadmap.md`
    Phase 5.
 8. **Update the paperwork.** Each WP checks off / adds items in
-   `docs/networking-roadmap.md` where relevant and adds a row to the
-   status table in this file's tracking section via its PR.
+   `docs/networking-roadmap.md` and `docs/llm-roadmap.md` where relevant
+   and adds a row to the status table in this file's tracking section
+   via its PR.
 
 ---
 
@@ -394,9 +395,9 @@ policy, Verus-verifying the checker (nice-to-have, not required).
 **Goal:** the novel artifact — a no_std inference PD with a verified
 loader, running a tiny model in QEMU CI. Design doc §"Local inference",
 Route B.
-**Read first:** that section; `docs/decoder-allocation-security.md`
-(the allocation discipline is normative); `rpi4-photoframe/src/` for
-how decoders integrate.
+**Read first:** that section; `docs/llm-roadmap.md`;
+`docs/decoder-allocation-security.md` (the allocation discipline is
+normative); `rpi4-photoframe/src/` for how decoders integrate.
 **Deliverables:**
 - `rpi4-llm-loader/`: no_std GGUF parser. Verus totality proofs: all
   reads in-bounds, no overflow in size arithmetic, every input either
@@ -566,7 +567,7 @@ full spec when scheduled.
 | WP-3 | `agent/wp3-supervisor-restart` | #26 | hierarchical supervisor restart demo; QEMU supdemo validation |
 | WP-4 | — | — | not started |
 | WP-5 | — | — | not started |
-| WP-6 | `claude/wp6-small-llm-gguf-dm64d1` | — | loader + arena engine + deterministic host/QEMU demo on a committed GGUF, signed receipts, and host re-execution verifier; stories15M-class artifact and quantized kernels follow-up |
+| WP-6 | `claude/wp6-small-llm-gguf-dm64d1` | — | loader + arena engine + deterministic host/QEMU demo on a committed GGUF, signed receipts, and host re-execution verifier; LLM roadmap tracks stories15M-class artifact, model-as-data, quantized kernels, and coordination with networking/capsules/agent-core |
 | WP-7 | `claude/wave-1-formal-verification-zsee9k` | #28 | in review |
 | WP-8 | `claude/wave-1-formal-verification-zsee9k` | #28 | in review |
 | WP-10 | `agent/wp10-ab-update-model` | [#21](https://github.com/prasincs/formal-verification-experiments/pull/21) | in review |

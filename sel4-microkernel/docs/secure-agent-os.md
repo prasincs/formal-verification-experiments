@@ -918,7 +918,9 @@ routing) is post-Phase-C, but Route B's core — verified GGUF loader +
 arena engine + tiny embedded model in a QEMU CI test — has no
 dependency on the supervisor or networking and can start immediately as
 its own track. It's also the strongest standalone artifact this repo
-could publish. Route A waits on libvmm bring-up and is optional.
+could publish. `docs/llm-roadmap.md` tracks the model-size, receipt,
+capsule, agent-core, and networking coordination points for that track.
+Route A waits on libvmm bring-up and is optional.
 
 ## Gap analysis
 
