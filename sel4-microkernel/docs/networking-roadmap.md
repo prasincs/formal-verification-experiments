@@ -151,6 +151,19 @@ ring protocol now is too.
       determines ownership (see `NETWORK_RING_PROOF.md`)
 - [ ] Request/response channel (MAC, link status, stats queries are
       defined in the protocol but only the shared header is served)
+- [ ] netclient: replace the slirp fixture constants (`GUEST_IP`,
+      `GATEWAY_IP` in `netclient_pd.rs`) with DHCP-discovered
+      configuration, as `ipdemo_pd` already does — the constants are
+      pinned to QEMU's `-netdev user` defaults and to the boot-log grep
+      in `qemu-mockpi.yml`, so both must change together
+- [ ] Thread network addressing through the Microkit system description
+      (a read-only config memory region per client PD) instead of
+      compile-time constants, so one binary serves differently
+      configured deployments
+- [ ] Model the wrapping u32 counters directly in the Verus ring
+      contract (today `SpscCounters` abstracts them as monotonic u64,
+      sound because 64 divides 2^32 and occupancy uses `wrapping_sub` —
+      see `NETWORK_RING_PROOF.md`)
 - [ ] Graphics/tvdemo UI: surface link status + IP in the About screen
 - [ ] Modern (non-legacy) virtio-mmio support, `VIRTIO_NET_F_STATUS`
       link detection
