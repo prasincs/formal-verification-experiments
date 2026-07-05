@@ -563,7 +563,7 @@ full spec when scheduled.
 |---|---|---|---|
 | WP-0 | — | — | not started |
 | WP-1 | `agent/wp1-smoltcp-time` | #25 | DHCP/ICMP in QEMU; timer-driven renewal follow-up tracked |
-| WP-3 | — | — | not started |
+| WP-3 | `agent/wp3-supervisor-restart` | #26 | hierarchical supervisor restart demo; QEMU supdemo validation |
 | WP-4 | — | — | not started |
 | WP-5 | — | — | not started |
 | WP-6 | — | — | not started |
