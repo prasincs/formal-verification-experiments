@@ -1,0 +1,51 @@
+name: A/B Update Model
+
+on:
+  push:
+    branches: [main, "agent/*", "claude/*"]
+    paths:
+      - "sel4-microkernel/formal/ab-update/**"
+      - ".github/workflows/ab-update-model.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "sel4-microkernel/formal/ab-update/**"
+      - ".github/workflows/ab-update-model.yml"
+
+env:
+  # Pinned: a TLC behavior change must not silently change what this
+  # gate proves. Bump deliberately, updating the checksum alongside.
+  TLA_VERSION: v1.7.4
+  TLA_SHA256: "936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88"
+
+jobs:
+  tlc:
+    name: Check crash safety
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download TLC (pinned)
+        run: |
+          curl --fail --location --retry 3 --output /tmp/tla2tools.jar \
+            "https://github.com/tlaplus/tlaplus/releases/download/${TLA_VERSION}/tla2tools.jar"
+          actual="$(sha256sum /tmp/tla2tools.jar | cut -d' ' -f1)"
+          echo "tla2tools.jar ${TLA_VERSION} sha256: ${actual}"
+          if [[ -n "${TLA_SHA256}" && "${actual}" != "${TLA_SHA256}" ]]; then
+            echo "checksum mismatch: expected ${TLA_SHA256}" >&2
+            exit 1
+          fi
+
+      - name: Run model checks
+        working-directory: sel4-microkernel/formal/ab-update
+        env:
+          TLA_JAR: /tmp/tla2tools.jar
+        run: bash check.sh
+
+      - name: Upload TLC logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ab-update-tlc-logs
+          path: sel4-microkernel/formal/ab-update/*.log
+          if-no-files-found: warn

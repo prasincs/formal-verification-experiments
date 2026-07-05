@@ -569,7 +569,7 @@ full spec when scheduled.
 | WP-6 | — | — | not started |
 | WP-7 | — | — | not started |
 | WP-8 | — | — | not started |
-| WP-10 | — | — | not started |
+| WP-10 | `agent/wp10-ab-update-model` | [#21](https://github.com/prasincs/formal-verification-experiments/pull/21) | in review |
 | WP-11 | — | — | not started |
 
 (WP-2 and WP-9 numbers are reserved by the design doc's phasing —
