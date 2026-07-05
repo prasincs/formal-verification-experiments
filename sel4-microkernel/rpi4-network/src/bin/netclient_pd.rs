@@ -22,6 +22,7 @@ use core::fmt;
 
 use sel4_microkit::{debug_println, protection_domain, Channel, ChannelSet, Handler};
 
+use rpi4_network_protocol::arp;
 use rpi4_network_protocol::proof::{consumer_permit, producer_permit, slot_for};
 use rpi4_network_protocol::{ring_flags, NetSharedMemory, NET_CLIENT_CHANNEL_ID};
 
@@ -31,38 +32,18 @@ const NET_RING_VADDR: usize = 0x5_0700_0000;
 /// Channel to the Network PD
 const NET_CHANNEL: Channel = Channel::new(NET_CLIENT_CHANNEL_ID);
 
-/// QEMU user-networking guest address (slirp default)
+/// QEMU user-mode networking (slirp) topology. QEMU fixes these addresses
+/// for a default `-netdev user` and the CI harness relies on them: the boot
+/// test in qemu-mockpi.yml greps the log for the gateway's ARP reply. Change
+/// them only together with that workflow. Clients that need a discovered
+/// (rather than fixture) configuration should use DHCP like `ipdemo_pd`.
 const GUEST_IP: [u8; 4] = [10, 0, 2, 15];
-/// QEMU user-networking gateway address (slirp default)
 const GATEWAY_IP: [u8; 4] = [10, 0, 2, 2];
 
 /// Client state
 struct NetClientHandler {
     shared: *mut NetSharedMemory,
     frames_seen: u32,
-}
-
-/// Build an ARP request for the QEMU gateway into `buf`; returns length
-fn build_arp_request(buf: &mut [u8], mac: &[u8; 6]) -> usize {
-    // Ethernet header: broadcast dst, our src, EtherType 0x0806 (ARP)
-    buf[0..6].fill(0xff);
-    buf[6..12].copy_from_slice(mac);
-    buf[12] = 0x08;
-    buf[13] = 0x06;
-    // ARP: htype 1 (Ethernet), ptype 0x0800 (IPv4), hlen 6, plen 4, op 1
-    buf[14] = 0x00;
-    buf[15] = 0x01;
-    buf[16] = 0x08;
-    buf[17] = 0x00;
-    buf[18] = 6;
-    buf[19] = 4;
-    buf[20] = 0x00;
-    buf[21] = 0x01; // request
-    buf[22..28].copy_from_slice(mac); // sender MAC
-    buf[28..32].copy_from_slice(&GUEST_IP); // sender IP
-    buf[32..38].fill(0x00); // target MAC (unknown)
-    buf[38..42].copy_from_slice(&GATEWAY_IP); // target IP
-    42
 }
 
 impl NetClientHandler {
@@ -101,7 +82,7 @@ impl NetClientHandler {
         };
 
         let entry = &mut shared.tx_ring[permit.slot()];
-        let len = build_arp_request(&mut entry.data, &mac);
+        let len = arp::build_request(&mut entry.data, &mac, &GUEST_IP, &GATEWAY_IP);
         core::ptr::write_volatile(&mut entry.length, len as u16);
         core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
         core::ptr::write_volatile(&mut entry.flags, ring_flags::VALID);
@@ -136,22 +117,20 @@ impl NetClientHandler {
 
             let entry = &mut shared.rx_ring[permit.slot()];
             let len = core::ptr::read_volatile(&entry.length) as usize;
+            let len = len.min(entry.data.len());
             self.frames_seen += 1;
             debug_println!("netclient: received frame ({} bytes)", len);
 
             // Is it the ARP reply from the gateway?
-            let d = &entry.data;
-            if len >= 42
-                && d[12] == 0x08
-                && d[13] == 0x06
-                && d[20] == 0x00
-                && d[21] == 0x02
-                && d[28..32] == GATEWAY_IP
-            {
-                debug_println!(
-                    "netclient: ARP reply from 10.0.2.2 ({:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x})",
-                    d[22], d[23], d[24], d[25], d[26], d[27]
-                );
+            if let Some(reply) = arp::parse_reply(&entry.data[..len]) {
+                if reply.sender_ip == GATEWAY_IP {
+                    let m = reply.sender_mac;
+                    debug_println!(
+                        "netclient: ARP reply from {}.{}.{}.{} ({:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x})",
+                        GATEWAY_IP[0], GATEWAY_IP[1], GATEWAY_IP[2], GATEWAY_IP[3],
+                        m[0], m[1], m[2], m[3], m[4], m[5]
+                    );
+                }
             }
 
             // Hand the entry back to the Network PD before publishing the

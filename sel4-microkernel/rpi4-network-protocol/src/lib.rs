@@ -206,6 +206,7 @@ mod generation_contract;
 mod generation;
 pub use generation::*;
 
+pub mod arp;
 pub mod proof;
 
 #[cfg(test)]
