@@ -561,7 +561,7 @@ full spec when scheduled.
 
 | WP | Branch | PR | Status |
 |---|---|---|---|
-| WP-0 | — | — | not started |
+| WP-0 | `wp0-substrate-decision` | — | partial-adopt memo + reproducible sDDF spike |
 | WP-1 | `agent/wp1-smoltcp-time` | #25 | DHCP/ICMP in QEMU; timer-driven renewal follow-up tracked |
 | WP-3 | `agent/wp3-supervisor-restart` | #26 | hierarchical supervisor restart demo; QEMU supdemo validation |
 | WP-4 | — | — | not started |
