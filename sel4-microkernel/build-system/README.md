@@ -32,6 +32,7 @@ make PRODUCT=graphics PLATFORM=rpi4 sdcard
 | `rpi4` | Raspberry Pi 4 hardware |
 | `qemu-aarch64` | QEMU AArch64 virtual machine |
 | `qemu-riscv64` | QEMU RISC-V 64-bit virtual machine |
+| `android-avf` | Android device: AVF/crosvm deployment + Termux QEMU (see [docs/android-agent-os.md](../docs/android-agent-os.md)) |
 
 ## Targets
 
@@ -43,6 +44,9 @@ make PRODUCT=graphics PLATFORM=rpi4 sdcard
 | `sdcard` | Create SD card image (rpi4 only) |
 | `sdcard-uboot` | SD card with U-Boot |
 | `write-sdcard` | Write image to SD card (requires DEVICE=) |
+| `deploy-avf` | Push image + launcher to Android device via adb (android-avf only) |
+| `run-avf` | Deploy and boot under AVF crosvm (android-avf only; rooted device) |
+| `termux-bundle` | Tarball with image + Termux QEMU launcher (android-avf only) |
 | `firmware` | Download RPi firmware |
 | `uboot` | Build U-Boot |
 | `bootfiles` | Create boot files directory |
@@ -111,6 +115,10 @@ make PRODUCT=hello PLATFORM=qemu-aarch64
 
 # Show what would be built
 make PRODUCT=graphics PLATFORM=rpi4 info
+
+# Android: parity-boot on host QEMU, then stage on a device over adb
+make PRODUCT=llmdemo PLATFORM=android-avf run
+make PRODUCT=llmdemo PLATFORM=android-avf deploy-avf
 ```
 
 ## Backward Compatibility
@@ -138,7 +146,8 @@ build-system/
 │   ├── platforms/             # Platform configurations
 │   │   ├── rpi4.mk
 │   │   ├── qemu-aarch64.mk
-│   │   └── qemu-riscv64.mk
+│   │   ├── qemu-riscv64.mk
+│   │   └── android-avf.mk
 │   └── products/              # Product configurations
 │       ├── graphics.mk
 │       ├── hello.mk
@@ -150,12 +159,17 @@ build-system/
 │   ├── rust.mk                # Cargo/Rust rules
 │   ├── microkit.mk            # Microkit tool rules
 │   ├── qemu.mk                # QEMU run rules
+│   ├── android.mk             # Android deploy rules (adb/crosvm/Termux)
 │   └── sdcard.mk              # SD card creation
 ├── scripts/                    # Build scripts
 │   ├── create-sdcard.sh
 │   ├── download-sdk.sh
 │   ├── build-uboot.sh
-│   └── detect-toolchain.sh
+│   ├── detect-toolchain.sh
+│   └── android/               # Android deploy + on-device launchers
+│       ├── deploy-avf.sh
+│       ├── run-crosvm.sh
+│       └── run-termux-qemu.sh
 ├── kconfig-tool/                # Kconfig resolver + .system preprocessor
 │   ├── Cargo.toml              # std-only, builds with stable Rust
 │   ├── src/lib.rs              # resolve/gensystem logic + unit tests

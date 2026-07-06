@@ -15,6 +15,7 @@ THIS_MAKEFILE := $(lastword $(MAKEFILE_LIST))
 #   rpi4           - Raspberry Pi 4 hardware
 #   qemu-aarch64   - QEMU AArch64 virtual machine
 #   qemu-riscv64   - QEMU RISC-V virtual machine
+#   android-avf    - Android device via AVF/crosvm or Termux QEMU
 #
 # Targets:
 #   all          - Build system image (default)
@@ -22,6 +23,9 @@ THIS_MAKEFILE := $(lastword $(MAKEFILE_LIST))
 #   sdcard       - Create SD card image (rpi4 only)
 #   sdcard-uboot - SD card with U-Boot (rpi4 only)
 #   write-sdcard - Write image to SD card (requires DEVICE=)
+#   deploy-avf   - Push image to Android device via adb (android-avf)
+#   run-avf      - Deploy and boot under crosvm (android-avf, needs root)
+#   termux-bundle - Tarball with image + Termux QEMU launcher (android-avf)
 #   clean        - Remove build artifacts
 #   help         - Show this message
 #
@@ -49,7 +53,7 @@ $(error PRODUCT is required. Use: make PRODUCT=<graphics|hello|netdemo|tvdemo> P
 endif
 
 ifndef PLATFORM
-$(error PLATFORM is required. Use: make PRODUCT=$(PRODUCT) PLATFORM=<rpi4|qemu-aarch64|qemu-riscv64>)
+$(error PLATFORM is required. Use: make PRODUCT=$(PRODUCT) PLATFORM=<rpi4|qemu-aarch64|qemu-riscv64|android-avf>)
 endif
 
 # Load configurations
@@ -59,7 +63,7 @@ include config/versions.mk
 # Load platform configuration
 PLATFORM_MK := config/platforms/$(PLATFORM).mk
 ifeq ($(wildcard $(PLATFORM_MK)),)
-$(error Unknown platform: $(PLATFORM). Available: rpi4, qemu-aarch64, qemu-riscv64)
+$(error Unknown platform: $(PLATFORM). Available: rpi4, qemu-aarch64, qemu-riscv64, android-avf)
 endif
 include $(PLATFORM_MK)
 
@@ -84,6 +88,7 @@ include config/kconfig.mk
 include include/rust.mk
 include include/microkit.mk
 include include/qemu.mk
+include include/android.mk
 include include/sdcard.mk
 
 # Default target

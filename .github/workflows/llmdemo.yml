@@ -7,6 +7,9 @@ on:
       - "sel4-microkernel/rpi4-llm-loader/**"
       - "sel4-microkernel/rpi4-llm/**"
       - "sel4-microkernel/build-system/config/products/llmdemo.mk"
+      - "sel4-microkernel/build-system/config/platforms/android-avf.mk"
+      - "sel4-microkernel/build-system/include/android.mk"
+      - "sel4-microkernel/build-system/scripts/android/**"
       - ".github/workflows/llmdemo.yml"
   pull_request:
     branches: [main]
@@ -14,6 +17,9 @@ on:
       - "sel4-microkernel/rpi4-llm-loader/**"
       - "sel4-microkernel/rpi4-llm/**"
       - "sel4-microkernel/build-system/config/products/llmdemo.mk"
+      - "sel4-microkernel/build-system/config/platforms/android-avf.mk"
+      - "sel4-microkernel/build-system/include/android.mk"
+      - "sel4-microkernel/build-system/scripts/android/**"
       - ".github/workflows/llmdemo.yml"
 
 env:
@@ -200,6 +206,22 @@ jobs:
       - name: Build llmdemo product
         working-directory: sel4-microkernel/build-system
         run: make PRODUCT=llmdemo PLATFORM=qemu-aarch64 MICROKIT_SDK=/opt/microkit-sdk all
+
+      # The android-avf platform (docs/android-agent-os.md) claims its
+      # image is the same qemu_virt_aarch64 board artifact, so what boots
+      # here also boots under Termux QEMU on a device. Build it and pin
+      # that claim byte-for-byte. If this ever diverges legitimately
+      # (e.g. a crosvm board port lands), replace the cmp with a second
+      # QEMU boot of the android-avf image.
+      - name: Build android-avf image and check venue parity
+        working-directory: sel4-microkernel/build-system
+        run: |
+          make PRODUCT=llmdemo PLATFORM=android-avf MICROKIT_SDK=/opt/microkit-sdk all
+          make PRODUCT=llmdemo PLATFORM=android-avf MICROKIT_SDK=/opt/microkit-sdk termux-bundle
+          cmp ../build/qemu-aarch64/llmdemo/loader.img \
+              ../build/android-avf/llmdemo/loader.img
+          tar -tzf ../build/android-avf/llmdemo/termux-llmdemo.tar.gz | sort | \
+              diff - <(printf 'loader.img\nrun-termux-qemu.sh\n')
 
       - name: Boot inference PD
         working-directory: sel4-microkernel

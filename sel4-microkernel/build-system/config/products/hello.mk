@@ -1,10 +1,12 @@
 # Product: microkit-hello (Hello World demo)
 #
-# Supported platforms: qemu-aarch64, qemu-riscv64
+# Supported platforms: qemu-aarch64, qemu-riscv64, android-avf
+# (android-avf builds the same qemu_virt_aarch64 board image; hello is
+# the minimal serial-output payload for Android bring-up)
 
 # Validate platform
-ifeq ($(filter qemu-aarch64 qemu-riscv64,$(PLATFORM)),)
-$(error Product 'hello' only supports QEMU platforms (qemu-aarch64, qemu-riscv64), not '$(PLATFORM)')
+ifeq ($(filter qemu-aarch64 qemu-riscv64 android-avf,$(PLATFORM)),)
+$(error Product 'hello' only supports platforms qemu-aarch64, qemu-riscv64, android-avf, not '$(PLATFORM)')
 endif
 
 # Product info

@@ -1,7 +1,9 @@
 # Product: llmdemo (deterministic local inference with signed receipts)
 
-ifneq ($(PLATFORM),qemu-aarch64)
-$(error Product 'llmdemo' only supports platform 'qemu-aarch64', not '$(PLATFORM)')
+# android-avf builds the identical qemu_virt_aarch64 board image and adds
+# adb/crosvm/Termux deployment targets (docs/android-agent-os.md).
+ifeq ($(filter qemu-aarch64 android-avf,$(PLATFORM)),)
+$(error Product 'llmdemo' only supports platforms 'qemu-aarch64' and 'android-avf', not '$(PLATFORM)')
 endif
 
 PRODUCT_NAME := Verified Local Inference Demo

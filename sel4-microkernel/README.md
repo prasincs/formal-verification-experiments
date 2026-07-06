@@ -9,6 +9,12 @@ A bootable, formally verified operating system using seL4 and Microkit.
 | **AArch64** | Microkit | Binary-level proofs | ✅ |
 | **RISC-V 64** | Microkit | Functional proofs | ✅ |
 | **x86_64** | seL4 direct | Functional proofs | ✅ |
+| **Android (AVF/Termux)** | Microkit | Same AArch64 image | ✅ build + Termux QEMU; crosvm boot pending board port |
+
+The `android-avf` platform runs the AArch64 Microkit image as a secure
+agent OS layer on Android devices — via Termux QEMU today, and via
+AVF/crosvm once a crosvm board port lands. See
+[docs/android-agent-os.md](docs/android-agent-os.md).
 
 ## What Makes This Special
 
