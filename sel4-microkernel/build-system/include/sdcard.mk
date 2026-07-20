@@ -12,7 +12,13 @@ $(FIRMWARE_DIR):
 	curl -L -o $@/start4.elf $(FIRMWARE_BASE_URL)/start4.elf
 	curl -L -o $@/fixup4.dat $(FIRMWARE_BASE_URL)/fixup4.dat
 	curl -L -o $@/bcm2711-rpi-4-b.dtb $(FIRMWARE_BASE_URL)/bcm2711-rpi-4-b.dtb
-	@echo "Firmware downloaded to $@"
+	@echo "=== Verifying firmware checksums ==="
+	cd $@ && printf '%s  %s\n' \
+		"$(RPI_FIRMWARE_START4_SHA256)" start4.elf \
+		"$(RPI_FIRMWARE_FIXUP4_SHA256)" fixup4.dat \
+		"$(RPI_FIRMWARE_DTB_SHA256)" bcm2711-rpi-4-b.dtb | $(SHA256SUM) -c - \
+		|| { rm -rf $@; exit 1; }
+	@echo "Firmware downloaded and verified in $@"
 
 firmware: $(FIRMWARE_DIR)
 
