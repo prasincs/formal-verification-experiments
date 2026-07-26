@@ -12,8 +12,17 @@ attestable build on build.confidential.ai?**
 
 ## Verdict
 
-**Yes — this is feasible now for the build as it exists today**, with
-one important scoping caveat.
+**Yes — but conditional on packaging our build for a toolchain Kettle
+supports**, and with one important scoping caveat.
+
+Kettle drives a *build system* (Cargo, pnpm, or Nix), not an arbitrary
+container recipe. Our top-level build is GNU Make orchestrating cargo
+and then the SDK's `microkit` tool, which is none of those, so the work
+Phase 1 actually requires is a Nix derivation wrapping that Make build
+(see the adoption path). Nothing about the build makes this hard — it is
+packaging work, not a blocker — but it is real work that does not exist
+yet. In the meantime `kettle build` runs outside a TEE, so unsigned SLSA
+provenance is available immediately as a stepping stone.
 
 The current build consumes the prebuilt Microkit SDK 2.1.0 (pinned by
 SHA-256 in `build-system/config/versions.mk`) rather than compiling the
@@ -34,11 +43,10 @@ operator, and the artifact-hosting path from the trust story, leaving
 the SDK binary as the one externally-trusted input — and that input is
 at least hash-pinned and publicly published by seL4.
 
-The build itself is unusually well-suited to the service: it is an x86
-Linux cross-compile with no target hardware in the loop, it already has
-a containerized recipe (`qemu-e2e.Containerfile`), and every external
-input is pinned by hash. The gaps found during this evaluation are
-small and most were fixed alongside this document.
+Setting that packaging step aside, the build suits the service well: it
+is an x86 Linux cross-compile with no target hardware in the loop, and
+every external input is pinned by hash. The other gaps found during this
+evaluation are small and most were fixed alongside this document.
 
 ## What build.confidential.ai is
 
@@ -48,7 +56,10 @@ service. It commercializes the *Attestable Builds* research line
 <https://dl.acm.org/doi/10.1145/3719027.3765128>) and has a companion
 paper, *Kettle: Attested Builds for Verifiable Software Provenance*
 (Arko & Asad — <https://arxiv.org/abs/2605.08363>), plus an open-source
-implementation at <https://github.com/lunal-dev/kettle>.
+implementation at <https://github.com/lunal-dev/kettle> (installer and
+release artifacts are published under
+<https://github.com/confidential-dot-ai/kettle> — same project, the org
+was renamed).
 
 The mechanism, per those sources:
 
@@ -76,6 +87,45 @@ The mechanism, per those sources:
   latency and ~14 % build-time overhead; it built complex projects
   (e.g. LLVM/Clang) unmodified.
 
+### The `kettle` CLI
+
+The open-source client is installable from a release installer script,
+`cargo install --git`, or a prebuilt "reproducible" binary; building it
+with attestation support needs the `attest` feature and `libtss2-dev`.
+Three commands matter:
+
+- **`kettle build`** — generates SLSA provenance, runs the build, and
+  checksums the outputs. Runs *outside* a TEE, which makes it usable in
+  ordinary CI today for everything except the hardware signature.
+- **`kettle attest`** — runs the build inside the TEE, records the VM
+  firmware and OS image, and hardware-signs the result.
+- **`kettle verify <directory>`** — validates binaries against hardware
+  vendor public keys. `--igvm <FILE>` additionally checks the launch
+  measurement against an IGVM file's launch digest; `--image <FILE>`
+  validates a dm-verity roothash and requires `--igvm`.
+
+Outputs land in a `kettle-build/` directory: `provenance.json` (an
+in-toto Statement carrying the SLSA Provenance v1.2 predicate),
+`evidence.json` (the hardware-signed attestation), and checksums. A
+multi-artifact build is handled by that directory rather than by any
+per-artifact configuration.
+
+### Supported toolchains — the binding constraint for us
+
+Kettle has **no build-configuration file format**. It drives a build
+system it knows how to run, and today that list is:
+
+| Toolchain | Status |
+|---|---|
+| Cargo (Rust) | supported |
+| pnpm (JS/TS) | supported |
+| Nix (any language) | supported |
+| uv (Python), Go | planned |
+
+Build types are toolchain-specific by design, so verifiers can apply
+build-type-specific policy instead of parsing free-form fields. The
+practical consequence for this repo is in the next section.
+
 ### Attestable vs. reproducible builds
 
 This is the key conceptual point. Classic reproducible builds prove
@@ -99,9 +149,10 @@ that this first image be produced via reproducible builds, pushing
 determinism down to one small, slow-changing artifact rather than every
 project build.
 
-## Why this repo's build fits
+## How this repo's build maps onto Kettle
 
-Facts below are verifiable in-tree.
+Facts below are verifiable in-tree. Two of the three points are a clean
+fit; the third is the packaging work Phase 1 turns on.
 
 **No target hardware at build time.** The build cross-compiles from
 x86-64 Linux to AArch64 (and RISC-V): `qemu-e2e.Containerfile` installs
@@ -127,14 +178,30 @@ The Rust toolchain is pinned to `nightly-2026-07-02` in
 `build-system/config/defaults.mk`). `release.yml` verifies the SDK
 tarball against the same SHA-256 before use.
 
-**A containerized build recipe already exists.**
-`qemu-e2e.Containerfile` takes the toolchain version and SDK hash as
-`ARG`s, verifies the SDK download with `sha256sum -c`, and produces an
-environment in which `make PRODUCT=<p> PLATFORM=<plat>` in
-`build-system/` builds the Rust protection domains and has the SDK's
-`microkit` tool link them into `loader.img` (the `SYSTEM_IMAGE` in each
-`build-system/config/products/*.mk`). This is essentially the build
-definition Kettle needs, already written down.
+**But the build is Make-driven, which Kettle does not run.**
+`make PRODUCT=<p> PLATFORM=<plat>` in `build-system/` builds the Rust
+protection domains via cargo and then has the SDK's `microkit` tool link
+them into `loader.img` (the `SYSTEM_IMAGE` in each
+`build-system/config/products/*.mk`). GNU Make is not one of Kettle's
+runners, so the build cannot be handed to the service as-is.
+
+`qemu-e2e.Containerfile` — which takes the toolchain version and SDK
+hash as `ARG`s and verifies the SDK download with `sha256sum -c` — is a
+faithful description of the build environment, but it is *not* a
+substitute for a supported toolchain: Kettle consumes a build system,
+not a container recipe.
+
+Two ways out, only one of which covers the shipped artifact:
+
+- **Nix derivation (the real path).** Wrap the existing Make build in a
+  derivation. Kettle's Nix runner is language-agnostic, so this covers
+  the whole pipeline through `loader.img` and the SD-card image. The
+  hash-pinned inputs already in `versions.mk` map onto Nix's model
+  naturally.
+- **Cargo runner alone (insufficient).** Kettle could build the
+  protection-domain crates directly, but the `microkit` link step that
+  produces the artifact we actually ship would sit outside the
+  attestation. That attests components, not the image.
 
 **No privileged operations required.** Kettle's build CVM presumably
 restricts privileged syscalls; helpfully, our SD-card image assembly
@@ -180,6 +247,7 @@ Would not claim:
 | RPi firmware checksums in `rpi4-graphics/checksums.sha256` were placeholders ("need to be populated after first download") while `start4.elf`/`fixup4.dat`/DTB go into shipped SD-card images | Unpinned binary inputs inside an attested artifact | **Fixed alongside this evaluation** (hashes populated; firmware downloads in `rpi4-graphics/Makefile` and `build-system/include/sdcard.mk` now fail on mismatch, and `scripts/download-microkit-sdk.sh` verifies the SDK tarball) |
 | Version pins duplicated across `versions.mk`, `rust-toolchain.toml`, `qemu-e2e.Containerfile` `ARG`s, and several `.github/workflows/*` files (e.g. the SDK hash is repeated verbatim in `release.yml`) | A skewed update could attest a build that doesn't match developer builds | **Enforced by CI** — `scripts/check-pins.sh` (the `pin-consistency` job) treats `versions.mk` + `rust-toolchain.toml` as sources of truth and fails on any divergent copy; physically centralizing the pins remains optional cleanup |
 | No provenance, artifact signing, or SBOM anywhere today — `release.yml` emits only `SHA256SUMS.txt` computed on the (untrusted) GitHub runner | This is precisely the hole the service fills; nothing to fix in-repo beyond adopting it | **Addressed by adoption itself** |
+| Top-level build is GNU Make (driving cargo, then the `microkit` tool), which is not one of Kettle's runners (Cargo/pnpm/Nix) | Blocks handing the build to the service as-is; the Cargo runner alone would leave the `microkit` link step — and therefore the shipped image — outside the attestation | **Open — the main Phase 1 work item**: wrap the Make build in a Nix derivation |
 | Kernel is a prebuilt SDK binary, not built from source | Attestation chain bottoms out at seL4's release artifact | **Phase 2** (below) |
 
 ## Open questions about the service
@@ -194,15 +262,19 @@ the open-source repo do not settle them):
    (`-Z build-std` plus multiple protection domains) are modest by
    LLVM standards, so the paper's results suggest this is fine, but
    limits should be confirmed.
-3. **Build configuration format** — whether it consumes a
-   Containerfile/Dockerfile directly (ours is ready) or needs its own
-   manifest.
-4. **Privileged operations policy** inside the CVM. Likely moot for us
+3. **Privileged operations policy** inside the CVM. Likely moot for us
    (mtools-based image assembly needs none), but worth confirming for
    any future step that might want loop devices or FUSE.
-5. **Multi-artifact builds** — attesting `loader.img`, SD-card image,
-   and checksum manifest from one build, and how that maps into
-   `provenance.json`.
+4. **Nix runner specifics** — how a derivation is invoked, whether
+   network-fetching derivations (our SDK and firmware downloads) need
+   to be fixed-output, and how flake inputs surface in
+   `provenance.json`. This is the one that decides how much of the
+   Phase-1 packaging work is mechanical.
+
+Two earlier questions are now answered and dropped: there is no build
+configuration format (Kettle drives a supported toolchain), and
+multi-artifact builds are handled by the `kettle-build/` output
+directory rather than per-artifact config.
 
 If the hosted service does not fit on any of these, the fallback is
 **self-hosting the open-source Kettle** on a SEV-SNP or TDX cloud CVM —
@@ -212,15 +284,31 @@ same verification story, more operational burden (see Alternatives).
 
 ### Phase 1 — attest the current SDK-based build
 
-Connect the GitHub repository to the service (or self-host Kettle) and
-run the existing containerized build inside the CVM: build the
-`qemu-e2e.Containerfile` environment, then
-`make PRODUCT=… PLATFORM=…` per product, mirroring what
+Two steps, the first of which needs nothing from the service.
+
+**1a. Unsigned provenance in CI now.** `kettle build` runs outside a
+TEE, so a CI job can emit `provenance.json` and checksums for our
+existing artifacts immediately. That puts the provenance schema, the
+artifact list, and the verification habit in place while the packaging
+work below happens. It proves nothing about the build machine — GitHub
+runners are still trusted at this stage — but it is a strictly better
+release record than today's bare `SHA256SUMS.txt`.
+
+**1b. A Nix derivation, then `kettle attest`.** Package the Make build
+(`make PRODUCT=… PLATFORM=…` per product, mirroring what
 `scripts/build-microkit.sh` does in `ci.yml`'s `microkit-build` job and
-`release.yml`'s `build-microkit` job today. Output: `evidence.json`
-alongside each release's `loader.img` and `SHA256SUMS.txt`, verifiable
-by anyone with `kettle verify`. Prerequisites were exactly the first
-three gap rows above, now done.
+`release.yml`'s `build-microkit` job today) as a Nix derivation, so
+Kettle's language-agnostic runner can drive the whole pipeline through
+`loader.img`. The pinned inputs in `build-system/config/versions.mk` —
+SDK tarball hash, firmware hashes, U-Boot version — map onto
+fixed-output derivations, which fits what the pin-consistency check
+already enforces. Then connect the repository (or self-host Kettle on a
+SEV-SNP/TDX CVM) and run `kettle attest`, producing `evidence.json`
+alongside each release's `loader.img` and SD-card image, verifiable by
+anyone with `kettle verify`.
+
+The remaining prerequisites — committed lockfiles, a digest-pinned
+build environment, hash-pinned firmware — are done and CI-enforced.
 
 ### Phase 2 — attested from-source build of the Microkit SDK
 
@@ -267,11 +355,14 @@ primary mechanism.
 and better than nothing, but the attestation root is the GitHub-hosted
 runner and GitHub's signing infrastructure — the operator we are trying
 to remove from the trust story remains inside it. Reasonable interim
-step; strictly weaker claim.
+step; strictly weaker claim. Note that Phase 1a (`kettle build` in CI)
+has the same trust root but emits the same provenance schema we would
+later hardware-sign, so it is the better-aligned interim move.
 
 **Self-hosted Kettle.** Same verification semantics as the hosted
 service (the verifier checks hardware signatures, not the operator),
 at the cost of operating SEV-SNP/TDX CVMs ourselves. The right fallback
-if hosted pricing, limits, or configuration format (open questions
-above) don't fit; also a reasonable end-state for Phase 2's
-SDK-bootstrap build where we may want full control.
+if hosted pricing or CVM limits (open questions above) don't fit; also a
+reasonable end-state for Phase 2's SDK-bootstrap build where we may want
+full control. Either way the Nix packaging in Phase 1b is the same
+prerequisite.
