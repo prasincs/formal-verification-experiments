@@ -100,6 +100,14 @@ jobs:
         working-directory: sel4-microkernel/rpi4-graphics
         run: make firmware
 
+      # Runs on cache hits too: cached firmware must match the same pins
+      # as a fresh download (make firmware verifies only when it downloads)
+      - name: Verify firmware checksums
+        working-directory: sel4-microkernel/rpi4-graphics
+        run: |
+          cd build/firmware
+          grep -E '(start4\.elf|fixup4\.dat|bcm2711-rpi-4-b\.dtb)$' ../../checksums.sha256 | sha256sum -c -
+
       - name: Build for 8GB Raspberry Pi 4
         working-directory: sel4-microkernel/rpi4-graphics
         run: |

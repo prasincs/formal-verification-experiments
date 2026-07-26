@@ -47,6 +47,8 @@ endif
 
 # Tools
 MICROKIT_TOOL := $(MICROKIT_SDK)/bin/microkit
+# sha256sum on Linux, shasum on stock macOS
+SHA256SUM := $(shell command -v sha256sum >/dev/null 2>&1 && echo sha256sum || echo "shasum -a 256")
 # Toolchain comes from ../rust-toolchain.toml (pinned nightly) via the shim
 CARGO := cargo
 
@@ -150,8 +152,11 @@ $(FIRMWARE_DIR):
 	curl -L -o $@/start4.elf $(FIRMWARE_BASE_URL)/start4.elf
 	curl -L -o $@/fixup4.dat $(FIRMWARE_BASE_URL)/fixup4.dat
 	curl -L -o $@/bcm2711-rpi-4-b.dtb $(FIRMWARE_BASE_URL)/bcm2711-rpi-4-b.dtb
-	@echo "Firmware downloaded to $@"
-	@echo "Note: Run 'sha256sum $@/*' to verify checksums"
+	@echo "=== Verifying firmware checksums ==="
+	cd $@ && grep -E '(start4\.elf|fixup4\.dat|bcm2711-rpi-4-b\.dtb)$$' \
+		$(CURDIR)/checksums.sha256 | $(SHA256SUM) -c - \
+		|| { rm -rf $@; exit 1; }
+	@echo "Firmware downloaded and verified in $@"
 
 firmware: $(FIRMWARE_DIR)
 

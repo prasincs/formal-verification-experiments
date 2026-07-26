@@ -234,6 +234,55 @@ jobs:
         working-directory: verus
         run: cargo clippy -- -D warnings
 
+  # Pinned versions duplicated across build files and workflows must agree
+  pin-consistency:
+    name: Pin Consistency
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check pinned versions are in sync
+        run: ./scripts/check-pins.sh
+
+  # Committed Cargo.lock files must stay in sync with their manifests
+  lockfile-check:
+    name: Lockfile Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust nightly
+        uses: dtolnay/rust-toolchain@master
+        with:
+          # Pinned nightly - keep in sync with sel4-microkernel/rust-toolchain.toml
+          toolchain: nightly-2026-07-02
+
+      - name: Install Rust stable (kconfig-tool pin)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+          key: ${{ runner.os }}-cargo-lockfile-check-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Verify lockfiles resolve (cargo metadata --locked)
+        run: |
+          set -u
+          fail=0
+          for lock in $(git ls-files '*Cargo.lock'); do
+            dir=$(dirname "$lock")
+            echo "== $dir"
+            if ! (cd "$dir" && cargo metadata --locked --format-version 1 > /dev/null); then
+              echo "FAILED: $dir/Cargo.lock is not in sync with its manifest" >&2
+              fail=1
+            fi
+          done
+          exit $fail
+
   # Format check
   fmt:
     name: Format

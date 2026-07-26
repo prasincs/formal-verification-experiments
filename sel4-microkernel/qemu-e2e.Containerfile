@@ -1,4 +1,9 @@
-FROM ubuntu:24.04
+# Pinned by digest for reproducibility. Digest is the multi-arch manifest list
+# for ubuntu:24.04, resolved 2026-07-18. To refresh:
+#   curl -sI -H "Authorization: Bearer $(curl -s 'https://auth.docker.io/token?service=registry.docker.io&scope=repository:library/ubuntu:pull' | jq -r .token)" \
+#     -H "Accept: application/vnd.oci.image.index.v1+json" \
+#     https://registry-1.docker.io/v2/library/ubuntu/manifests/24.04 | grep -i docker-content-digest
+FROM ubuntu:24.04@sha256:4fbb8e6a8395de5a7550b33509421a2bafbc0aab6c06ba2cef9ebffbc7092d90
 
 ARG RUST_TOOLCHAIN=nightly-2026-07-02
 ARG MICROKIT_VERSION=2.1.0

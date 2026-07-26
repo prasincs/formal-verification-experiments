@@ -2,16 +2,24 @@
 # Download and install Microkit SDK
 #
 # Usage:
-#   ./scripts/download-microkit-sdk.sh [--version VERSION] [--dest PATH]
+#   ./scripts/download-microkit-sdk.sh [--version VERSION] [--dest PATH] [--sha256 HASH]
 #
 # Environment:
 #   MICROKIT_SDK_VERSION - SDK version (default: 2.1.0)
+#
+# The download is verified against the SHA-256 pinned in
+# sel4-microkernel/build-system/config/versions.mk when the requested
+# version/platform matches that pin (or against --sha256 if given).
 
 set -e
 
 # Defaults
 VERSION="${MICROKIT_SDK_VERSION:-2.1.0}"
 DEST="/opt/microkit-sdk"
+SHA256=""
+
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+VERSIONS_MK="${REPO_ROOT}/sel4-microkernel/build-system/config/versions.mk"
 
 # Parse arguments
 for arg in "$@"; do
@@ -21,6 +29,9 @@ for arg in "$@"; do
             ;;
         --dest=*)
             DEST="${arg#*=}"
+            ;;
+        --sha256=*)
+            SHA256="${arg#*=}"
             ;;
     esac
 done
@@ -54,6 +65,14 @@ esac
 URL="https://github.com/seL4/microkit/releases/download/${VERSION}/microkit-sdk-${VERSION}-${PLATFORM}.tar.gz"
 echo "URL: $URL"
 
+# The pin in versions.mk is for the linux-x86-64 tarball of the pinned version
+if [ -z "$SHA256" ] && [ "$PLATFORM" = "linux-x86-64" ] && [ -f "$VERSIONS_MK" ]; then
+    PINNED_VERSION="$(sed -n 's/^MICROKIT_VERSION := //p' "$VERSIONS_MK")"
+    if [ "$VERSION" = "$PINNED_VERSION" ]; then
+        SHA256="$(sed -n 's/^MICROKIT_SDK_SHA256 := //p' "$VERSIONS_MK")"
+    fi
+fi
+
 # Create destination
 if [ -w "$(dirname "$DEST")" ]; then
     mkdir -p "$DEST"
@@ -61,12 +80,27 @@ else
     sudo mkdir -p "$DEST"
 fi
 
-# Download and extract
+# Download, verify, extract
 echo "Downloading..."
-if [ -w "$DEST" ]; then
-    curl -L "$URL" | tar -xzf - -C "$DEST" --strip-components=1
+TARBALL="$(mktemp)"
+trap 'rm -f "$TARBALL"' EXIT
+curl -L -o "$TARBALL" "$URL"
+
+if [ -n "$SHA256" ]; then
+    echo "Verifying SHA-256..."
+    if command -v sha256sum >/dev/null 2>&1; then
+        echo "$SHA256  $TARBALL" | sha256sum -c -
+    else
+        echo "$SHA256  $TARBALL" | shasum -a 256 -c -
+    fi
 else
-    curl -L "$URL" | sudo tar -xzf - -C "$DEST" --strip-components=1
+    echo "WARNING: no pinned SHA-256 for microkit-sdk-${VERSION}-${PLATFORM}; skipping verification" >&2
+fi
+
+if [ -w "$DEST" ]; then
+    tar -xzf "$TARBALL" -C "$DEST" --strip-components=1
+else
+    sudo tar -xzf "$TARBALL" -C "$DEST" --strip-components=1
 fi
 
 echo ""

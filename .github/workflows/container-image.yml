@@ -1,0 +1,38 @@
+name: Build Container Image
+
+# Validates that the digest-pinned build container still builds: the base
+# image digest resolves, apt packages install, and the pinned toolchain and
+# Microkit SDK (SHA-256-verified inside the Containerfile) still download.
+# The weekly run is a tripwire for upstream drift the pins are meant to
+# catch (registry digest removal, yanked toolchain/SDK artifacts).
+
+on:
+  push:
+    branches: [main, "claude/*", "agent/*"]
+    paths:
+      - sel4-microkernel/qemu-e2e.Containerfile
+      - scripts/qemu-e2e-container.sh
+      - sel4-microkernel/build-system/config/versions.mk
+      - sel4-microkernel/rust-toolchain.toml
+      - .github/workflows/container-image.yml
+  pull_request:
+    branches: [main]
+    paths:
+      - sel4-microkernel/qemu-e2e.Containerfile
+      - scripts/qemu-e2e-container.sh
+      - sel4-microkernel/build-system/config/versions.mk
+      - sel4-microkernel/rust-toolchain.toml
+      - .github/workflows/container-image.yml
+  schedule:
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+jobs:
+  build-image:
+    name: Build qemu-e2e container
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build digest-pinned build container
+        run: docker build -f sel4-microkernel/qemu-e2e.Containerfile -t sel4-qemu-e2e:ci .
