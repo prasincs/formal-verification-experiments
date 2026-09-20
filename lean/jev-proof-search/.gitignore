@@ -1,0 +1,4 @@
+__pycache__/
+.lake/
+.env
+results/local-*/

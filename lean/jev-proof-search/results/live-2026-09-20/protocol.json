@@ -1,0 +1,21 @@
+{
+  "mode": "live",
+  "lean_version": "Lean (version 4.19.0, x86_64-unknown-linux-gnu, commit 6caaee842e94, Release)",
+  "model": "jev-1.13.0",
+  "budget": 3,
+  "timeout_seconds": 10,
+  "problems_sha256": "334712d3c3ac1819263ae0b75229c2b31a90e1f09f6beba95e4d357a4a59f941",
+  "tactics_sha256": "036445c17a448150dbb07166b30fd277d79112da775804852fe0f4713741de2d",
+  "instructions_sha256": "651d33b93b1d94d3a9d72e36024be07539e791948ac29e8c0ead4041945609fc",
+  "harness_sha256": "a9a6e40bf695af6ab1a9771cbdb2449543704d88de2d12cfeee4bde9c62db593",
+  "instructions": "Choose the remaining Lean 4 tactic most likely to completely prove the given theorem when used as its entire proof body. Read the exact binders and goal. Each criterion is a literal tactic from a fixed allow-list. Use any failed attempts as feedback. Do not change the theorem or introduce assumptions. A proof may be unavailable; in that case choose the most promising remaining attempt. The controller, not your confidence, decides success by running Lean.",
+  "tactics": {
+    "c0": "rfl",
+    "c1": "simp_all",
+    "c2": "omega",
+    "c3": "constructor <;> assumption",
+    "c4": "exact \u27e8w, hw\u27e9",
+    "c5": "induction n <;> simp_all [twice, Nat.add_assoc, Nat.add_comm, Nat.add_left_comm, Nat.mul_succ]"
+  },
+  "note": "Toy suite; fixed order and exact random expectation use the exhaustive Lean matrix. Timing is one sample per attempt, not a speed benchmark."
+}

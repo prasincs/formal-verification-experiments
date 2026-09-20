@@ -1,0 +1,27 @@
+{
+  "fixed": {
+    "solved_valid_goals": 7,
+    "total_attempts_including_controls": 30,
+    "lean_seconds": 8.80951846158132,
+    "api_seconds": 0
+  },
+  "random_exact_expectation": {
+    "solved_valid_goals": 6.1,
+    "total_attempts_including_controls": 28.8,
+    "lean_seconds": 8.29320425929036,
+    "api_seconds": 0
+  },
+  "jev_feedback": {
+    "solved_valid_goals": 10,
+    "total_attempts_including_controls": 16,
+    "lean_seconds": 4.8974097622558475,
+    "api_seconds": 6.814598923549056
+  },
+  "valid_goals": 10,
+  "negative_controls": 2,
+  "matrix_valid_goals_solvable_by_candidates": 10,
+  "usage": {
+    "input_tokens": 10120,
+    "output_tokens": 1056
+  }
+}

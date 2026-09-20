@@ -1,0 +1,14 @@
+[
+  {"id": "g01", "binders": "(n : Nat)", "target": "n = n", "expected_valid": true},
+  {"id": "g02", "binders": "(xs ys : List Nat)", "target": "(xs ++ ys).length = xs.length + ys.length", "expected_valid": true},
+  {"id": "g03", "binders": "(n limit : Nat) (h : n < limit)", "target": "n + 1 ≤ limit", "expected_valid": true},
+  {"id": "g04", "binders": "(P Q : Prop) (hp : P) (hq : Q)", "target": "P ∧ Q", "expected_valid": true},
+  {"id": "g05", "binders": "(P : Nat → Prop) (w : Nat) (hw : P w)", "target": "∃ x, P x", "expected_valid": true},
+  {"id": "g06", "binders": "(n : Nat)", "target": "twice n = n + n", "expected_valid": true},
+  {"id": "g07", "binders": "(a b c : Nat) (h1 : a ≤ b) (h2 : b < c)", "target": "a < c", "expected_valid": true},
+  {"id": "g08", "binders": "(xs : List Nat)", "target": "xs.reverse.reverse = xs", "expected_valid": true},
+  {"id": "g09", "binders": "(n : Nat)", "target": "twice n = 2 * n", "expected_valid": true},
+  {"id": "g10", "binders": "(P Q : Prop) (hp : P)", "target": "Q → P", "expected_valid": true},
+  {"id": "g11", "binders": "(n : Nat)", "target": "n + 1 = n", "expected_valid": false},
+  {"id": "g12", "binders": "(n : Nat)", "target": "n = 0", "expected_valid": false}
+]

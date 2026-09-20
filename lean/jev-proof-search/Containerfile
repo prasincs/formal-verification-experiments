@@ -1,0 +1,25 @@
+FROM docker.io/library/python:3.11-slim@sha256:506f2951c04925a2a98fc0604e0e0a3ffd2788cc4aed0eb77c3517c98ac651c0
+
+ARG LEAN_VERSION=4.19.0
+ARG LEAN_SHA256=6fe3ce97a58f44e2b3567d455b994eacec5bfe9ae7774f2a573444480ba813fe
+
+RUN test "$(uname -m)" = x86_64 \
+    && apt-get update \
+    && apt-get install --no-install-recommends -y ca-certificates curl zstd libgmp10 \
+    && curl --fail --location --retry 3 \
+       "https://github.com/leanprover/lean4/releases/download/v${LEAN_VERSION}/lean-${LEAN_VERSION}-linux.tar.zst" \
+       --output /tmp/lean.tar.zst \
+    && echo "${LEAN_SHA256}  /tmp/lean.tar.zst" | sha256sum --check --strict \
+    && mkdir /opt/lean \
+    && tar --zstd --extract --file /tmp/lean.tar.zst --strip-components=1 --directory /opt/lean \
+    && rm /tmp/lean.tar.zst \
+    && rm -rf /var/lib/apt/lists/*
+
+ENV PATH="/opt/lean/bin:${PATH}" \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+WORKDIR /opt/experiment
+COPY experiment.py test_experiment.py problems.json lean-toolchain ./
+RUN lean --version && python3 -m unittest -v
+ENTRYPOINT ["python3", "experiment.py"]
+CMD ["--help"]
