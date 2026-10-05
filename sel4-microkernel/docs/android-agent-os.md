@@ -135,8 +135,40 @@ top rather than pretending otherwise.
    device, then re-running the product acceptance tests (llmdemo
    receipts) there.
 
+Two constraints discovered while sizing this work:
+
+- **crosvm's guest-visible layout is not a stable contract.** Unlike
+  QEMU's `virt` board, crosvm documents its memory layout as an
+  internal detail that may change between versions. Linux guests
+  don't care (runtime devicetree); seL4 does (compile-time platform).
+  The port must therefore be pinned against a specific AVF APEX
+  (`com.android.virt`) version, with the platform DTS captured from
+  the actual target device, and re-checked after Android OTAs.
+- **Protected VMs add payload obligations, not crosvm changes.** The
+  pKVM-protected path (Android itself unable to read guest memory)
+  boots through pvmfw, which expects an AVB-signed kernel (VBMeta
+  hash footer via `avbtool add_hash_footer`) in arm64 `Image` format
+  with a DTB handoff. The non-protected path needs none of this but
+  only gets ordinary KVM isolation.
+
 Until then, the supported on-device path is Termux QEMU, which needs
 no port because it *is* the build's target machine.
+
+## GrapheneOS as a deployment venue
+
+GrapheneOS changes the deployment calculus in both directions, enough
+that it has its own plan:
+[grapheneos-pixel10a-plan.md](grapheneos-pixel10a-plan.md).
+
+- **No root, ever** — so `run-avf` / `run-crosvm.sh` (raw crosvm from
+  a shell) do not apply there. The seL4 boot path on GrapheneOS is
+  the supported `VirtualizationService` custom-VM API (an app holding
+  `USE_CUSTOM_VIRTUAL_MACHINE`, cf. the Terminal-app forks that boot
+  custom images), with a self-built, own-key-signed GrapheneOS as the
+  endgame: GrapheneOS supports re-locking the bootloader on your own
+  signed build, giving a verified-boot chain down to our VM launcher
+  that stock Android cannot offer without Google's keys.
+- The `termux-bundle` path works on GrapheneOS unchanged.
 
 ## Relation to the agent-appliance work packages
 
@@ -160,5 +192,9 @@ no port because it *is* the build's target machine.
       (`.github/workflows/llmdemo.yml`, "check venue parity" step).
 - [ ] Evaluate the supported AVF "custom VM" config path
       (`vm run` / `VirtualizationService` with a raw kernel) as a
-      non-root alternative on devices where it is enabled.
+      non-root alternative on devices where it is enabled —
+      sequenced as phase 2 of the
+      [GrapheneOS / Pixel 10a plan](grapheneos-pixel10a-plan.md).
+- [ ] Execute the GrapheneOS / Pixel 10a bring-up plan
+      ([grapheneos-pixel10a-plan.md](grapheneos-pixel10a-plan.md)).
 - [ ] AVF attestation mapping for the RFC's measured-boot chapter.
