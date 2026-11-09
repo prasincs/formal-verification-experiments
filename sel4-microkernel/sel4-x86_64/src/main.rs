@@ -13,10 +13,10 @@
 #![no_std]
 #![no_main]
 
-extern crate alloc;
+mod bootprof;
 
-use sel4::cap_type;
-use sel4_root_task::{debug_print, debug_println, root_task};
+use sel4::debug_println;
+use sel4_root_task::root_task;
 use verus_builtin_macros::verus;
 
 // ============================================================================
@@ -149,77 +149,38 @@ impl VerifiedUntypedDesc {
 // seL4 Root Task Implementation
 // ============================================================================
 
-/// Root task entry point
-///
-/// This is the first userspace code that runs after seL4 boots.
-/// We receive the initial capabilities to all system resources.
+/// Root task entry point: the first userspace code after seL4 boots.
 #[root_task]
-fn main(bootinfo: &sel4::BootInfo) -> ! {
-    debug_println!("=========================================");
-    debug_println!("  seL4 x86_64 - Formally Verified Kernel ");
-    debug_println!("=========================================");
-    debug_println!();
+fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
+    // Sample first so the demo output below is not counted.
+    let t_user = bootprof::rdtsc();
+    let mhz = bootinfo
+        .extra()
+        .find(|e| e.id == sel4::BootInfoExtraId::X86TscFreq)
+        .and_then(|e| bootprof::parse_tsc_mhz(e.content()));
+    match mhz.and_then(|m| bootprof::cycles_to_us(t_user, m)) {
+        Some(us) => debug_println!("BOOTPROF user tsc_mhz={} user_us={}", mhz.unwrap_or(0), us),
+        None => debug_println!("BOOTPROF user tsc_mhz=unknown user_cycles={}", t_user),
+    }
 
-    debug_println!("Root server started!");
-    debug_println!();
+    debug_println!("seL4 x86_64 root server started");
+    debug_println!("  untyped caps: {}", bootinfo.untyped().len());
+    debug_println!("  empty slots:  {}", bootinfo.empty().len());
 
-    // Print boot info
-    debug_println!("Boot Information:");
-    debug_println!("  IPCBuffer: {:?}", bootinfo.ipc_buffer());
-    debug_println!("  Empty slots: {:?}", bootinfo.empty());
-    debug_println!("  Untyped memory regions: {:?}", bootinfo.untyped());
-    debug_println!();
-
-    // Demonstrate verified capability derivation
-    debug_println!("Verified Capability System:");
     let root_cap = VerifiedCap {
         rights: RIGHT_READ | RIGHT_WRITE | RIGHT_GRANT | RIGHT_RETYPE,
     };
-    debug_println!("  Root cap: all rights");
-
     let child_cap = root_cap.derive(RIGHT_READ | RIGHT_WRITE);
-    debug_println!("  Derived cap: read + write only");
-    debug_println!("  Can read: {}", child_cap.has_right(RIGHT_READ));
-    debug_println!("  Can retype: {}", child_cap.has_right(RIGHT_RETYPE));
-    debug_println!();
+    debug_println!(
+        "  derived cap: read={} retype={}",
+        child_cap.has_right(RIGHT_READ),
+        child_cap.has_right(RIGHT_RETYPE)
+    );
 
-    // Demonstrate verified message buffer
-    debug_println!("Verified IPC Message Buffer:");
     let mut msg = VerifiedMsgBuffer::new();
     msg.set(0, 0xDEADBEEF);
-    msg.set(1, 0xCAFEBABE);
-    debug_println!("  Set msg[0] = 0xDEADBEEF");
-    debug_println!("  Set msg[1] = 0xCAFEBABE");
-    if let Some(v) = msg.get(0) {
-        debug_println!("  Read msg[0] = {:#x}", v);
-    }
-    debug_println!();
+    debug_println!("  msg[0] = {:#x}", msg.get(0).unwrap_or(0));
 
-    debug_println!("seL4 Verification Status:");
-    debug_println!("  - Kernel: Functionally correct (proven)");
-    debug_println!("  - This code: Verified with Verus");
-    debug_println!("  - Memory safety: Guaranteed by Rust + Verus");
-    debug_println!();
-
-    debug_println!("System initialized. Entering idle loop...");
-
-    // In a real system, we would:
-    // 1. Parse untyped memory from bootinfo
-    // 2. Create page tables and map memory
-    // 3. Create threads and endpoints
-    // 4. Start user applications
-    //
-    // For this demo, we just idle.
-
-    loop {
-        // Yield to prevent busy-waiting
-        sel4::r#yield();
-    }
-}
-
-/// Panic handler (required for no_std)
-#[panic_handler]
-fn panic(info: &core::panic::PanicInfo) -> ! {
-    debug_println!("PANIC: {:?}", info);
-    loop {}
+    debug_println!("BOOTPROF done");
+    sel4::init_thread::suspend_self()
 }

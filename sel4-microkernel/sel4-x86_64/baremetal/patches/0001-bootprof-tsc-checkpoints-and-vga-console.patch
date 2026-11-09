@@ -1,0 +1,174 @@
+diff --git a/include/arch/x86/arch/bootprof.h b/include/arch/x86/arch/bootprof.h
+new file mode 100644
+index 0000000..2b48b71
+--- /dev/null
++++ b/include/arch/x86/arch/bootprof.h
+@@ -0,0 +1,13 @@
++/*
++ * BOOTPROF: boot-time instrumentation for bare-metal measurement builds.
++ * Not part of the verified kernel configuration.
++ *
++ * SPDX-License-Identifier: GPL-2.0-only
++ */
++#pragma once
++
++#include <types.h>
++
++extern uint64_t bootprof_tsc_init_cycles;
++extern uint32_t bootprof_tsc_mhz;
++void bootprof_vga_enable(paddr_t addr);
+diff --git a/src/arch/x86/kernel/boot.c b/src/arch/x86/kernel/boot.c
+index 93b3209..b2b6e51 100644
+--- a/src/arch/x86/kernel/boot.c
++++ b/src/arch/x86/kernel/boot.c
+@@ -4,6 +4,7 @@
+  * SPDX-License-Identifier: GPL-2.0-only
+  */
+ 
++#include <arch/bootprof.h>
+ #include <config.h>
+ #include <kernel/boot.h>
+ #include <machine/io.h>
+@@ -83,6 +84,9 @@ BOOT_CODE static bool_t arch_init_freemem(p_region_t ui_p_reg,
+ 
+ /* This function initialises a node's kernel state. It does NOT initialise the CPU. */
+ 
++uint64_t bootprof_tsc_init_cycles;
++uint32_t bootprof_tsc_mhz;
++
+ BOOT_CODE bool_t init_sys_state(
+     cpu_id_t      cpu_id,
+     mem_p_regs_t  *mem_p_regs,
+@@ -170,7 +174,10 @@ BOOT_CODE bool_t init_sys_state(
+     /* initialise the IRQ states and provide the IRQ control cap */
+     init_irqs(root_cnode_cap);
+ 
++    uint64_t bootprof_t = x86_rdtsc();
+     tsc_freq = tsc_init();
++    bootprof_tsc_init_cycles = x86_rdtsc() - bootprof_t;
++    bootprof_tsc_mhz = tsc_freq;
+ 
+     /* populate the bootinfo frame */
+     populate_bi_frame(0, ksNumCPUs, ipcbuf_vptr, extra_bi_size);
+diff --git a/src/arch/x86/kernel/boot_sys.c b/src/arch/x86/kernel/boot_sys.c
+index 55b7066..50b9cd5 100644
+--- a/src/arch/x86/kernel/boot_sys.c
++++ b/src/arch/x86/kernel/boot_sys.c
+@@ -4,6 +4,7 @@
+  * SPDX-License-Identifier: GPL-2.0-only
+  */
+ 
++#include <arch/bootprof.h>
+ #include <config.h>
+ #include <util.h>
+ #include <hardware.h>
+@@ -686,6 +687,11 @@ static BOOT_CODE bool_t try_boot_sys_mbi2(
+             printf("Got framebuffer info in multiboot2. Current video mode is at physical address=%llx pitch=%u resolution=%ux%u@%u type=%u\n",
+                    fb->addr, fb->pitch, fb->width, fb->height, fb->bpp, fb->type);
+             boot_state.fb_info = *fb;
++#ifdef CONFIG_PRINTING
++            if (fb->type == 2 && fb->width == 80 && fb->height == 25) {
++                bootprof_vga_enable(fb->addr);
++            }
++#endif
+         }
+ 
+         tag = (multiboot2_tag_t const *)((word_t)tag + ROUND_UP(tag->size, 3));
+@@ -701,10 +707,18 @@ static BOOT_CODE bool_t try_boot_sys_mbi2(
+     return true;
+ }
+ 
++static inline uint64_t bootprof_us(uint64_t cycles)
++{
++    return bootprof_tsc_mhz ? cycles / bootprof_tsc_mhz : 0;
++}
++
+ BOOT_CODE VISIBLE void boot_sys(
+     unsigned long multiboot_magic,
+     void *mbi)
+ {
++    /* BOOTPROF: first instruction of C boot code. The TSC counts from reset,
++     * so this value also approximates firmware + boot loader time. */
++    uint64_t bootprof_entry = x86_rdtsc();
+     bool_t result = false;
+ 
+     if (multiboot_magic == MULTIBOOT_MAGIC) {
+@@ -726,6 +740,16 @@ BOOT_CODE VISIBLE void boot_sys(
+     ARCH_NODE_STATE(x86KScurInterrupt) = int_invalid;
+     ARCH_NODE_STATE(x86KSPendingInterrupt) = int_invalid;
+ 
++    uint64_t bootprof_exit = x86_rdtsc();
++    /* Two lines so each fits an 80-column text console. */
++    printf("BOOTPROF kernel tsc_mhz=%u tsc_init_us=%llu\n",
++           bootprof_tsc_mhz,
++           (unsigned long long)bootprof_us(bootprof_tsc_init_cycles));
++    printf("BOOTPROF kernel entry_us=%llu exit_us=%llu kernel_us=%llu\n",
++           (unsigned long long)bootprof_us(bootprof_entry),
++           (unsigned long long)bootprof_us(bootprof_exit),
++           (unsigned long long)bootprof_us(bootprof_exit - bootprof_entry));
++
+ #ifdef CONFIG_KERNEL_MCS
+     NODE_STATE(ksCurTime) = getCurrentTime();
+     NODE_STATE(ksConsumed) = 0;
+diff --git a/src/plat/pc99/machine/io.c b/src/plat/pc99/machine/io.c
+index 83a53ba..9892eb8 100644
+--- a/src/plat/pc99/machine/io.c
++++ b/src/plat/pc99/machine/io.c
+@@ -4,6 +4,7 @@
+  * SPDX-License-Identifier: GPL-2.0-only
+  */
+ 
++#include <arch/bootprof.h>
+ #include <config.h>
+ #include <arch/kernel/boot_sys.h>
+ #include <arch/model/statedata.h>
+@@ -41,8 +42,49 @@ void uart_drv_putchar(
+     out8(x86KSdebugPort, c);
+ }
+ 
++/* BOOTPROF: mirror the debug console to an 80x25 EGA text buffer when the
++ * boot loader reports one (multiboot2 framebuffer type 2). For machines
++ * without a UART. Measurement builds only; not part of the verified kernel. */
++static volatile uint16_t *bootprof_vga;
++static word_t bootprof_vga_pos;
++#define BOOTPROF_VGA_COLS 80
++#define BOOTPROF_VGA_ROWS 25
++#define BOOTPROF_VGA_ATTR 0x0700u
++
++void bootprof_vga_enable(paddr_t addr)
++{
++    bootprof_vga = (volatile uint16_t *)paddr_to_pptr(addr);
++    for (word_t i = 0; i < BOOTPROF_VGA_COLS * BOOTPROF_VGA_ROWS; i++) {
++        bootprof_vga[i] = BOOTPROF_VGA_ATTR | ' ';
++    }
++    bootprof_vga_pos = 0;
++}
++
++static void bootprof_vga_putchar(unsigned char c)
++{
++    if (!bootprof_vga || c == '\r') {
++        return;
++    }
++    if (c == '\n') {
++        bootprof_vga_pos += BOOTPROF_VGA_COLS - (bootprof_vga_pos % BOOTPROF_VGA_COLS);
++    } else {
++        bootprof_vga[bootprof_vga_pos++] = BOOTPROF_VGA_ATTR | c;
++    }
++    if (bootprof_vga_pos >= BOOTPROF_VGA_COLS * BOOTPROF_VGA_ROWS) {
++        word_t last = BOOTPROF_VGA_COLS * (BOOTPROF_VGA_ROWS - 1);
++        for (word_t i = 0; i < last; i++) {
++            bootprof_vga[i] = bootprof_vga[i + BOOTPROF_VGA_COLS];
++        }
++        for (word_t i = last; i < last + BOOTPROF_VGA_COLS; i++) {
++            bootprof_vga[i] = BOOTPROF_VGA_ATTR | ' ';
++        }
++        bootprof_vga_pos = last;
++    }
++}
++
+ void kernel_putDebugChar(unsigned char c)
+ {
++    bootprof_vga_putchar(c);
+     /* this will take care of CR/LF handling and call uart_drv_putchar() */
+     uart_console_putchar(c);
+ }

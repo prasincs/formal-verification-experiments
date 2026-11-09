@@ -29,6 +29,39 @@ is currently only available for ARM.
 ./scripts/run.sh
 ```
 
+## Bare-Metal Boot-Time Measurement
+
+`scripts/build-baremetal.sh` builds a legacy-BIOS GRUB image: seL4 (pinned to
+the commit rust-sel4's `Cargo.lock` revision targets) with
+`baremetal/patches/0001-bootprof-*.patch`, plus this root task. The patch
+records TSC checkpoints and mirrors the kernel console to the VGA text buffer,
+for machines without a serial port. It is a measurement build: debug +
+printing on, IOMMU off. Not the verified configuration.
+
+```bash
+pip3 install ply jinja2 pyyaml        # + git cmake ninja gcc grub-pc-bin xorriso
+scripts/test-baremetal.sh             # QEMU regression test (both TSC modes)
+scripts/build-baremetal.sh            # -> build/baremetal/tsc-0/sel4-bootprof.iso
+sudo dd if=build/baremetal/tsc-0/sel4-bootprof.iso of=/dev/sdX bs=4M conv=fsync
+```
+
+On the target (e.g. Intel NUC8): in BIOS setup (F2) enable **Legacy Boot**
+and disable Secure Boot, then pick the USB stick from the F10 menu. Output:
+
+```
+BOOTPROF kernel tsc_mhz=… tsc_init_us=…          # tsc_init: ~100 ms PIT wait
+BOOTPROF kernel entry_us=… exit_us=… kernel_us=… # µs since power-on (TSC)
+BOOTPROF user tsc_mhz=… user_us=…                # root task main()
+```
+
+- `entry_us` ≈ firmware + GRUB; `kernel_us` = seL4 boot; `user_us - exit_us`
+  = kernel → root task.
+- seL4 only reads the TSC frequency from an MSR on Nehalem–Skylake model IDs;
+  Kaby/Coffee Lake (NUC8) fall back to the PIT. Rebuild with the printed
+  frequency to remove it: `scripts/build-baremetal.sh --tsc-hz 3100000000`.
+- `kernel_us` includes console output. With no UART decoded at `0x3F8` that
+  costs microseconds; a live UART at 115200 baud adds ~87 µs per character.
+
 ## Project Structure
 
 ```
