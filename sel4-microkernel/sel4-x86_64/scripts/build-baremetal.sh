@@ -74,6 +74,7 @@ SEL4_PREFIX="$OUT/sel4-prefix" cargo "$TOOLCHAIN" build --release --locked \
     -Z build-std-features=compiler-builtins-mem \
     -Zjson-target-spec
 ROOTTASK="$OUT/target/x86_64-sel4-roottask/release/sel4-x86-rootserver.elf"
+cp "$ROOTTASK" "$OUT/rootserver.elf"  # with kernel32.elf: the QEMU/KVM -kernel/-initrd pair
 
 # --- GRUB image ---
 rm -rf "$OUT/iso"

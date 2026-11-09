@@ -35,6 +35,32 @@ CRYSTAL_HZ = {
 PADDR_TOP = 0xFFFFFFFF80000000 - 0xFFFFFF8000000000  # seL4 x86_64 kernel window: 510 GiB
 SEL4_LOAD_REGION = (0x100000, 0x1000000)  # kernel at 1 MiB + root-task scratch; generous
 MSR_TSC, MSR_TSC_ADJUST, MSR_PLATFORM_INFO = 0x10, 0x3B, 0xCE
+MSR_FEATURE_CONTROL = 0x3A
+MSR_VMX_PINBASED, MSR_VMX_PROCBASED, MSR_VMX_PROCBASED2, MSR_VMX_EPT_VPID = 0x481, 0x482, 0x48B, 0x48C
+
+# VMX capability bits (Intel SDM vol. 3, appendix A), as (name, why it matters).
+VMX_PROCBASED2_BITS = {
+    1: ("ept", "two-level paging; required"),
+    5: ("vpid", "no TLB flush on VM entry/exit"),
+    7: ("unrestricted_guest", "guest boots in real mode without emulation"),
+    8: ("apic_register_virt", "APICv: fewer interrupt-controller exits"),
+    9: ("virtual_intr_delivery", "APICv: interrupt injection without exits"),
+    14: ("vmcs_shadowing", "cheap nested virtualization"),
+    17: ("pml", "hardware dirty logging: fast diff snapshots"),
+    25: ("tsc_scaling", "guest TSC frequency independent of host"),
+}
+VMX_PINBASED_BITS = {7: ("posted_interrupts", "deliver interrupts to a running guest")}
+EPT_VPID_BITS = {
+    6: ("ept_4level", "4-level EPT walk"),
+    16: ("ept_2m", "2 MiB EPT pages"),
+    17: ("ept_1g", "1 GiB EPT pages: fewer EPT misses on populate"),
+    21: ("ept_ad", "EPT accessed/dirty bits"),
+    32: ("invvpid", "targeted TLB invalidation"),
+}
+# VT-d capability (CAP) and extended capability (ECAP) register bits.
+VTD_CAP_BITS = {59: ("posted_interrupts", "device interrupts straight into guests")}
+VTD_ECAP_BITS = {3: ("interrupt_remapping", "safe device passthrough"),
+                 7: ("pass_through", "identity domains")}
 
 
 # ---------------------------------------------------------------- parsers --
@@ -162,6 +188,28 @@ def parse_serial(text):
         if uart != "unknown":
             out[int(line)] = (uart, int(port, 16))
     return out
+
+
+def decode_bits(value, table, shift=0):
+    """{name: bool} for each bit in table, read from value >> shift."""
+    return {name: bool((value >> (shift + bit)) & 1) for bit, (name, _) in table.items()}
+
+
+def vmx_caps(pinbased, procbased, procbased2, ept_vpid):
+    """Allowed-1 settings (high dword) of the VMX capability MSRs.
+    Secondary controls exist only if primary procbased bit 31 may be 1."""
+    caps = decode_bits(pinbased, VMX_PINBASED_BITS, 32)
+    has2 = bool((procbased >> 63) & 1)
+    caps.update(decode_bits(procbased2 if has2 else 0, VMX_PROCBASED2_BITS, 32))
+    caps.update(decode_bits(ept_vpid if caps["ept"] else 0, EPT_VPID_BITS))
+    return caps
+
+
+def feature_control_vmx(value):
+    """IA32_FEATURE_CONTROL -> 'enabled' | 'disabled-locked' | 'unlocked'."""
+    if not value & 1:
+        return "unlocked"  # the kernel may still enable it
+    return "enabled" if value & 0b100 else "disabled-locked"
 
 
 # ------------------------------------------------------------- collectors --
@@ -307,6 +355,51 @@ def main():
     for l in run("lspci", "-nn").splitlines():
         if re.search(r"VGA|3D|Display", l):
             p(f"gpu: {l}")
+
+    p("\n== virtualization (microVM host)")
+    if "vmx" in cpu["flags"] or rdmsr(MSR_FEATURE_CONTROL) is not None and cpu["vendor"] == "GenuineIntel":
+        fc = rdmsr(MSR_FEATURE_CONTROL)
+        state = feature_control_vmx(fc) if fc is not None else "unknown"
+        p(f"VT-x in firmware: {state}")
+        if state == "disabled-locked":
+            warn.append("VT-x is disabled in firmware setup; enable Intel Virtualization Technology.")
+        regs = [rdmsr(m) for m in (MSR_VMX_PINBASED, MSR_VMX_PROCBASED, MSR_VMX_PROCBASED2, MSR_VMX_EPT_VPID)]
+        if None not in regs[:2]:
+            caps = vmx_caps(*(r or 0 for r in regs))
+            why = {n: w for t in (VMX_PINBASED_BITS, VMX_PROCBASED2_BITS, EPT_VPID_BITS) for n, w in t.values()}
+            for n, ok in caps.items():
+                p(f"  {'+' if ok else '-'} {n:22} {why[n]}")
+            if not caps["ept"] or not caps["unrestricted_guest"]:
+                warn.append("missing EPT or unrestricted guest: not a usable microVM host.")
+        else:
+            p("VMX capability MSRs unreadable")
+    elif "svm" in cpu["flags"]:
+        p("AMD SVM: " + " ".join(f"{f}={'y' if f in cpu['flags'] else 'n'}"
+                                 for f in ("npt", "avic", "vgif", "vmcb_clean", "flushbyasid", "tsc_scale")))
+    else:
+        warn.append("no VMX/SVM visible: VT-x disabled in firmware, or running nested.")
+    p(f"/dev/kvm: {'present' if os.path.exists('/dev/kvm') else 'absent'}")
+    kp = "/sys/module/kvm_intel/parameters"
+    if os.path.isdir(kp):
+        p("kvm_intel: " + " ".join(f"{k}={(read(f'{kp}/{k}') or '?').strip()}"
+                                   for k in ("ept", "unrestricted_guest", "vpid", "enable_apicv",
+                                             "pml", "enable_shadow_vmcs", "nested")
+                                   if os.path.exists(f"{kp}/{k}")))
+    iommus = sorted(glob.glob("/sys/class/iommu/*/intel-iommu"))
+    if iommus:
+        for d in iommus:
+            cap = int((read(f"{d}/cap") or "0").strip(), 16)
+            ecap = int((read(f"{d}/ecap") or "0").strip(), 16)
+            bits = {**decode_bits(cap, VTD_CAP_BITS), **decode_bits(ecap, VTD_ECAP_BITS)}
+            p(f"VT-d {d.split('/')[4]}: " + " ".join(f"{k}={'y' if v else 'n'}" for k, v in bits.items()))
+    else:
+        p("VT-d: no active IOMMU (DMAR table present: "
+          f"{os.path.exists('/sys/firmware/acpi/tables/DMAR')}; boot Linux with intel_iommu=on to inspect)")
+    sriov = [(os.path.basename(os.path.dirname(f)), (read(f) or "0").strip())
+             for f in glob.glob("/sys/bus/pci/devices/*/sriov_totalvfs")]
+    p(f"SR-IOV devices: {sriov or 'none (microVM I/O will be virtio)'}")
+    if os.path.exists("/dev/kvm"):
+        rec.append("KVM baseline: sudo python3 baremetal/tools/kvm_bench.py --runs 20")
 
     p("\n== serial / ACPI / memory")
     uarts = parse_serial(read("/proc/tty/driver/serial") or "")

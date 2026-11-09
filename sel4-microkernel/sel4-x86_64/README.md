@@ -85,6 +85,30 @@ BOOTPROF user tsc_mhz=… user_us=…                # root task main()
   megabytes of uncached video memory per line. If the root task faults before
   its first print, buffered kernel output only appears on a kernel halt.
 
+### Toward microVMs: KVM baseline
+
+The probe's virtualization section reports what a microVM host depends on:
+VT-x state in firmware, EPT/VPID/unrestricted guest, APICv and posted
+interrupts, PML (hardware dirty logging, for snapshots), TSC scaling, 1 GiB EPT
+pages, VT-d interrupt remapping and posted interrupts, SR-IOV, and the
+`kvm_intel` module parameters.
+
+With `/dev/kvm` available, boot the same seL4 image as a KVM guest repeatedly:
+
+```bash
+sudo python3 baremetal/tools/kvm_bench.py --runs 20 \
+    --kernel build/baremetal/tsc-<HZ>/kernel32.elf \
+    --rootserver build/baremetal/tsc-<HZ>/rootserver.elf
+```
+
+It reports min/median/p90 for `host_ms` (QEMU spawn to the root task's first
+serial line), plus the guest's `entry_us` (SeaBIOS and the multiboot loader:
+the guest TSC starts near 0 at VM creation), `kernel_us` and `tsc_init_us`.
+Under KVM the guest TSC runs at the host frequency, so use the probe's
+`--tsc-hz`. The `pc` machine's firmware cost is the target of the next step: a
+PVH entry point, so Firecracker, Cloud Hypervisor or QEMU `microvm` can load
+seL4 without firmware.
+
 ## Project Structure
 
 ```

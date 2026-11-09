@@ -101,6 +101,40 @@ class Simpledrm(unittest.TestCase):
         self.assertIsNone(np.parse_fb0("", "", "", ""))
 
 
+class Virtualization(unittest.TestCase):
+    @staticmethod
+    def allowed1(*bits):
+        return sum(1 << (32 + b) for b in bits)
+
+    def test_vmx_caps_coffee_lake_like(self):
+        proc = self.allowed1(31)                       # secondary controls available
+        proc2 = self.allowed1(1, 5, 7, 14, 17, 25)     # no APICv
+        ept = (1 << 6) | (1 << 16) | (1 << 17) | (1 << 21) | (1 << 32)
+        c = np.vmx_caps(0, proc, proc2, ept)
+        self.assertTrue(c["ept"] and c["vpid"] and c["unrestricted_guest"] and c["pml"])
+        self.assertFalse(c["apic_register_virt"] or c["virtual_intr_delivery"] or c["posted_interrupts"])
+        self.assertTrue(c["ept_1g"] and c["ept_ad"] and c["invvpid"])
+
+    def test_low_dword_ignored(self):
+        # Allowed-0 settings (low dword) must not be read as capabilities.
+        c = np.vmx_caps(1 << 7, self.allowed1(31), (1 << 1), 0)
+        self.assertFalse(c["posted_interrupts"] or c["ept"])
+
+    def test_no_secondary_controls(self):
+        c = np.vmx_caps(0, 0, self.allowed1(1, 5), (1 << 17))
+        self.assertFalse(c["ept"] or c["vpid"] or c["ept_1g"])  # also gates EPT caps
+
+    def test_feature_control(self):
+        self.assertEqual(np.feature_control_vmx(0b101), "enabled")
+        self.assertEqual(np.feature_control_vmx(0b001), "disabled-locked")
+        self.assertEqual(np.feature_control_vmx(0b000), "unlocked")
+
+    def test_vtd_bits(self):
+        self.assertEqual(np.decode_bits(1 << 59, np.VTD_CAP_BITS), {"posted_interrupts": True})
+        self.assertEqual(np.decode_bits(1 << 3, np.VTD_ECAP_BITS),
+                         {"interrupt_remapping": True, "pass_through": False})
+
+
 class Misc(unittest.TestCase):
     def test_console_geometry_matches_kernel(self):
         self.assertEqual(np.console_geometry(1280, 800), (2, 80, 50))

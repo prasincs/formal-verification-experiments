@@ -2,7 +2,7 @@
 # Regression test for the bare-metal BOOTPROF image, run under QEMU with the
 # same GRUB boot paths as a real PC (legacy BIOS and UEFI).
 #
-#  1. host unit tests for src/bootprof.rs and baremetal/tools/nuc_probe.py
+#  1. host unit tests: src/bootprof.rs, baremetal/tools/{nuc_probe,kvm_bench}.py
 #  2. PIT-calibrated build, BIOS: sane BOOTPROF lines on COM1 and the EGA text
 #     console, and tsc_init takes >= 40 ms (the PIT wait)
 #  3. pinned-TSC build (frequency taken from step 2), BIOS: tsc_init < 1 ms
@@ -27,6 +27,7 @@ echo "== host unit tests"
 rustc "$TOOLCHAIN" --edition 2021 --test src/bootprof.rs -o "$WORK/bootprof-test"
 "$WORK/bootprof-test" -q
 python3 -I baremetal/tools/test_nuc_probe.py
+python3 -I baremetal/tools/test_kvm_bench.py
 
 # hmp PORT COMMAND: run one QEMU monitor command, then quit QEMU.
 hmp() {
@@ -120,5 +121,10 @@ boot_iso "$PINNED" uefi uefi
 check_common uefi
 grep -q "Got framebuffer info.* type=1" "$WORK/uefi.serial" || fail "uefi: GRUB did not pass an RGB framebuffer"
 grep BOOTPROF "$WORK/uefi.screen"
+
+echo "== kvm_bench.py plumbing (TCG, 1 run)"
+python3 -I baremetal/tools/kvm_bench.py --accel tcg --runs 1 \
+    --kernel "build/baremetal/tsc-${mhz}000000/kernel32.elf" \
+    --rootserver "build/baremetal/tsc-${mhz}000000/rootserver.elf" >/dev/null || fail "kvm_bench (tcg)"
 
 echo "PASS (tsc_init: ${cal_tsc_init} us calibrated -> ${pin_tsc_init} us pinned; BIOS + UEFI consoles)"
