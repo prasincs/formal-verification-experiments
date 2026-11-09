@@ -55,6 +55,17 @@ scripts/build-baremetal.sh       # -> build/baremetal/tsc-0/sel4-bootprof.iso
 sudo dd if=build/baremetal/tsc-0/sel4-bootprof.iso of=/dev/sdX bs=4M conv=fsync
 ```
 
+Before flashing, boot an Ubuntu live USB on the target and run the probe. It
+reports the CPU model and which `tsc_init` path seL4 will take, the TSC
+frequency (Linux calibration, CPUID 15H/16H, `MSR_PLATFORM_INFO`), whether the
+TSC counts from reset (`IA32_TSC_ADJUST`, firmware time from FPDT), the UEFI
+framebuffer and resulting console geometry, UARTs, DMAR, and whether the memory
+seL4 loads into is usable RAM. It is read-only and needs only the standard library:
+
+```bash
+sudo python3 baremetal/tools/nuc_probe.py   # prints a report, writes ./sel4-probe.txt
+```
+
 On the target (e.g. Intel NUC8/NUC9), disable Secure Boot in firmware setup
 (F2), since GRUB is unsigned. Then pick the USB stick from the F10 menu,
 booting it either UEFI or legacy. Output:

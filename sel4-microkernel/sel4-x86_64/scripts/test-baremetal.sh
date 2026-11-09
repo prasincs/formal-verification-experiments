@@ -2,7 +2,7 @@
 # Regression test for the bare-metal BOOTPROF image, run under QEMU with the
 # same GRUB boot paths as a real PC (legacy BIOS and UEFI).
 #
-#  1. host unit tests for src/bootprof.rs
+#  1. host unit tests for src/bootprof.rs and baremetal/tools/nuc_probe.py
 #  2. PIT-calibrated build, BIOS: sane BOOTPROF lines on COM1 and the EGA text
 #     console, and tsc_init takes >= 40 ms (the PIT wait)
 #  3. pinned-TSC build (frequency taken from step 2), BIOS: tsc_init < 1 ms
@@ -26,6 +26,7 @@ fail() { echo "FAIL: $*" >&2; exit 1; }
 echo "== host unit tests"
 rustc "$TOOLCHAIN" --edition 2021 --test src/bootprof.rs -o "$WORK/bootprof-test"
 "$WORK/bootprof-test" -q
+python3 -I baremetal/tools/test_nuc_probe.py
 
 # hmp PORT COMMAND: run one QEMU monitor command, then quit QEMU.
 hmp() {
