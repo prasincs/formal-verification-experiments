@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Build a bootable (legacy BIOS) GRUB image: patched seL4 kernel + Rust root
+# Build a bootable GRUB image (legacy BIOS and UEFI): patched seL4 kernel + Rust root
 # task, instrumented to print boot timestamps (BOOTPROF lines) to COM1 and to
-# the VGA text console.
+# the screen (VGA text on BIOS, GOP framebuffer on UEFI).
 #
 #   scripts/build-baremetal.sh [--tsc-hz HZ]
 #
@@ -31,8 +31,11 @@ SEL4_SRC="$PROJECT_DIR/sel4-kit/seL4-$SEL4_REV"
 OUT="$PROJECT_DIR/build/baremetal/tsc-$TSC_HZ"
 TOOLCHAIN="+$(sed -n 's/^channel = "\(.*\)"/\1/p' ../rust-toolchain.toml)"
 
-for cmd in git cmake ninja gcc objcopy python3 cargo grub-mkrescue xorriso; do
+for cmd in git cmake ninja gcc objcopy python3 cargo grub-mkrescue xorriso mformat; do
     command -v "$cmd" >/dev/null || { echo "missing: $cmd" >&2; exit 1; }
+done
+for d in /usr/lib/grub/i386-pc /usr/lib/grub/x86_64-efi; do
+    [ -d "$d" ] || { echo "missing $d (grub-pc-bin / grub-efi-amd64-bin)" >&2; exit 1; }
 done
 python3 -c 'import ply, jinja2, yaml' 2>/dev/null \
     || { echo "missing python modules: pip3 install ply jinja2 pyyaml" >&2; exit 1; }
@@ -45,12 +48,12 @@ if [ ! -d "$SEL4_SRC/.git" ]; then
 fi
 [ "$(git -C "$SEL4_SRC" rev-parse HEAD)" = "$SEL4_REV" ] \
     || { echo "seL4 checkout is not at $SEL4_REV" >&2; exit 1; }
-PATCH="$BM/patches/0001-bootprof-tsc-checkpoints-and-vga-console.patch"
-if git -C "$SEL4_SRC" apply --check "$PATCH" 2>/dev/null; then
-    git -C "$SEL4_SRC" apply "$PATCH"
-elif ! git -C "$SEL4_SRC" apply --check --reverse "$PATCH" 2>/dev/null; then
-    echo "BOOTPROF patch neither applies nor is already applied" >&2; exit 1
-fi
+# Always start from the pristine pinned tree so patch edits take effect.
+git -C "$SEL4_SRC" checkout -q -- .
+git -C "$SEL4_SRC" clean -fdq
+for patch in "$BM"/patches/0*.patch; do
+    git -C "$SEL4_SRC" apply "$patch"
+done
 
 # --- kernel ---
 cmake -G Ninja -S "$SEL4_SRC" -B "$OUT/kernel" \

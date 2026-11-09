@@ -1,0 +1,440 @@
+diff --git a/include/arch/x86/arch/bootprof.h b/include/arch/x86/arch/bootprof.h
+new file mode 100644
+index 0000000..e4e9a86
+--- /dev/null
++++ b/include/arch/x86/arch/bootprof.h
+@@ -0,0 +1,17 @@
++/*
++ * BOOTPROF: boot-time instrumentation for bare-metal measurement builds.
++ * Not part of the verified kernel configuration.
++ *
++ * SPDX-License-Identifier: GPL-2.0-only
++ */
++#pragma once
++
++#include <types.h>
++#include <arch/kernel/multiboot2.h>
++
++extern uint64_t bootprof_tsc_init_cycles;
++extern uint32_t bootprof_tsc_mhz;
++/* Record the boot loader's framebuffer for the BOOTPROF console. */
++void bootprof_screen_init(const multiboot2_fb_t *fb);
++/* Stop buffering console output and write it out. Idempotent. */
++void bootprof_flush(void);
+diff --git a/include/arch/x86/arch/bootprof_font8x8.h b/include/arch/x86/arch/bootprof_font8x8.h
+new file mode 100644
+index 0000000..41642ee
+--- /dev/null
++++ b/include/arch/x86/arch/bootprof_font8x8.h
+@@ -0,0 +1,110 @@
++/*
++ * 8x8 glyphs for U+0020..U+007E from font8x8_basic.h by Daniel Hepper
++ * (https://github.com/dhepper/font8x8), Public Domain. Bit 0 = leftmost pixel.
++ *
++ * SPDX-License-Identifier: CC0-1.0
++ */
++#pragma once
++
++#include <types.h>
++
++#define BOOTPROF_FONT_FIRST 0x20
++#define BOOTPROF_FONT_LAST  0x7e
++
++static const uint8_t bootprof_font[BOOTPROF_FONT_LAST - BOOTPROF_FONT_FIRST + 1][8] = {
++    { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 }, /* ' ' */
++    { 0x18, 0x3C, 0x3C, 0x18, 0x18, 0x00, 0x18, 0x00 }, /* '!' */
++    { 0x36, 0x36, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 }, /* '"' */
++    { 0x36, 0x36, 0x7F, 0x36, 0x7F, 0x36, 0x36, 0x00 }, /* '#' */
++    { 0x0C, 0x3E, 0x03, 0x1E, 0x30, 0x1F, 0x0C, 0x00 }, /* '$' */
++    { 0x00, 0x63, 0x33, 0x18, 0x0C, 0x66, 0x63, 0x00 }, /* '%' */
++    { 0x1C, 0x36, 0x1C, 0x6E, 0x3B, 0x33, 0x6E, 0x00 }, /* '&' */
++    { 0x06, 0x06, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00 }, /* "'" */
++    { 0x18, 0x0C, 0x06, 0x06, 0x06, 0x0C, 0x18, 0x00 }, /* '(' */
++    { 0x06, 0x0C, 0x18, 0x18, 0x18, 0x0C, 0x06, 0x00 }, /* ')' */
++    { 0x00, 0x66, 0x3C, 0xFF, 0x3C, 0x66, 0x00, 0x00 }, /* '*' */
++    { 0x00, 0x0C, 0x0C, 0x3F, 0x0C, 0x0C, 0x00, 0x00 }, /* '+' */
++    { 0x00, 0x00, 0x00, 0x00, 0x00, 0x0C, 0x0C, 0x06 }, /* ',' */
++    { 0x00, 0x00, 0x00, 0x3F, 0x00, 0x00, 0x00, 0x00 }, /* '-' */
++    { 0x00, 0x00, 0x00, 0x00, 0x00, 0x0C, 0x0C, 0x00 }, /* '.' */
++    { 0x60, 0x30, 0x18, 0x0C, 0x06, 0x03, 0x01, 0x00 }, /* '/' */
++    { 0x3E, 0x63, 0x73, 0x7B, 0x6F, 0x67, 0x3E, 0x00 }, /* '0' */
++    { 0x0C, 0x0E, 0x0C, 0x0C, 0x0C, 0x0C, 0x3F, 0x00 }, /* '1' */
++    { 0x1E, 0x33, 0x30, 0x1C, 0x06, 0x33, 0x3F, 0x00 }, /* '2' */
++    { 0x1E, 0x33, 0x30, 0x1C, 0x30, 0x33, 0x1E, 0x00 }, /* '3' */
++    { 0x38, 0x3C, 0x36, 0x33, 0x7F, 0x30, 0x78, 0x00 }, /* '4' */
++    { 0x3F, 0x03, 0x1F, 0x30, 0x30, 0x33, 0x1E, 0x00 }, /* '5' */
++    { 0x1C, 0x06, 0x03, 0x1F, 0x33, 0x33, 0x1E, 0x00 }, /* '6' */
++    { 0x3F, 0x33, 0x30, 0x18, 0x0C, 0x0C, 0x0C, 0x00 }, /* '7' */
++    { 0x1E, 0x33, 0x33, 0x1E, 0x33, 0x33, 0x1E, 0x00 }, /* '8' */
++    { 0x1E, 0x33, 0x33, 0x3E, 0x30, 0x18, 0x0E, 0x00 }, /* '9' */
++    { 0x00, 0x0C, 0x0C, 0x00, 0x00, 0x0C, 0x0C, 0x00 }, /* ':' */
++    { 0x00, 0x0C, 0x0C, 0x00, 0x00, 0x0C, 0x0C, 0x06 }, /* ';' */
++    { 0x18, 0x0C, 0x06, 0x03, 0x06, 0x0C, 0x18, 0x00 }, /* '<' */
++    { 0x00, 0x00, 0x3F, 0x00, 0x00, 0x3F, 0x00, 0x00 }, /* '=' */
++    { 0x06, 0x0C, 0x18, 0x30, 0x18, 0x0C, 0x06, 0x00 }, /* '>' */
++    { 0x1E, 0x33, 0x30, 0x18, 0x0C, 0x00, 0x0C, 0x00 }, /* '?' */
++    { 0x3E, 0x63, 0x7B, 0x7B, 0x7B, 0x03, 0x1E, 0x00 }, /* '@' */
++    { 0x0C, 0x1E, 0x33, 0x33, 0x3F, 0x33, 0x33, 0x00 }, /* 'A' */
++    { 0x3F, 0x66, 0x66, 0x3E, 0x66, 0x66, 0x3F, 0x00 }, /* 'B' */
++    { 0x3C, 0x66, 0x03, 0x03, 0x03, 0x66, 0x3C, 0x00 }, /* 'C' */
++    { 0x1F, 0x36, 0x66, 0x66, 0x66, 0x36, 0x1F, 0x00 }, /* 'D' */
++    { 0x7F, 0x46, 0x16, 0x1E, 0x16, 0x46, 0x7F, 0x00 }, /* 'E' */
++    { 0x7F, 0x46, 0x16, 0x1E, 0x16, 0x06, 0x0F, 0x00 }, /* 'F' */
++    { 0x3C, 0x66, 0x03, 0x03, 0x73, 0x66, 0x7C, 0x00 }, /* 'G' */
++    { 0x33, 0x33, 0x33, 0x3F, 0x33, 0x33, 0x33, 0x00 }, /* 'H' */
++    { 0x1E, 0x0C, 0x0C, 0x0C, 0x0C, 0x0C, 0x1E, 0x00 }, /* 'I' */
++    { 0x78, 0x30, 0x30, 0x30, 0x33, 0x33, 0x1E, 0x00 }, /* 'J' */
++    { 0x67, 0x66, 0x36, 0x1E, 0x36, 0x66, 0x67, 0x00 }, /* 'K' */
++    { 0x0F, 0x06, 0x06, 0x06, 0x46, 0x66, 0x7F, 0x00 }, /* 'L' */
++    { 0x63, 0x77, 0x7F, 0x7F, 0x6B, 0x63, 0x63, 0x00 }, /* 'M' */
++    { 0x63, 0x67, 0x6F, 0x7B, 0x73, 0x63, 0x63, 0x00 }, /* 'N' */
++    { 0x1C, 0x36, 0x63, 0x63, 0x63, 0x36, 0x1C, 0x00 }, /* 'O' */
++    { 0x3F, 0x66, 0x66, 0x3E, 0x06, 0x06, 0x0F, 0x00 }, /* 'P' */
++    { 0x1E, 0x33, 0x33, 0x33, 0x3B, 0x1E, 0x38, 0x00 }, /* 'Q' */
++    { 0x3F, 0x66, 0x66, 0x3E, 0x36, 0x66, 0x67, 0x00 }, /* 'R' */
++    { 0x1E, 0x33, 0x07, 0x0E, 0x38, 0x33, 0x1E, 0x00 }, /* 'S' */
++    { 0x3F, 0x2D, 0x0C, 0x0C, 0x0C, 0x0C, 0x1E, 0x00 }, /* 'T' */
++    { 0x33, 0x33, 0x33, 0x33, 0x33, 0x33, 0x3F, 0x00 }, /* 'U' */
++    { 0x33, 0x33, 0x33, 0x33, 0x33, 0x1E, 0x0C, 0x00 }, /* 'V' */
++    { 0x63, 0x63, 0x63, 0x6B, 0x7F, 0x77, 0x63, 0x00 }, /* 'W' */
++    { 0x63, 0x63, 0x36, 0x1C, 0x1C, 0x36, 0x63, 0x00 }, /* 'X' */
++    { 0x33, 0x33, 0x33, 0x1E, 0x0C, 0x0C, 0x1E, 0x00 }, /* 'Y' */
++    { 0x7F, 0x63, 0x31, 0x18, 0x4C, 0x66, 0x7F, 0x00 }, /* 'Z' */
++    { 0x1E, 0x06, 0x06, 0x06, 0x06, 0x06, 0x1E, 0x00 }, /* '[' */
++    { 0x03, 0x06, 0x0C, 0x18, 0x30, 0x60, 0x40, 0x00 }, /* '\\' */
++    { 0x1E, 0x18, 0x18, 0x18, 0x18, 0x18, 0x1E, 0x00 }, /* ']' */
++    { 0x08, 0x1C, 0x36, 0x63, 0x00, 0x00, 0x00, 0x00 }, /* '^' */
++    { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xFF }, /* '_' */
++    { 0x0C, 0x0C, 0x18, 0x00, 0x00, 0x00, 0x00, 0x00 }, /* '`' */
++    { 0x00, 0x00, 0x1E, 0x30, 0x3E, 0x33, 0x6E, 0x00 }, /* 'a' */
++    { 0x07, 0x06, 0x06, 0x3E, 0x66, 0x66, 0x3B, 0x00 }, /* 'b' */
++    { 0x00, 0x00, 0x1E, 0x33, 0x03, 0x33, 0x1E, 0x00 }, /* 'c' */
++    { 0x38, 0x30, 0x30, 0x3e, 0x33, 0x33, 0x6E, 0x00 }, /* 'd' */
++    { 0x00, 0x00, 0x1E, 0x33, 0x3f, 0x03, 0x1E, 0x00 }, /* 'e' */
++    { 0x1C, 0x36, 0x06, 0x0f, 0x06, 0x06, 0x0F, 0x00 }, /* 'f' */
++    { 0x00, 0x00, 0x6E, 0x33, 0x33, 0x3E, 0x30, 0x1F }, /* 'g' */
++    { 0x07, 0x06, 0x36, 0x6E, 0x66, 0x66, 0x67, 0x00 }, /* 'h' */
++    { 0x0C, 0x00, 0x0E, 0x0C, 0x0C, 0x0C, 0x1E, 0x00 }, /* 'i' */
++    { 0x30, 0x00, 0x30, 0x30, 0x30, 0x33, 0x33, 0x1E }, /* 'j' */
++    { 0x07, 0x06, 0x66, 0x36, 0x1E, 0x36, 0x67, 0x00 }, /* 'k' */
++    { 0x0E, 0x0C, 0x0C, 0x0C, 0x0C, 0x0C, 0x1E, 0x00 }, /* 'l' */
++    { 0x00, 0x00, 0x33, 0x7F, 0x7F, 0x6B, 0x63, 0x00 }, /* 'm' */
++    { 0x00, 0x00, 0x1F, 0x33, 0x33, 0x33, 0x33, 0x00 }, /* 'n' */
++    { 0x00, 0x00, 0x1E, 0x33, 0x33, 0x33, 0x1E, 0x00 }, /* 'o' */
++    { 0x00, 0x00, 0x3B, 0x66, 0x66, 0x3E, 0x06, 0x0F }, /* 'p' */
++    { 0x00, 0x00, 0x6E, 0x33, 0x33, 0x3E, 0x30, 0x78 }, /* 'q' */
++    { 0x00, 0x00, 0x3B, 0x6E, 0x66, 0x06, 0x0F, 0x00 }, /* 'r' */
++    { 0x00, 0x00, 0x3E, 0x03, 0x1E, 0x30, 0x1F, 0x00 }, /* 's' */
++    { 0x08, 0x0C, 0x3E, 0x0C, 0x0C, 0x2C, 0x18, 0x00 }, /* 't' */
++    { 0x00, 0x00, 0x33, 0x33, 0x33, 0x33, 0x6E, 0x00 }, /* 'u' */
++    { 0x00, 0x00, 0x33, 0x33, 0x33, 0x1E, 0x0C, 0x00 }, /* 'v' */
++    { 0x00, 0x00, 0x63, 0x6B, 0x7F, 0x7F, 0x36, 0x00 }, /* 'w' */
++    { 0x00, 0x00, 0x63, 0x36, 0x1C, 0x36, 0x63, 0x00 }, /* 'x' */
++    { 0x00, 0x00, 0x33, 0x33, 0x33, 0x3E, 0x30, 0x1F }, /* 'y' */
++    { 0x00, 0x00, 0x3F, 0x19, 0x0C, 0x26, 0x3F, 0x00 }, /* 'z' */
++    { 0x38, 0x0C, 0x0C, 0x07, 0x0C, 0x0C, 0x38, 0x00 }, /* '{' */
++    { 0x18, 0x18, 0x18, 0x00, 0x18, 0x18, 0x18, 0x00 }, /* '|' */
++    { 0x07, 0x0C, 0x0C, 0x38, 0x0C, 0x0C, 0x07, 0x00 }, /* '}' */
++    { 0x6E, 0x3B, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 }, /* '~' */
++};
+diff --git a/src/api/syscall.c b/src/api/syscall.c
+index 5166f3b..b82e2a1 100644
+--- a/src/api/syscall.c
++++ b/src/api/syscall.c
+@@ -4,6 +4,9 @@
+  * SPDX-License-Identifier: GPL-2.0-only
+  */
+ 
++#ifdef CONFIG_ARCH_X86
++#include <arch/bootprof.h>
++#endif
+ #include <config.h>
+ #include <types.h>
+ #include <benchmark/benchmark.h>
+@@ -98,6 +101,9 @@ exception_t handleUnknownSyscall(word_t w)
+ {
+ #ifdef CONFIG_PRINTING
+     if (w == SysDebugPutChar) {
++#ifdef CONFIG_ARCH_X86
++        bootprof_flush(); /* BOOTPROF: first user output ends boot buffering */
++#endif
+         kernel_putchar(getRegister(NODE_STATE(ksCurThread), capRegister));
+         return EXCEPTION_NONE;
+     }
+diff --git a/src/arch/x86/idle.c b/src/arch/x86/idle.c
+index 4de6597..42129e8 100644
+--- a/src/arch/x86/idle.c
++++ b/src/arch/x86/idle.c
+@@ -6,6 +6,7 @@
+ 
+ #include <config.h>
+ #include <api/debug.h>
++#include <arch/bootprof.h>
+ 
+ /** DONT_TRANSLATE */
+ void VISIBLE halt(void)
+@@ -14,6 +15,7 @@ void VISIBLE halt(void)
+     asm volatile("cli");
+ 
+ #ifdef CONFIG_PRINTING
++    bootprof_flush(); /* BOOTPROF: never lose buffered output on a panic */
+     printf("halting...");
+ #ifdef CONFIG_DEBUG_BUILD
+     debug_printKernelEntryReason();
+diff --git a/src/arch/x86/kernel/boot.c b/src/arch/x86/kernel/boot.c
+index 93b3209..b2b6e51 100644
+--- a/src/arch/x86/kernel/boot.c
++++ b/src/arch/x86/kernel/boot.c
+@@ -4,6 +4,7 @@
+  * SPDX-License-Identifier: GPL-2.0-only
+  */
+ 
++#include <arch/bootprof.h>
+ #include <config.h>
+ #include <kernel/boot.h>
+ #include <machine/io.h>
+@@ -83,6 +84,9 @@ BOOT_CODE static bool_t arch_init_freemem(p_region_t ui_p_reg,
+ 
+ /* This function initialises a node's kernel state. It does NOT initialise the CPU. */
+ 
++uint64_t bootprof_tsc_init_cycles;
++uint32_t bootprof_tsc_mhz;
++
+ BOOT_CODE bool_t init_sys_state(
+     cpu_id_t      cpu_id,
+     mem_p_regs_t  *mem_p_regs,
+@@ -170,7 +174,10 @@ BOOT_CODE bool_t init_sys_state(
+     /* initialise the IRQ states and provide the IRQ control cap */
+     init_irqs(root_cnode_cap);
+ 
++    uint64_t bootprof_t = x86_rdtsc();
+     tsc_freq = tsc_init();
++    bootprof_tsc_init_cycles = x86_rdtsc() - bootprof_t;
++    bootprof_tsc_mhz = tsc_freq;
+ 
+     /* populate the bootinfo frame */
+     populate_bi_frame(0, ksNumCPUs, ipcbuf_vptr, extra_bi_size);
+diff --git a/src/arch/x86/kernel/boot_sys.c b/src/arch/x86/kernel/boot_sys.c
+index 55b7066..960c3c8 100644
+--- a/src/arch/x86/kernel/boot_sys.c
++++ b/src/arch/x86/kernel/boot_sys.c
+@@ -4,6 +4,7 @@
+  * SPDX-License-Identifier: GPL-2.0-only
+  */
+ 
++#include <arch/bootprof.h>
+ #include <config.h>
+ #include <util.h>
+ #include <hardware.h>
+@@ -686,6 +687,9 @@ static BOOT_CODE bool_t try_boot_sys_mbi2(
+             printf("Got framebuffer info in multiboot2. Current video mode is at physical address=%llx pitch=%u resolution=%ux%u@%u type=%u\n",
+                    fb->addr, fb->pitch, fb->width, fb->height, fb->bpp, fb->type);
+             boot_state.fb_info = *fb;
++#ifdef CONFIG_PRINTING
++            bootprof_screen_init(fb);
++#endif
+         }
+ 
+         tag = (multiboot2_tag_t const *)((word_t)tag + ROUND_UP(tag->size, 3));
+@@ -701,10 +705,18 @@ static BOOT_CODE bool_t try_boot_sys_mbi2(
+     return true;
+ }
+ 
++static inline uint64_t bootprof_us(uint64_t cycles)
++{
++    return bootprof_tsc_mhz ? cycles / bootprof_tsc_mhz : 0;
++}
++
+ BOOT_CODE VISIBLE void boot_sys(
+     unsigned long multiboot_magic,
+     void *mbi)
+ {
++    /* BOOTPROF: first instruction of C boot code. The TSC counts from reset,
++     * so this value also approximates firmware + boot loader time. */
++    uint64_t bootprof_entry = x86_rdtsc();
+     bool_t result = false;
+ 
+     if (multiboot_magic == MULTIBOOT_MAGIC) {
+@@ -726,6 +738,16 @@ BOOT_CODE VISIBLE void boot_sys(
+     ARCH_NODE_STATE(x86KScurInterrupt) = int_invalid;
+     ARCH_NODE_STATE(x86KSPendingInterrupt) = int_invalid;
+ 
++    uint64_t bootprof_exit = x86_rdtsc();
++    /* Two lines so each fits an 80-column text console. */
++    printf("BOOTPROF kernel tsc_mhz=%u tsc_init_us=%llu\n",
++           bootprof_tsc_mhz,
++           (unsigned long long)bootprof_us(bootprof_tsc_init_cycles));
++    printf("BOOTPROF kernel entry_us=%llu exit_us=%llu kernel_us=%llu\n",
++           (unsigned long long)bootprof_us(bootprof_entry),
++           (unsigned long long)bootprof_us(bootprof_exit),
++           (unsigned long long)bootprof_us(bootprof_exit - bootprof_entry));
++
+ #ifdef CONFIG_KERNEL_MCS
+     NODE_STATE(ksCurTime) = getCurrentTime();
+     NODE_STATE(ksConsumed) = 0;
+diff --git a/src/plat/pc99/machine/io.c b/src/plat/pc99/machine/io.c
+index 83a53ba..c48945a 100644
+--- a/src/plat/pc99/machine/io.c
++++ b/src/plat/pc99/machine/io.c
+@@ -4,6 +4,7 @@
+  * SPDX-License-Identifier: GPL-2.0-only
+  */
+ 
++#include <arch/bootprof.h>
+ #include <config.h>
+ #include <arch/kernel/boot_sys.h>
+ #include <arch/model/statedata.h>
+@@ -41,12 +42,152 @@ void uart_drv_putchar(
+     out8(x86KSdebugPort, c);
+ }
+ 
+-void kernel_putDebugChar(unsigned char c)
++/*
++ * BOOTPROF console (measurement builds only; not the verified kernel).
++ *
++ * 1. Output is buffered in memory until the root task's first
++ *    seL4_DebugPutChar (or halt()), so serial/screen I/O does not inflate the
++ *    boot timestamps. The root task samples the TSC before it prints.
++ * 2. Besides COM1, output goes to the boot loader's multiboot2 framebuffer:
++ *    EGA text (legacy BIOS) or 24/32bpp linear RGB (UEFI GOP), the latter
++ *    drawn with an 8x8 font, scaled so ~80 columns fit. No scrolling: the
++ *    cursor wraps to the top, clearing each line before it is reused.
++ */
++#include <arch/bootprof_font8x8.h>
++
++#define BOOTPROF_BUF_SIZE 16384
++static char bootprof_buf[BOOTPROF_BUF_SIZE];
++static word_t bootprof_buf_len;
++static bool_t bootprof_live;
++
++static multiboot2_fb_t bootprof_fb;
++static uint8_t *bootprof_fb_base;   /* kernel-window pointer; NULL = no screen */
++static word_t bootprof_cols, bootprof_rows, bootprof_scale, bootprof_pos;
++
++#define FB_TYPE_RGB 1
++#define FB_TYPE_EGA_TEXT 2
++#define EGA_ATTR 0x0700u
++
++void bootprof_screen_init(const multiboot2_fb_t *fb)
++{
++    bootprof_fb = *fb;
++}
++
++/* Map lazily (at first flush), when the full kernel window exists; the boot
++ * page tables only cover the low 4 GiB and GOP framebuffers may sit higher. */
++static bool_t bootprof_screen_map(void)
++{
++    multiboot2_fb_t const *fb = &bootprof_fb;
++    word_t bytespp = fb->bpp / 8;
++    if (fb->addr == 0 || fb->width == 0 || fb->height == 0) {
++        return false;
++    }
++    if (fb->type == FB_TYPE_EGA_TEXT) {
++        bootprof_cols = fb->width;
++        bootprof_rows = fb->height;
++        bytespp = 2;
++    } else if (fb->type == FB_TYPE_RGB && (fb->bpp == 24 || fb->bpp == 32)) {
++        bootprof_scale = fb->width / (80 * 8);
++        bootprof_scale = bootprof_scale < 1 ? 1 : (bootprof_scale > 4 ? 4 : bootprof_scale);
++        bootprof_cols = fb->width / (8 * bootprof_scale);
++        bootprof_rows = fb->height / (8 * bootprof_scale);
++    } else {
++        return false;
++    }
++    if (fb->pitch < fb->width * bytespp ||
++        fb->addr + (uint64_t)fb->pitch * fb->height > PADDR_TOP) {
++        return false;
++    }
++    bootprof_fb_base = (uint8_t *)paddr_to_pptr(fb->addr);
++    return true;
++}
++
++static void bootprof_cell(word_t pos, unsigned char c)
++{
++    multiboot2_fb_t const *fb = &bootprof_fb;
++    if (fb->type == FB_TYPE_EGA_TEXT) {
++        ((volatile uint16_t *)bootprof_fb_base)[pos] = EGA_ATTR | c;
++        return;
++    }
++    if (c < BOOTPROF_FONT_FIRST || c > BOOTPROF_FONT_LAST) {
++        c = '?';
++    }
++    uint8_t const *glyph = bootprof_font[c - BOOTPROF_FONT_FIRST];
++    word_t bytespp = fb->bpp / 8;
++    word_t x0 = (pos % bootprof_cols) * 8 * bootprof_scale;
++    word_t y0 = (pos / bootprof_cols) * 8 * bootprof_scale;
++    for (word_t y = 0; y < 8 * bootprof_scale; y++) {
++        volatile uint8_t *row = bootprof_fb_base + (y0 + y) * fb->pitch + x0 * bytespp;
++        uint8_t bits = glyph[y / bootprof_scale];
++        for (word_t x = 0; x < 8 * bootprof_scale; x++) {
++            uint8_t v = (bits >> (x / bootprof_scale)) & 1 ? 0xff : 0x00;
++            for (word_t k = 0; k < bytespp; k++) {
++                *row++ = v;
++            }
++        }
++    }
++}
++
++static void bootprof_clear_row(word_t row)
++{
++    for (word_t i = 0; i < bootprof_cols; i++) {
++        bootprof_cell(row * bootprof_cols + i, ' ');
++    }
++}
++
++static void bootprof_screen_putchar(unsigned char c)
++{
++    if (!bootprof_fb_base || c == '\r') {
++        return;
++    }
++    if (c == '\n') {
++        bootprof_pos += bootprof_cols - (bootprof_pos % bootprof_cols);
++    } else {
++        bootprof_cell(bootprof_pos++, c);
++    }
++    if (bootprof_pos >= bootprof_cols * bootprof_rows) {
++        bootprof_pos = 0;
++    }
++    if (bootprof_pos % bootprof_cols == 0) {
++        bootprof_clear_row(bootprof_pos / bootprof_cols);
++    }
++}
++
++static void bootprof_emit(unsigned char c)
+ {
++    bootprof_screen_putchar(c);
+     /* this will take care of CR/LF handling and call uart_drv_putchar() */
+     uart_console_putchar(c);
+ }
+ 
++void bootprof_flush(void)
++{
++    if (bootprof_live) {
++        return;
++    }
++    bootprof_live = true;
++    if (bootprof_screen_map()) {
++        for (word_t r = 0; r < bootprof_rows; r++) {
++            bootprof_clear_row(r);
++        }
++    }
++    for (word_t i = 0; i < bootprof_buf_len; i++) {
++        bootprof_emit(bootprof_buf[i]);
++    }
++}
++
++void kernel_putDebugChar(unsigned char c)
++{
++    if (!bootprof_live) {
++        if (bootprof_buf_len < BOOTPROF_BUF_SIZE) {
++            bootprof_buf[bootprof_buf_len++] = c;
++            return;
++        }
++        bootprof_flush();
++    }
++    bootprof_emit(c);
++}
++
+ #endif /* CONFIG_PRINTING */
+ 
+ #ifdef CONFIG_DEBUG_BUILD
