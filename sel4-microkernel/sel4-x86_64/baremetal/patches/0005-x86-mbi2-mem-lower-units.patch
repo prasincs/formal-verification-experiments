@@ -1,0 +1,15 @@
+diff --git a/src/arch/x86/kernel/boot_sys.c b/src/arch/x86/kernel/boot_sys.c
+index 41864b6..fc22988 100644
+--- a/src/arch/x86/kernel/boot_sys.c
++++ b/src/arch/x86/kernel/boot_sys.c
+@@ -706,7 +706,9 @@ static BOOT_CODE bool_t try_boot_sys_mbi2(
+ 
+             for (multiboot2_memory_t const *m = s; m < e; m++) {
+                 if (!m->addr) {
+-                    boot_state.mem_lower = m->size;
++                    /* mem_lower is in KiB (multiboot1's field, and what
++                     * copy_boot_code_aps() expects); the mmap size is bytes. */
++                    boot_state.mem_lower = MIN(m->size >> 10, 0xffffffffull);
+                 }
+ 
+                 printf("\tPhysical Memory Region from %llx size %llx type %u\n", m->addr, m->size, m->type);

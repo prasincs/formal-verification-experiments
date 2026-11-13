@@ -11,6 +11,7 @@ LOG = """Boot config: console_port = 0x3f8
 BOOTPROF kernel tsc_mhz=2400 tsc_init_us=5
 BOOTPROF kernel apic_khz=24000 apic_cal_us=0
 BOOTPROF kernel entry_us=31000 exit_us=33500 kernel_us=2500
+BOOTPROF flush bytes=1603 early=0 flush_us=8000 done_us=41900
 BOOTPROF user tsc_mhz=2400 user_us=33900
 seL4 x86_64 root server started
 BOOTPROF done
@@ -29,6 +30,15 @@ class Parse(unittest.TestCase):
     def test_ignores_non_bootprof_and_unknown_keys(self):
         r = kb.parse_bootprof(["foo entry_us=1", "BOOTPROF kernel bogus=7 exit_us=9"])
         self.assertEqual(r, {"exit_us": 9})
+
+    def test_flush_fields(self):
+        r = kb.parse_bootprof(LOG)
+        self.assertEqual((r["bytes"], r["early"], r["flush_us"], r["done_us"]), (1603, 0, 8000, 41900))
+
+    def test_boot_path(self):
+        self.assertEqual(kb.boot_path(["PVH: start_info v1, 1 module(s), rsdp=f4250"] + LOG), "pvh")
+        self.assertEqual(kb.boot_path(["Detected 1 boot module(s):"] + LOG), "multiboot")
+        self.assertEqual(kb.boot_path(["  PVH: start_info"]), "multiboot")  # anchored at line start
 
     def test_empty(self):
         self.assertEqual(kb.parse_bootprof([]), {})

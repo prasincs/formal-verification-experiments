@@ -38,10 +38,11 @@ Patches in `baremetal/patches/`, applied in order:
 
 | Patch | What | Upstream? |
 |---|---|---|
-| `0001-bootprof-*` | TSC checkpoints. A console for serial-less machines: COM1, plus the boot loader's framebuffer (EGA text on BIOS, UEFI GOP with a public-domain 8x8 font). Output is buffered until the root task's first print, so console I/O doesn't skew the timestamps. | no (instrumentation) |
-| `0002-x86-boot-module-placement` | Load the root task in place when the boot module doesn't overlap its destination. Upstream asserts the module is above the kernel, and ELF-loads into scratch past it, which falls off the end of RAM when a PVH loader puts the module at the top of RAM. | candidate |
-| `0003-x86-pvh-boot-and-acpi-xsdt` | PVH entry (`XEN_ELFNOTE_PHYS32_ENTRY` and an `hvm_start_info` parser), plus ACPI XSDT support. QEMU `microvm`, Firecracker and Cloud Hypervisor publish XSDT-only tables; upstream reads only the RSDT. | candidate |
-| `0004-x86-pinnable-apic-timer-frequency` | `KernelPC99APICTimerFrequency`, like the existing TSC option. In the non-MCS kernel, `apic_init()` otherwise always measures the APIC timer against the PIT (50–100 ms). | candidate |
+| `0001-bootprof-*` | TSC checkpoints. A console for serial-less machines: COM1, plus the boot loader's framebuffer (EGA text on BIOS, UEFI GOP with a public-domain 8x8 font). Output is buffered until the root task's first print, which keeps console I/O out of the boot timestamps but **not out of time-to-ready**: a `BOOTPROF flush` line reports what the deferred output cost. | no (instrumentation) |
+| `0002-x86-boot-module-placement` | Load the root task in place when the boot module doesn't overlap its destination. Upstream ELF-loads into scratch just past the module, which falls off the end of RAM when a PVH loader puts the module at the top of RAM. Also fixes a `find_load_paddr` underflow (it could return non-RAM), replaces its `assert` with an error, and refuses to boot if the image lands anywhere but the expected address. | candidate |
+| `0003-x86-pvh-boot-and-acpi-xsdt` | PVH entry (`XEN_ELFNOTE_PHYS32_ENTRY` and an `hvm_start_info` parser). Every pointer and range is checked to lie below 4 GiB with no wrap-around, and memory is clipped to whole pages. Also ACPI XSDT support: it prefers the XSDT on ACPI 2.0+, as the spec says, since QEMU `microvm`, Firecracker and Cloud Hypervisor publish nothing else. Tables above 4 GiB are skipped with a warning, and with the IOMMU enabled the kernel refuses to boot rather than risk losing the DMAR silently. | candidate |
+| `0004-x86-pinnable-apic-timer-frequency` | `KernelPC99APICTimerFrequency`. The non-MCS `apic_init()` otherwise always measures the APIC timer against the PIT (50–100 ms). Pins below 1 MHz (TSC or APIC) are compile errors. On bare metal, a pinned APIC frequency is cross-checked against the CPUID 15H crystal clock, with a warning on mismatch. | candidate |
+| `0005-x86-mbi2-mem-lower-units` | Upstream bug: the multiboot2 path stores `mem_lower` in bytes, but `copy_boot_code_aps()` expects KiB, which disables the SMP AP boot-code bounds check. | candidate |
 
 This is a measurement build (debug + printing on, IOMMU off), not the verified
 configuration.
@@ -86,11 +87,18 @@ the USB stick from the F10 menu, booting it either UEFI or legacy. Output:
 BOOTPROF kernel tsc_mhz=… tsc_init_us=…          # TSC: PIT wait unless pinned
 BOOTPROF kernel apic_khz=… apic_cal_us=…         # APIC timer: PIT wait unless pinned
 BOOTPROF kernel entry_us=… exit_us=… kernel_us=… # µs since power-on (TSC)
+BOOTPROF flush bytes=… early=… flush_us=… done_us=… # deferred console output
 BOOTPROF user tsc_mhz=… user_us=…                # root task main()
 ```
 
-- `entry_us` is roughly firmware + boot loader time. `kernel_us` is seL4's
-  boot. `user_us - exit_us` is kernel exit to root-task entry.
+- `entry_us` is roughly firmware + boot loader time, if the firmware did not
+  adjust the TSC (the probe checks `IA32_TSC_ADJUST`). In a VM, the TSC
+  starts at vCPU creation. `kernel_us` is seL4's boot. `user_us - exit_us` is
+  kernel exit to root-task entry.
+- `flush_us` is the cost of the output deferred out of those numbers, and
+  `done_us` is when it finished. Under QEMU TCG: 3.6 ms for BIOS text and
+  68 ms for the UEFI framebuffer. If `early=1`, the buffer overflowed during
+  boot, and console I/O is inside `kernel_us`.
 - The screen console wraps to the top instead of scrolling; scrolling would
   copy megabytes of uncached video memory per line. If the root task faults
   before its first print, buffered kernel output only appears on a kernel halt.
@@ -98,44 +106,73 @@ BOOTPROF user tsc_mhz=… user_us=…                # root task main()
 ### Toward microVMs: PVH, microvm, and an instruction-count baseline
 
 `kernel-pvh.elf` is `kernel32.elf` with its multiboot1 magic zeroed
-(`baremetal/tools/pvh_only.py` checks the PVH note first). QEMU prefers
-multiboot whenever both are present; Firecracker and Cloud Hypervisor only use
-PVH. Without KVM, QEMU's `-icount` makes guest time an instruction count
-(1 insn = 1 ns): runs are bit-identical and comparable across configurations,
-but it does not model I/O latency or VM-exit cost. Results with TSC and APIC
-both pinned (`scripts/test-baremetal.sh` asserts them):
+(`baremetal/tools/pvh_only.py` checks for the PVH note first). QEMU 8.2 prefers
+multiboot whenever both are present, so `kernel32.elf` takes the multiboot path
+even on `microvm`, silently and about 50% slower. `kvm_bench.py` reports the
+path it saw, and `--expect-path pvh` fails such runs.
 
-| Machine | Boot | `entry_us` (firmware) | `kernel_us` (seL4) |
+Without KVM, QEMU's `-icount` makes guest time an instruction count
+(1 insn = 1 ns). Runs are bit-identical. With TSC and APIC pinned
+(`scripts/test-baremetal.sh` asserts these):
+
+| Machine | Boot | `entry_us` | `kernel_us` |
 |---|---|---:|---:|
 | `pc` (SeaBIOS) | PVH | 5728 | 1085 |
 | `microvm` (qboot) | PVH | 5963 | 1074 |
 | `microvm` (qboot) | multiboot | 5913 | 1583 |
 | `microvm`, clocks not pinned | PVH | 5969 | 201275 |
 
-So seL4's own boot is about 1.07 M instructions. That's roughly 0.3–0.5 ms on
-a 2.4 GHz core (an estimate; not measured on hardware). Under QEMU, firmware
-dominates, and Firecracker and Cloud Hypervisor have none. Multiboot costs about
-0.5 M more instructions, because its module sits where the root task goes, so
-the root task is loaded into scratch space and copied down.
+What this does and does not show:
+
+- **Holds up:** the two PIT measurements are 200 of the 201 ms. PVH saves about
+  0.5 M instructions over multiboot (no scratch copy). `kernel_us` varies by
+  less than 1% across guest RAM from 64 MiB to 8 GiB and between debug and
+  non-debug builds.
+- **About 1.07 M instructions is an upper bound for this build, not "seL4's
+  boot".** It includes formatting about 1.6 KB of boot `printf`s (not measured
+  separately). Converting to wall time (about 0.3–0.5 ms at 2.4 GHz) assumes
+  roughly 1 instruction per cycle with no cache or TLB stalls; that's optimistic
+  for boot code dominated by zeroing and copying.
+- **icount is blind to I/O cost and VM exits.** That's where KVM time goes:
+  CPUID, MSR writes, PIC/IOAPIC and COM1 port accesses, EPT first-touch faults.
+  So the firmware `entry_us` above is an instruction count, not a claim that
+  firmware dominates wall time. The 55 µs `flush_us` under icount means the
+  same thing; under Firecracker every serial byte is a VM exit.
+- **For snapshot-resume sandboxes, guest boot isn't on the hot path.** The
+  number that matters there is restore latency on real KVM: VMM spawn, memory
+  fault-in, and the first network packet.
 
 ```bash
 python3 baremetal/tools/kvm_bench.py --accel tcg --icount 0 --machine microvm,acpi=on --runs 3 \
+    --expect-path pvh \
     --kernel build/baremetal/tsc-1000000000-apic-1000000000/kernel-pvh.elf \
     --rootserver build/baremetal/tsc-1000000000-apic-1000000000/rootserver.elf
 ```
 
 With `/dev/kvm` (e.g. on the NUC), drop `--accel tcg --icount 0` and build with
-the host's TSC frequency and `--apic-hz 1000000000`. `host_ms` (QEMU spawn to
-the root task's first serial line) then becomes meaningful. The probe's
-virtualization section reports what a microVM host depends on:
+the host's TSC frequency and `--apic-hz 1000000000`. KVM's default APIC rate is
+1 GHz, configurable since Linux 6.11, and TDX uses 25 MHz.
+
+The probe's virtualization section reports what a microVM host depends on:
 
 - VT-x state in firmware
 - EPT, VPID and unrestricted guest
 - APICv and posted interrupts
-- PML (hardware dirty logging, for snapshots)
-- TSC scaling, and 1 GiB EPT pages
+- PML, TSC scaling, and 1 GiB EPT pages
 - VT-d interrupt remapping and posted interrupts
-- SR-IOV, and the `kvm_intel` module parameters
+- SR-IOV
+
+**Where seL4 fits** (from an independent architecture review):
+
+- seL4 as a guest (PVH) adds no isolation against the host. Linux, KVM and the
+  VMM still underpin it.
+- On x86_64, seL4's proofs cover functional correctness of the verified
+  configuration only: not VT-x, the IOMMU, SMP, MCS, or these debug builds.
+
+The pragmatic split is to run agent sandboxes as Linux guests on Firecracker or
+Cloud Hypervisor, and to use seL4 for small trusted components such as a
+credential or policy broker, as a microVM here, or on AArch64/RISC-V where the
+proofs go further.
 
 ## Project Structure
 

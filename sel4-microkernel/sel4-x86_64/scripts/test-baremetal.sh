@@ -109,6 +109,8 @@ check_common() {
     [ "$entry" -lt "$exit" ] && [ "$exit" -le "$user" ] \
         || fail "$tag: timestamps not ordered: entry=$entry exit=$exit user=$user"
     [ "$(field "$tag" "BOOTPROF user" tsc_mhz)" = "$mhz" ] || fail "$tag: kernel/user tsc_mhz disagree"
+    grep -q "^BOOTPROF flush bytes=[0-9]* early=0 flush_us=[0-9]* done_us=[0-9]*" "$WORK/$tag.serial" \
+        || fail "$tag: no flush report, or console buffer overflowed during boot (early=1)"
 }
 
 echo "== PIT-calibrated build (BIOS)"
@@ -207,7 +209,13 @@ done
 
 echo "== kvm_bench.py plumbing (TCG + icount, microvm PVH, 1 run)"
 python3 -I baremetal/tools/kvm_bench.py --accel tcg --icount 0 --machine microvm,acpi=on --runs 1 \
-    --kernel "$ICT/kernel-pvh.elf" --rootserver "$ICT/rootserver.elf" >/dev/null || fail "kvm_bench (tcg)"
+    --expect-path pvh --kernel "$ICT/kernel-pvh.elf" --rootserver "$ICT/rootserver.elf" >/dev/null \
+    || fail "kvm_bench (tcg)"
+# The silent slow path: kernel32.elf boots via multiboot even on microvm.
+if python3 -I baremetal/tools/kvm_bench.py --accel tcg --icount 0 --machine microvm,acpi=on --runs 1 \
+    --expect-path pvh --kernel "$ICT/kernel32.elf" --rootserver "$ICT/rootserver.elf" >/dev/null 2>&1; then
+    fail "kvm_bench --expect-path pvh accepted a multiboot boot"
+fi
 
 echo "PASS (tsc_init ${cal_tsc_init} us + apic_cal ${cal_apic} us calibrated -> ${pin_tsc_init} us + 0 pinned;"
 echo "      BIOS + UEFI consoles; microvm PVH kernel_us=${pvh_kernel} (icount, deterministic))"

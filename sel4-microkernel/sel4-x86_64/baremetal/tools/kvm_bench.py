@@ -28,7 +28,8 @@ import subprocess
 import sys
 import time
 
-FIELDS = ("tsc_mhz", "tsc_init_us", "apic_khz", "apic_cal_us", "entry_us", "exit_us", "kernel_us", "user_us")
+FIELDS = ("tsc_mhz", "tsc_init_us", "apic_khz", "apic_cal_us", "entry_us", "exit_us", "kernel_us", "user_us",
+          "bytes", "early", "flush_us", "done_us")
 KVM_CPU = "host"
 # No "enforce": microvm requests features (spec-ctrl) that TCG lacks.
 TCG_CPU = "Nehalem,-vme,+pdpe1gb,-xsave,-xsaveopt,-xsavec,-fsgsbase,-invpcid,+syscall,+lm"
@@ -45,6 +46,12 @@ def parse_bootprof(lines):
     if "user_us" in out and "exit_us" in out:
         out["user_minus_exit_us"] = out["user_us"] - out["exit_us"]
     return out
+
+
+def boot_path(lines):
+    """'pvh' if the kernel took the PVH entry, else 'multiboot'. QEMU silently
+    prefers multiboot when an image carries both headers (kernel32.elf)."""
+    return "pvh" if any(l.startswith("PVH: start_info") for l in lines) else "multiboot"
 
 
 def percentile(values, q):
@@ -100,6 +107,7 @@ def one_run(cmd, timeout):
         proc.kill()
         _, err = proc.communicate()
     res = parse_bootprof(lines)
+    res["path"] = boot_path(lines)
     if first_ns is not None:
         res["host_ms"] = (first_ns - t0) / 1e6
     if "BOOTPROF done" not in lines:
@@ -117,6 +125,8 @@ def main(argv=None):
     ap.add_argument("--mem", default="256M")
     ap.add_argument("--qemu", default="qemu-system-x86_64")
     ap.add_argument("--timeout", type=float, default=30.0)
+    ap.add_argument("--expect-path", choices=("pvh", "multiboot"),
+                    help="fail runs that took the other boot path")
     ap.add_argument("--icount", type=int, metavar="SHIFT",
                     help="TCG only: virtual time from instruction count (2^SHIFT ns per insn)")
     args = ap.parse_args(argv)
@@ -130,20 +140,27 @@ def main(argv=None):
     runs, failures = [], 0
     for i in range(args.runs):
         r = one_run(cmd, args.timeout)
+        if "error" not in r and args.expect_path and r["path"] != args.expect_path:
+            r["error"] = f"booted via {r['path']}, expected {args.expect_path}"
         if "error" in r:
             failures += 1
             print(f"run {i}: FAILED: {r['error']}", file=sys.stderr)
             continue
         runs.append(r)
-        print(f"run {i}: host_ms={r.get('host_ms', float('nan')):.1f} "
+        print(f"run {i}: path={r['path']} host_ms={r.get('host_ms', float('nan')):.1f} "
               + " ".join(f"{k}={r[k]}" for k in ("tsc_init_us", "apic_cal_us", "entry_us", "kernel_us",
-                                                  "user_minus_exit_us") if k in r))
+                                                  "user_minus_exit_us", "flush_us") if k in r))
     if not runs:
         sys.exit("all runs failed")
-    print(f"\n{len(runs)} ok, {failures} failed; tsc_mhz={runs[0].get('tsc_mhz')}")
+    paths = sorted({r["path"] for r in runs})
+    print(f"\n{len(runs)} ok, {failures} failed; tsc_mhz={runs[0].get('tsc_mhz')}; boot path: {'/'.join(paths)}")
+    if len(paths) > 1:
+        print("WARNING: runs took different boot paths; numbers are not comparable")
+    if any(r.get("early") for r in runs):
+        print("WARNING: console buffer overflowed during boot (early=1): I/O is inside kernel_us")
     print(f"{'metric':20} {'n':>3} {'min':>10} {'median':>10} {'p90':>10} {'max':>10}")
     for k, n, lo, med, p90, hi in summarize(runs, ("host_ms", "entry_us", "tsc_init_us", "apic_cal_us",
-                                                   "kernel_us", "user_minus_exit_us")):
+                                                   "kernel_us", "user_minus_exit_us", "flush_us", "done_us")):
         print(f"{k:20} {n:>3} {lo:>10.1f} {med:>10.1f} {p90:>10.1f} {hi:>10.1f}")
     return 1 if failures else 0
 

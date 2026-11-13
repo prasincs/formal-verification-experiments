@@ -1,8 +1,33 @@
 diff --git a/src/arch/x86/kernel/boot_sys.c b/src/arch/x86/kernel/boot_sys.c
-index 960c3c8..1203e8c 100644
+index 960c3c8..68126dc 100644
 --- a/src/arch/x86/kernel/boot_sys.c
 +++ b/src/arch/x86/kernel/boot_sys.c
-@@ -450,7 +450,25 @@ static BOOT_CODE bool_t try_boot_sys(void)
+@@ -66,9 +66,10 @@ BOOT_CODE static paddr_t find_load_paddr(paddr_t min_paddr, word_t image_size)
+     for (i = 0; i < boot_state.mem_p_regs.count; i++) {
+         paddr_t start = MAX(min_paddr, boot_state.mem_p_regs.list[i].start);
+         paddr_t end = boot_state.mem_p_regs.list[i].end;
+-        word_t region_size = end - start;
+ 
+-        if (region_size >= image_size) {
++        /* min_paddr may lie beyond this region: end - start would underflow
++         * and "fit" anything, returning an address that is not RAM. */
++        if (start < end && end - start >= image_size) {
+             return start;
+         }
+     }
+@@ -118,7 +119,10 @@ BOOT_CODE static paddr_t load_boot_module(word_t boot_module_start, paddr_t load
+     }
+ 
+     load_paddr = find_load_paddr(load_paddr, v_reg.end - v_reg.start);
+-    assert(load_paddr);
++    if (!load_paddr) {
++        printf("No RAM region can hold the userland image\n");
++        return 0;
++    }
+ 
+     /* fill ui_info struct */
+     boot_state.ui_info.pv_offset = load_paddr - v_reg.start;
+@@ -450,7 +454,25 @@ static BOOT_CODE bool_t try_boot_sys(void)
      }
  
      mods_end_paddr = ROUND_UP(mods_end_paddr, PAGE_BITS);
@@ -29,7 +54,22 @@ index 960c3c8..1203e8c 100644
  
      printf("ELF-loading userland images from boot modules:\n");
      load_paddr = mods_end_paddr;
-@@ -470,7 +488,9 @@ static BOOT_CODE bool_t try_boot_sys(void)
+@@ -459,6 +481,14 @@ static BOOT_CODE bool_t try_boot_sys(void)
+     if (!load_paddr) {
+         return false;
+     }
++    /* The size/move arithmetic below (and the in-place decision above) assume
++     * the image was loaded exactly at the scratch base. find_load_paddr() may
++     * pick a later RAM region instead; refuse rather than mis-place it. */
++    if (boot_state.ui_info.p_reg.start != mods_end_paddr) {
++        printf("Userland image loaded at 0x%lx, expected 0x%lx\n",
++               boot_state.ui_info.p_reg.start, mods_end_paddr);
++        return false;
++    }
+ 
+     /* calculate final location of userland images */
+     ui_p_regs.start = boot_state.ki_p_reg.end;
+@@ -470,7 +500,9 @@ static BOOT_CODE bool_t try_boot_sys(void)
          ui_p_regs.start,
          ui_p_regs.end - ui_p_regs.start
      );

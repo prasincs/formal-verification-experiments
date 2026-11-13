@@ -12,7 +12,7 @@ index e4e9a86..914b6e0 100644
  void bootprof_screen_init(const multiboot2_fb_t *fb);
  /* Stop buffering console output and write it out. Idempotent. */
 diff --git a/src/arch/x86/kernel/apic.c b/src/arch/x86/kernel/apic.c
-index 290ec57..34e1686 100644
+index 290ec57..6d7f236 100644
 --- a/src/arch/x86/kernel/apic.c
 +++ b/src/arch/x86/kernel/apic.c
 @@ -4,6 +4,7 @@
@@ -31,7 +31,7 @@ index 290ec57..34e1686 100644
  static BOOT_CODE uint32_t apic_measure_freq(void)
  {
      pit_init();
-@@ -32,6 +34,23 @@ static BOOT_CODE uint32_t apic_measure_freq(void)
+@@ -32,6 +34,47 @@ static BOOT_CODE uint32_t apic_measure_freq(void)
      /* calculate APIC/bus cycles per ms = frequency in kHz */
      return (0xffffffff - apic_read_reg(APIC_TIMER_CURRENT)) / PIT_WRAPAROUND_MS;
  }
@@ -41,10 +41,34 @@ index 290ec57..34e1686 100644
 +uint32_t bootprof_apic_khz;
 +
 +/* APIC timer kHz: pinned by config, else measured against the PIT. */
++#if CONFIG_PC99_APIC_TIMER_FREQUENCY > 0 && CONFIG_PC99_APIC_TIMER_FREQUENCY < 1000000
++#error "KernelPC99APICTimerFrequency is in Hz and must be >= 1 MHz (0 = measure)"
++#endif
++#if CONFIG_PC99_TSC_FREQUENCY > 0 && CONFIG_PC99_TSC_FREQUENCY < 1000000
++#error "KernelPC99TSCFrequency is in Hz and must be >= 1 MHz (0 = measure)"
++#endif
++
++#define CPUID_HYPERVISOR_BIT 31u
++
 +static BOOT_CODE uint32_t apic_timer_khz(void)
 +{
 +#if CONFIG_PC99_APIC_TIMER_FREQUENCY > 0
 +    bootprof_apic_khz = CONFIG_PC99_APIC_TIMER_FREQUENCY / 1000;
++    /* A wrong pin silently skews the timer tick (and MCS budgets). On bare
++     * metal, Skylake+ report the APIC timer's crystal clock in CPUID 0x15
++     * ECX: cross-check it. Hypervisors emulate their own rate (KVM: 1 GHz by
++     * default, configurable since Linux 6.11; TDX: 25 MHz), so skip there. */
++    if (!(x86_cpuid_ecx(0x1, 0x0) & BIT(CPUID_HYPERVISOR_BIT)) && x86_cpuid_eax(0x0, 0x0) >= 0x15) {
++        uint32_t crystal_khz = x86_cpuid_ecx(0x15, 0x0) / 1000;
++        if (crystal_khz != 0) {
++            uint32_t diff = crystal_khz > bootprof_apic_khz ? crystal_khz - bootprof_apic_khz
++                                                            : bootprof_apic_khz - crystal_khz;
++            if (diff > crystal_khz / 100) {
++                printf("APIC: pinned timer %u kHz differs from CPUID 0x15 crystal %u kHz by >1%%\n",
++                       bootprof_apic_khz, crystal_khz);
++            }
++        }
++    }
 +#else
 +    uint64_t t = x86_rdtsc();
 +    bootprof_apic_khz = apic_measure_freq();
@@ -55,7 +79,7 @@ index 290ec57..34e1686 100644
  
  BOOT_CODE paddr_t apic_get_base_paddr(void)
  {
-@@ -58,7 +77,7 @@ BOOT_CODE bool_t apic_init(bool_t mask_legacy_irqs)
+@@ -58,7 +101,7 @@ BOOT_CODE bool_t apic_init(bool_t mask_legacy_irqs)
      /* can we use tsc deadline mode? */
      uint32_t cpuid = x86_cpuid_ecx(0x1, 0x0);
      if (!(cpuid & BIT(CPUID_TSC_DEADLINE_BIT))) {
@@ -64,7 +88,7 @@ index 290ec57..34e1686 100644
          x86KSapicRatio = div64((uint64_t)x86KStscMhz * 1000llu, apic_khz);
          printf("Apic Khz %lu, TSC Mhz %lu, ratio %lu\n", (long) apic_khz, (long) x86KStscMhz, (long) x86KSapicRatio);
      } else {
-@@ -66,7 +85,7 @@ BOOT_CODE bool_t apic_init(bool_t mask_legacy_irqs)
+@@ -66,7 +109,7 @@ BOOT_CODE bool_t apic_init(bool_t mask_legacy_irqs)
          x86KSapicRatio = 0;
      }
  #else
@@ -74,10 +98,10 @@ index 290ec57..34e1686 100644
      apic_version.words[0] = apic_read_reg(APIC_VERSION);
  
 diff --git a/src/arch/x86/kernel/boot_sys.c b/src/arch/x86/kernel/boot_sys.c
-index 694a636..c5e0f99 100644
+index 20f16a5..41864b6 100644
 --- a/src/arch/x86/kernel/boot_sys.c
 +++ b/src/arch/x86/kernel/boot_sys.c
-@@ -832,6 +832,8 @@ BOOT_CODE VISIBLE void boot_sys(
+@@ -875,6 +875,8 @@ BOOT_CODE VISIBLE void boot_sys(
      printf("BOOTPROF kernel tsc_mhz=%u tsc_init_us=%llu\n",
             bootprof_tsc_mhz,
             (unsigned long long)bootprof_us(bootprof_tsc_init_cycles));

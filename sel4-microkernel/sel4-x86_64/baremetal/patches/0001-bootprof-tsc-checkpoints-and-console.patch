@@ -273,7 +273,7 @@ index 55b7066..960c3c8 100644
      NODE_STATE(ksCurTime) = getCurrentTime();
      NODE_STATE(ksConsumed) = 0;
 diff --git a/src/plat/pc99/machine/io.c b/src/plat/pc99/machine/io.c
-index 83a53ba..c48945a 100644
+index 83a53ba..6963761 100644
 --- a/src/plat/pc99/machine/io.c
 +++ b/src/plat/pc99/machine/io.c
 @@ -4,6 +4,7 @@
@@ -284,7 +284,7 @@ index 83a53ba..c48945a 100644
  #include <config.h>
  #include <arch/kernel/boot_sys.h>
  #include <arch/model/statedata.h>
-@@ -41,12 +42,152 @@ void uart_drv_putchar(
+@@ -41,12 +42,164 @@ void uart_drv_putchar(
      out8(x86KSdebugPort, c);
  }
  
@@ -306,6 +306,7 @@ index 83a53ba..c48945a 100644
 +static char bootprof_buf[BOOTPROF_BUF_SIZE];
 +static word_t bootprof_buf_len;
 +static bool_t bootprof_live;
++static bool_t bootprof_overflowed;
 +
 +static multiboot2_fb_t bootprof_fb;
 +static uint8_t *bootprof_fb_base;   /* kernel-window pointer; NULL = no screen */
@@ -413,6 +414,7 @@ index 83a53ba..c48945a 100644
 +        return;
 +    }
 +    bootprof_live = true;
++    uint64_t t0 = x86_rdtsc();
 +    if (bootprof_screen_map()) {
 +        for (word_t r = 0; r < bootprof_rows; r++) {
 +            bootprof_clear_row(r);
@@ -421,6 +423,15 @@ index 83a53ba..c48945a 100644
 +    for (word_t i = 0; i < bootprof_buf_len; i++) {
 +        bootprof_emit(bootprof_buf[i]);
 +    }
++    /* Deferring output keeps it out of the boot timestamps but not out of
++     * time-to-ready: report what the flush cost (serial PIO exits under a VMM,
++     * framebuffer writes on hardware). early=1: the buffer overflowed during
++     * boot, so console I/O did land inside the measured window. */
++    uint64_t t1 = x86_rdtsc();
++    printf("BOOTPROF flush bytes=%lu early=%u flush_us=%llu done_us=%llu\n",
++           (unsigned long)bootprof_buf_len, (unsigned)bootprof_overflowed,
++           (unsigned long long)(bootprof_tsc_mhz ? (t1 - t0) / bootprof_tsc_mhz : 0),
++           (unsigned long long)(bootprof_tsc_mhz ? t1 / bootprof_tsc_mhz : 0));
 +}
 +
 +void kernel_putDebugChar(unsigned char c)
@@ -430,6 +441,7 @@ index 83a53ba..c48945a 100644
 +            bootprof_buf[bootprof_buf_len++] = c;
 +            return;
 +        }
++        bootprof_overflowed = true;
 +        bootprof_flush();
 +    }
 +    bootprof_emit(c);

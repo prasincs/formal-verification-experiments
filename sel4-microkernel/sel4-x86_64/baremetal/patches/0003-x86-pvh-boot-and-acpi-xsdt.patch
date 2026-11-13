@@ -46,6 +46,19 @@ index 0000000..db6ed53
 +    uint32_t type;
 +    uint32_t reserved;
 +} PACKED pvh_memmap_entry_t;
+diff --git a/include/plat/pc99/plat/machine/acpi.h b/include/plat/pc99/plat/machine/acpi.h
+index f6517ab..b3d3863 100644
+--- a/include/plat/pc99/plat/machine/acpi.h
++++ b/include/plat/pc99/plat/machine/acpi.h
+@@ -51,6 +51,8 @@ typedef struct acpi_rsdt {
+ /* Attempts to initialize acpi by searching for a valid RSDP block. If found a copy is placed in rsdp_data
+  * and true is returned, otherwise the contents of rsdp_data are undefined and false is returned. */
+ bool_t acpi_init(acpi_rsdp_t *rsdp_data);
++/* True if the root table lists a table above 4 GiB (unreachable at boot). */
++bool_t acpi_has_high_tables(acpi_rsdp_t *acpi_rsdp);
+ 
+ /* Validates that a given rsdp block is in fact valid */
+ BOOT_CODE bool_t acpi_validate_rsdp(acpi_rsdp_t *acpi_rsdp);
 diff --git a/src/arch/x86/64/head.S b/src/arch/x86/64/head.S
 index 7853351..e293dec 100644
 --- a/src/arch/x86/64/head.S
@@ -76,7 +89,7 @@ index 7853351..e293dec 100644
      /* Assume we are MultiBooted, e.g. by GRUB.
       * While not immediately checked, the magic number is checked prior to 
 diff --git a/src/arch/x86/kernel/boot_sys.c b/src/arch/x86/kernel/boot_sys.c
-index 1203e8c..694a636 100644
+index 68126dc..20f16a5 100644
 --- a/src/arch/x86/kernel/boot_sys.c
 +++ b/src/arch/x86/kernel/boot_sys.c
 @@ -4,6 +4,7 @@
@@ -87,14 +100,39 @@ index 1203e8c..694a636 100644
  #include <arch/bootprof.h>
  #include <config.h>
  #include <util.h>
-@@ -725,6 +726,72 @@ static BOOT_CODE bool_t try_boot_sys_mbi2(
+@@ -424,6 +425,13 @@ static BOOT_CODE bool_t try_boot_sys(void)
+     if (!config_set(CONFIG_IOMMU) || cmdline_opt.disable_iommu) {
+         boot_state.num_drhu = 0;
+     } else {
++        /* A DMAR above 4 GiB would be skipped and the kernel would silently
++         * boot without DMA protection: refuse instead. */
++        if (acpi_has_high_tables(&boot_state.acpi_rsdp)) {
++            printf("ACPI: tables above 4 GiB; cannot rule out a DMAR there, "
++                   "refusing to boot with the IOMMU enabled (use disable_iommu)\n");
++            return false;
++        }
+         /* query available IOMMUs from ACPI */
+         acpi_dmar_scan(
+             &boot_state.acpi_rsdp,
+@@ -737,6 +745,96 @@ static BOOT_CODE bool_t try_boot_sys_mbi2(
      return true;
  }
  
++/* [paddr, paddr + len) is non-empty, does not wrap, and lies inside the low
++ * 4 GiB that the boot page tables identity-map (anything else would fault). */
++static BOOT_CODE bool_t pvh_range_ok(uint64_t paddr, uint64_t len)
++{
++    return paddr != 0 && len != 0 && paddr + len > paddr && paddr + len <= BIT(32);
++}
++
 +static BOOT_CODE bool_t try_boot_sys_pvh(pvh_start_info_t const *si)
 +{
 +    if (si->magic != PVH_START_MAGIC) {
 +        printf("PVH: bad start_info magic %x\n", si->magic);
++        return false;
++    }
++    if (si->cmdline_paddr && !pvh_range_ok(si->cmdline_paddr, 1)) {
++        printf("PVH: cmdline not below 4 GiB\n");
 +        return false;
 +    }
 +    cmdline_parse(si->cmdline_paddr ? (const char *)(word_t)si->cmdline_paddr : "", &cmdline_opt);
@@ -105,52 +143,65 @@ index 1203e8c..694a636 100644
 +    boot_state.mb_mmap_info.mmap_length = 0;
 +    boot_state.vbe_info.vbeMode = -1;
 +
-+    if (si->version < 1 || si->memmap_entries == 0) {
-+        printf("PVH: no memory map (start_info version %u)\n", si->version);
++    if (si->version < 1 || si->memmap_entries == 0 ||
++        !pvh_range_ok(si->memmap_paddr, (uint64_t)si->memmap_entries * sizeof(pvh_memmap_entry_t))) {
++        printf("PVH: missing or unaddressable memory map (start_info v%u)\n", si->version);
 +        return false;
 +    }
 +    pvh_memmap_entry_t const *mm = (pvh_memmap_entry_t const *)(word_t)si->memmap_paddr;
 +    for (word_t i = 0; i < si->memmap_entries; i++) {
++        uint64_t start = mm[i].addr, end = mm[i].addr + mm[i].size;
 +        printf("\tPhysical Memory Region from %llx size %llx type %u\n",
-+               (unsigned long long)mm[i].addr, (unsigned long long)mm[i].size, mm[i].type);
-+        if (!mm[i].addr) {
-+            boot_state.mem_lower = mm[i].size;
++               (unsigned long long)start, (unsigned long long)mm[i].size, mm[i].type);
++        if (end < start) {
++            printf("PVH: memory map entry %lu wraps\n", i);
++            return false;
 +        }
-+        if (mm[i].type == PVH_MEMMAP_TYPE_RAM && mm[i].addr >= HIGHMEM_PADDR) {
-+            if (!add_mem_p_regs((p_region_t) {
-+            mm[i].addr, mm[i].addr + mm[i].size
-+        })) {
-+                return false;
-+            }
++        if (start == 0) {
++            /* KiB, as multiboot1 mem_lower and copy_boot_code_aps() expect */
++            boot_state.mem_lower = MIN(mm[i].size >> 10, 0xffffffffull);
++        }
++        if (mm[i].type != PVH_MEMMAP_TYPE_RAM) {
++            continue;
++        }
++        /* Clip (not drop) RAM that starts below 1 MiB; whole pages only. */
++        start = ROUND_UP(MAX(start, (uint64_t)HIGHMEM_PADDR), PAGE_BITS);
++        end = ROUND_DOWN(end, PAGE_BITS);
++        if (start < end && !add_mem_p_regs((p_region_t) {
++        start, end
++    })) {
++            return false;
 +        }
 +    }
 +
-+    if (si->nr_modules < 1) {
-+        printf("Expect at least one boot module (containing a userland image)\n");
++    if (si->nr_modules < 1 ||
++        !pvh_range_ok(si->modlist_paddr, (uint64_t)si->nr_modules * sizeof(pvh_modlist_entry_t))) {
++        printf("Expect at least one addressable boot module (containing a userland image)\n");
 +        return false;
 +    }
 +    pvh_modlist_entry_t const *mods = (pvh_modlist_entry_t const *)(word_t)si->modlist_paddr;
 +    for (word_t i = 0; i < si->nr_modules; i++) {
-+        uint64_t end = mods[i].paddr + mods[i].size;
-+        printf("  module #%lu: start=0x%llx end=0x%llx\n", i,
-+               (unsigned long long)mods[i].paddr, (unsigned long long)end);
-+        /* Boot page tables identity-map only the low 4 GiB. */
-+        if (mods[i].size == 0 || end > BIT(32) || end < mods[i].paddr) {
-+            printf("PVH: invalid module %lu\n", i);
++        printf("  module #%lu: start=0x%llx size=0x%llx\n", i,
++               (unsigned long long)mods[i].paddr, (unsigned long long)mods[i].size);
++        if (!pvh_range_ok(mods[i].paddr, mods[i].size)) {
++            printf("PVH: module %lu empty, wrapping or above 4 GiB\n", i);
 +            return false;
 +        }
 +        if (i == 0) {
 +            boot_state.boot_module_start = mods[i].paddr;
 +        }
-+        if (boot_state.mods_end_paddr < end) {
-+            boot_state.mods_end_paddr = end;
++        if (boot_state.mods_end_paddr < mods[i].paddr + mods[i].size) {
++            boot_state.mods_end_paddr = mods[i].paddr + mods[i].size;
 +        }
 +    }
 +
 +    if (si->rsdp_paddr) {
-+        if (si->rsdp_paddr >= BIT(32)) {
++        if (!pvh_range_ok(si->rsdp_paddr, sizeof(boot_state.acpi_rsdp))) {
++            printf("PVH: RSDP not below 4 GiB\n");
 +            return false;
 +        }
++        /* Copies 36 bytes; an ACPI 1.0 RSDP is 20, and the tail is ignored
++         * (acpi_validate_rsdp only checksums the v2 part when revision > 0). */
 +        memcpy(&boot_state.acpi_rsdp, (void *)(word_t)si->rsdp_paddr, sizeof(boot_state.acpi_rsdp));
 +        return true;
 +    }
@@ -160,7 +211,7 @@ index 1203e8c..694a636 100644
  static inline uint64_t bootprof_us(uint64_t cycles)
  {
      return bootprof_tsc_mhz ? cycles / bootprof_tsc_mhz : 0;
-@@ -743,6 +810,8 @@ BOOT_CODE VISIBLE void boot_sys(
+@@ -755,6 +853,8 @@ BOOT_CODE VISIBLE void boot_sys(
          result = try_boot_sys_mbi1(mbi);
      } else if (multiboot_magic == MULTIBOOT2_MAGIC) {
          result = try_boot_sys_mbi2(mbi);
@@ -192,25 +243,27 @@ index 3fcb286..c95da27 100644
      {
          . = ALIGN(16);
 diff --git a/src/plat/pc99/machine/acpi.c b/src/plat/pc99/machine/acpi.c
-index 044a8fa..451d036 100644
+index 044a8fa..0e0bb7e 100644
 --- a/src/plat/pc99/machine/acpi.c
 +++ b/src/plat/pc99/machine/acpi.c
-@@ -235,6 +235,42 @@ BOOT_CODE static void *acpi_table_init(void *entry, enum acpi_type table_type)
+@@ -235,6 +235,65 @@ BOOT_CODE static void *acpi_table_init(void *entry, enum acpi_type table_type)
      return acpi_table;
  }
  
-+/* Root table: the RSDT when present, else the XSDT (ACPI 2.0+). MicroVM VMMs
-+ * (QEMU microvm, Firecracker, Cloud Hypervisor) provide only an XSDT. Tables
-+ * above 4 GiB are not reachable from boot code and are skipped. */
++/* Root table: the XSDT when the RSDP is ACPI 2.0+ and the XSDT is reachable
++ * (the spec says 64-bit OSes should use it, and microVM VMMs such as QEMU
++ * microvm, Firecracker and Cloud Hypervisor provide only an XSDT), else the
++ * RSDT. Boot code only maps the low 4 GiB; tables above it are skipped with
++ * a warning, and acpi_has_high_tables() lets callers fail closed. */
 +BOOT_CODE static acpi_rsdt_t *acpi_root(acpi_rsdp_t *rsdp, word_t *entry_bytes)
 +{
 +    acpi_rsdt_t *root;
-+    if (rsdp->rsdt_address) {
-+        *entry_bytes = sizeof(uint32_t);
-+        root = acpi_table_init((void *)(word_t)rsdp->rsdt_address, ACPI_RSDT);
-+    } else if (rsdp->revision >= 2 && rsdp->xsdt_address && rsdp->xsdt_address < BIT(32)) {
++    if (rsdp->revision >= 2 && rsdp->xsdt_address && rsdp->xsdt_address < BIT(32)) {
 +        *entry_bytes = sizeof(uint64_t);
 +        root = acpi_table_init((void *)(word_t)rsdp->xsdt_address, ACPI_RSDT);
++    } else if (rsdp->rsdt_address) {
++        *entry_bytes = sizeof(uint32_t);
++        root = acpi_table_init((void *)(word_t)rsdp->rsdt_address, ACPI_RSDT);
 +    } else {
 +        printf("ACPI: no usable RSDT or XSDT\n");
 +        return NULL;
@@ -232,13 +285,34 @@ index 044a8fa..451d036 100644
 +{
 +    uint64_t paddr = 0;
 +    memcpy(&paddr, (char *)root->entry + i * entry_bytes, entry_bytes);
-+    return paddr < BIT(32) ? (void *)(word_t)paddr : NULL;
++    if (paddr >= BIT(32)) {
++        printf("ACPI: table at 0x%llx is above 4 GiB, skipped\n", (unsigned long long)paddr);
++        return NULL;
++    }
++    return (void *)(word_t)paddr;
++}
++
++BOOT_CODE bool_t acpi_has_high_tables(acpi_rsdp_t *acpi_rsdp)
++{
++    word_t entry_bytes;
++    acpi_rsdt_t *root = acpi_root(acpi_rsdp, &entry_bytes);
++    if (!root) {
++        return false;
++    }
++    for (word_t i = 0; i < acpi_root_count(root, entry_bytes); i++) {
++        uint64_t paddr = 0;
++        memcpy(&paddr, (char *)root->entry + i * entry_bytes, entry_bytes);
++        if (paddr >= BIT(32)) {
++            return true;
++        }
++    }
++    return false;
 +}
 +
  BOOT_CODE bool_t acpi_init(acpi_rsdp_t *rsdp_data)
  {
      acpi_rsdp_t *acpi_rsdp = acpi_get_rsdp();
-@@ -256,8 +292,8 @@ BOOT_CODE bool_t acpi_init(acpi_rsdp_t *rsdp_data)
+@@ -256,8 +315,8 @@ BOOT_CODE bool_t acpi_init(acpi_rsdp_t *rsdp_data)
  
  BOOT_CODE bool_t acpi_validate_rsdp(acpi_rsdp_t *acpi_rsdp)
  {
@@ -248,7 +322,7 @@ index 044a8fa..451d036 100644
  
      if (acpi_calc_checksum((char *)acpi_rsdp, ACPI_V1_SIZE) != 0) {
          printf("BIOS: ACPIv1 information corrupt\n");
-@@ -269,13 +305,13 @@ BOOT_CODE bool_t acpi_validate_rsdp(acpi_rsdp_t *acpi_rsdp)
+@@ -269,13 +328,13 @@ BOOT_CODE bool_t acpi_validate_rsdp(acpi_rsdp_t *acpi_rsdp)
          return false;
      }
  
@@ -268,7 +342,7 @@ index 044a8fa..451d036 100644
      if (acpi_calc_checksum((char *)acpi_rsdt_mapped, acpi_rsdt_mapped->header.length) != 0) {
          printf("ACPI: RSDT checksum failure\n");
          return false;
-@@ -310,17 +346,22 @@ BOOT_CODE uint32_t acpi_madt_scan(
+@@ -310,17 +369,22 @@ BOOT_CODE uint32_t acpi_madt_scan(
  
      acpi_rsdt_t *acpi_rsdt_mapped;
      acpi_madt_t *acpi_madt_mapped;
@@ -296,7 +370,7 @@ index 044a8fa..451d036 100644
          acpi_madt_mapped = (acpi_madt_t *)acpi_table_init(acpi_madt, ACPI_RSDT);
  
          if (strncmp(acpi_str_apic, acpi_madt_mapped->header.signature, 4) == 0) {
-@@ -434,13 +475,18 @@ BOOT_CODE bool_t acpi_fadt_scan(
+@@ -434,13 +498,18 @@ BOOT_CODE bool_t acpi_fadt_scan(
  
      acpi_rsdt_t *acpi_rsdt_mapped;
      acpi_fadt_t *acpi_fadt_mapped;
@@ -320,7 +394,7 @@ index 044a8fa..451d036 100644
          acpi_fadt_mapped = (acpi_fadt_t *)acpi_table_init(acpi_fadt, ACPI_RSDT);
  
          if (strncmp(acpi_str_fadt, acpi_fadt_mapped->header.signature, 4) == 0) {
-@@ -481,16 +527,22 @@ BOOT_CODE void acpi_dmar_scan(
+@@ -481,16 +550,22 @@ BOOT_CODE void acpi_dmar_scan(
  
      acpi_rsdt_t *acpi_rsdt_mapped;
      acpi_dmar_t *acpi_dmar_mapped;
