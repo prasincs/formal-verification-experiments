@@ -31,18 +31,17 @@ is currently only available for ARM.
 
 ## Bare-Metal Boot-Time Measurement
 
-`scripts/build-baremetal.sh` builds a hybrid (legacy BIOS + UEFI) GRUB image:
-seL4, pinned to the commit that rust-sel4's `Cargo.lock` revision targets, plus
-this root task. Patches in `baremetal/patches/`:
+`scripts/build-baremetal.sh` builds seL4 (pinned to the commit rust-sel4's
+`Cargo.lock` revision targets) plus this root task. It produces a hybrid
+BIOS + UEFI GRUB image and direct-boot kernels for QEMU and microVM VMMs.
+Patches in `baremetal/patches/`, applied in order:
 
-- `0001-bootprof-*`: TSC checkpoints, and a console for machines without a
-  serial port. Output goes to COM1 and to the boot loader's framebuffer: EGA
-  text on BIOS, or the UEFI GOP framebuffer drawn with a public-domain 8x8
-  font. Kernel output is buffered in memory until the root task's first
-  print, so console I/O doesn't affect the timestamps.
-- `0002-x86-allow-boot-modules-below-kernel-image`: GRUB on UEFI loads the
-  root task below the kernel, which upstream asserts against. Candidate for
-  upstreaming.
+| Patch | What | Upstream? |
+|---|---|---|
+| `0001-bootprof-*` | TSC checkpoints. A console for serial-less machines: COM1, plus the boot loader's framebuffer (EGA text on BIOS, UEFI GOP with a public-domain 8x8 font). Output is buffered until the root task's first print, so console I/O doesn't skew the timestamps. | no (instrumentation) |
+| `0002-x86-boot-module-placement` | Load the root task in place when the boot module doesn't overlap its destination. Upstream asserts the module is above the kernel, and ELF-loads into scratch past it, which falls off the end of RAM when a PVH loader puts the module at the top of RAM. | candidate |
+| `0003-x86-pvh-boot-and-acpi-xsdt` | PVH entry (`XEN_ELFNOTE_PHYS32_ENTRY` and an `hvm_start_info` parser), plus ACPI XSDT support. QEMU `microvm`, Firecracker and Cloud Hypervisor publish XSDT-only tables; upstream reads only the RSDT. | candidate |
+| `0004-x86-pinnable-apic-timer-frequency` | `KernelPC99APICTimerFrequency`, like the existing TSC option. In the non-MCS kernel, `apic_init()` otherwise always measures the APIC timer against the PIT (50–100 ms). | candidate |
 
 This is a measurement build (debug + printing on, IOMMU off), not the verified
 configuration.
@@ -50,64 +49,93 @@ configuration.
 ```bash
 pip3 install ply jinja2 pyyaml   # + git cmake ninja gcc xorriso mtools
                                  #   grub-pc-bin grub-efi-amd64-bin ovmf qemu-system-x86
-scripts/test-baremetal.sh        # QEMU regression test: BIOS + UEFI, both TSC modes
-scripts/build-baremetal.sh       # -> build/baremetal/tsc-0/sel4-bootprof.iso
-sudo dd if=build/baremetal/tsc-0/sel4-bootprof.iso of=/dev/sdX bs=4M conv=fsync
+scripts/test-baremetal.sh        # QEMU regression test (see header)
+scripts/build-baremetal.sh [--tsc-hz HZ] [--apic-hz HZ]
+#   -> build/baremetal/tsc-<HZ>-apic-<HZ>/{sel4-bootprof.iso, kernel32.elf, kernel-pvh.elf, rootserver.elf}
 ```
 
+seL4 measures two clocks against the PIT at boot, about 100 ms each. Pin both:
+`--tsc-hz` and `--apic-hz`. The first boot prints `tsc_mhz` and `apic_khz`.
+On Skylake and later Intel CPUs the APIC timer runs at the crystal clock
+(24 MHz on client parts); under KVM and QEMU it runs at 1 GHz.
+
+### On real hardware
+
 Before flashing, boot an Ubuntu live USB on the target and run the probe. It
-reports the CPU model and which `tsc_init` path seL4 will take, the TSC
-frequency (Linux calibration, CPUID 15H/16H, `MSR_PLATFORM_INFO`), whether the
-TSC counts from reset (`IA32_TSC_ADJUST`, firmware time from FPDT), the UEFI
-framebuffer and resulting console geometry, UARTs, DMAR, and whether the memory
-seL4 loads into is usable RAM. It is read-only and needs only the standard library:
+reports:
+
+- the CPU model, and which `tsc_init` path seL4 will take
+- the TSC and APIC timer frequencies, with the `--tsc-hz` / `--apic-hz` values
+  to use
+- whether the TSC counts from reset (`IA32_TSC_ADJUST`, FPDT firmware time)
+- the UEFI framebuffer and the resulting console geometry
+- UARTs, DMAR, and whether the memory seL4 loads into is usable RAM
+- virtualization support (see below)
+
+It is read-only and needs only the standard library:
 
 ```bash
 sudo python3 baremetal/tools/nuc_probe.py   # prints a report, writes ./sel4-probe.txt
+sudo dd if=build/baremetal/tsc-<HZ>-apic-<HZ>/sel4-bootprof.iso of=/dev/sdX bs=4M conv=fsync
 ```
 
-On the target (e.g. Intel NUC8/NUC9), disable Secure Boot in firmware setup
-(F2), since GRUB is unsigned. Then pick the USB stick from the F10 menu,
-booting it either UEFI or legacy. Output:
+Disable Secure Boot in firmware setup (F2), since GRUB is unsigned. Then pick
+the USB stick from the F10 menu, booting it either UEFI or legacy. Output:
 
 ```
-BOOTPROF kernel tsc_mhz=… tsc_init_us=…          # tsc_init: ~100 ms PIT wait
+BOOTPROF kernel tsc_mhz=… tsc_init_us=…          # TSC: PIT wait unless pinned
+BOOTPROF kernel apic_khz=… apic_cal_us=…         # APIC timer: PIT wait unless pinned
 BOOTPROF kernel entry_us=… exit_us=… kernel_us=… # µs since power-on (TSC)
 BOOTPROF user tsc_mhz=… user_us=…                # root task main()
 ```
 
-- `entry_us` is roughly firmware + GRUB time. `kernel_us` is seL4's boot.
-  `user_us - exit_us` is kernel exit to root-task entry.
-- seL4 only reads the TSC frequency from an MSR on Nehalem–Skylake model IDs;
-  Kaby/Coffee Lake (NUC8, NUC9 Ghost Canyon) fall back to the PIT. Rebuild with
-  the printed frequency to remove it: `scripts/build-baremetal.sh --tsc-hz 2400000000`.
-- The screen console wraps to the top instead of scrolling; scrolling would copy
-  megabytes of uncached video memory per line. If the root task faults before
-  its first print, buffered kernel output only appears on a kernel halt.
+- `entry_us` is roughly firmware + boot loader time. `kernel_us` is seL4's
+  boot. `user_us - exit_us` is kernel exit to root-task entry.
+- The screen console wraps to the top instead of scrolling; scrolling would
+  copy megabytes of uncached video memory per line. If the root task faults
+  before its first print, buffered kernel output only appears on a kernel halt.
 
-### Toward microVMs: KVM baseline
+### Toward microVMs: PVH, microvm, and an instruction-count baseline
 
-The probe's virtualization section reports what a microVM host depends on:
-VT-x state in firmware, EPT/VPID/unrestricted guest, APICv and posted
-interrupts, PML (hardware dirty logging, for snapshots), TSC scaling, 1 GiB EPT
-pages, VT-d interrupt remapping and posted interrupts, SR-IOV, and the
-`kvm_intel` module parameters.
+`kernel-pvh.elf` is `kernel32.elf` with its multiboot1 magic zeroed
+(`baremetal/tools/pvh_only.py` checks the PVH note first). QEMU prefers
+multiboot whenever both are present; Firecracker and Cloud Hypervisor only use
+PVH. Without KVM, QEMU's `-icount` makes guest time an instruction count
+(1 insn = 1 ns): runs are bit-identical and comparable across configurations,
+but it does not model I/O latency or VM-exit cost. Results with TSC and APIC
+both pinned (`scripts/test-baremetal.sh` asserts them):
 
-With `/dev/kvm` available, boot the same seL4 image as a KVM guest repeatedly:
+| Machine | Boot | `entry_us` (firmware) | `kernel_us` (seL4) |
+|---|---|---:|---:|
+| `pc` (SeaBIOS) | PVH | 5728 | 1085 |
+| `microvm` (qboot) | PVH | 5963 | 1074 |
+| `microvm` (qboot) | multiboot | 5913 | 1583 |
+| `microvm`, clocks not pinned | PVH | 5969 | 201275 |
+
+So seL4's own boot is about 1.07 M instructions. That's roughly 0.3–0.5 ms on
+a 2.4 GHz core (an estimate; not measured on hardware). Under QEMU, firmware
+dominates, and Firecracker and Cloud Hypervisor have none. Multiboot costs about
+0.5 M more instructions, because its module sits where the root task goes, so
+the root task is loaded into scratch space and copied down.
 
 ```bash
-sudo python3 baremetal/tools/kvm_bench.py --runs 20 \
-    --kernel build/baremetal/tsc-<HZ>/kernel32.elf \
-    --rootserver build/baremetal/tsc-<HZ>/rootserver.elf
+python3 baremetal/tools/kvm_bench.py --accel tcg --icount 0 --machine microvm,acpi=on --runs 3 \
+    --kernel build/baremetal/tsc-1000000000-apic-1000000000/kernel-pvh.elf \
+    --rootserver build/baremetal/tsc-1000000000-apic-1000000000/rootserver.elf
 ```
 
-It reports min/median/p90 for `host_ms` (QEMU spawn to the root task's first
-serial line), plus the guest's `entry_us` (SeaBIOS and the multiboot loader:
-the guest TSC starts near 0 at VM creation), `kernel_us` and `tsc_init_us`.
-Under KVM the guest TSC runs at the host frequency, so use the probe's
-`--tsc-hz`. The `pc` machine's firmware cost is the target of the next step: a
-PVH entry point, so Firecracker, Cloud Hypervisor or QEMU `microvm` can load
-seL4 without firmware.
+With `/dev/kvm` (e.g. on the NUC), drop `--accel tcg --icount 0` and build with
+the host's TSC frequency and `--apic-hz 1000000000`. `host_ms` (QEMU spawn to
+the root task's first serial line) then becomes meaningful. The probe's
+virtualization section reports what a microVM host depends on:
+
+- VT-x state in firmware
+- EPT, VPID and unrestricted guest
+- APICv and posted interrupts
+- PML (hardware dirty logging, for snapshots)
+- TSC scaling, and 1 GiB EPT pages
+- VT-d interrupt remapping and posted interrupts
+- SR-IOV, and the `kvm_intel` module parameters
 
 ## Project Structure
 

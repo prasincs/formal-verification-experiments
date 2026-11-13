@@ -104,6 +104,19 @@ def cpuid15_tsc_hz(eax, ebx, ecx, model):
     return crystal * ebx // eax if crystal else None
 
 
+def apic_timer_hz(cpu, cpuid15):
+    """Local APIC timer Hz (divisor 1) for seL4's KernelPC99APICTimerFrequency.
+    KVM emulates it at 1 GHz; on Intel Skylake+ it is the core crystal clock
+    (CPUID.15H ECX, else the per-model table, as Linux lapic_timer_period).
+    None when unknown: leave seL4's PIT measurement on."""
+    if "hypervisor" in cpu["flags"]:
+        return 1_000_000_000
+    if cpu["vendor"] != "GenuineIntel" or cpu["family"] != 6:
+        return None
+    ecx = cpuid15[2] if cpuid15 else 0
+    return ecx or CRYSTAL_HZ.get(cpu["model"])
+
+
 def parse_dmesg_tsc_mhz(dmesg):
     """Prefer the refined calibration; fall back to the initial detection."""
     for pat in (r"Refined TSC clocksource calibration: ([\d.]+) MHz",
@@ -306,10 +319,14 @@ def main():
     linux_mhz = parse_dmesg_tsc_mhz(dmesg)
     p(f"Linux TSC calibration: {linux_mhz} MHz")
     best_hz = (round(linux_mhz * 1e6) if linux_mhz else None) or c15_hz or (pinfo_mhz and pinfo_mhz * 10**6)
+    apic_hz = apic_timer_hz(cpu, c15)
+    p(f"APIC timer: {apic_hz / 1e6 if apic_hz else 'unknown'} MHz")
     if best_hz:
-        rec.append(f"scripts/build-baremetal.sh --tsc-hz {best_hz}")
+        rec.append(f"scripts/build-baremetal.sh --tsc-hz {best_hz}" + (f" --apic-hz {apic_hz}" if apic_hz else ""))
     if path == "pit":
-        rec.append("seL4 will spend ~100 ms in PIT calibration unless --tsc-hz is set.")
+        rec.append("without --tsc-hz, seL4 spends ~100 ms calibrating the TSC against the PIT.")
+    rec.append("without --apic-hz, seL4 spends 50-100 ms measuring the APIC timer against the PIT"
+               + ("." if apic_hz else " (frequency unknown here: read apic_khz from the first boot)."))
 
     p("\n== time before the Linux kernel (validates BOOTPROF entry_us)")
     adj = rdmsr(MSR_TSC_ADJUST) if "tsc_adjust" in cpu["flags"] else None

@@ -1,0 +1,107 @@
+diff --git a/include/arch/x86/arch/bootprof.h b/include/arch/x86/arch/bootprof.h
+index e4e9a86..914b6e0 100644
+--- a/include/arch/x86/arch/bootprof.h
++++ b/include/arch/x86/arch/bootprof.h
+@@ -11,6 +11,8 @@
+ 
+ extern uint64_t bootprof_tsc_init_cycles;
+ extern uint32_t bootprof_tsc_mhz;
++extern uint64_t bootprof_apic_cycles; /* 0 when the frequency is pinned */
++extern uint32_t bootprof_apic_khz;
+ /* Record the boot loader's framebuffer for the BOOTPROF console. */
+ void bootprof_screen_init(const multiboot2_fb_t *fb);
+ /* Stop buffering console output and write it out. Idempotent. */
+diff --git a/src/arch/x86/kernel/apic.c b/src/arch/x86/kernel/apic.c
+index 290ec57..34e1686 100644
+--- a/src/arch/x86/kernel/apic.c
++++ b/src/arch/x86/kernel/apic.c
+@@ -4,6 +4,7 @@
+  * SPDX-License-Identifier: GPL-2.0-only
+  */
+ 
++#include <arch/bootprof.h>
+ #include <config.h>
+ #include <machine/io.h>
+ #include <arch/machine.h>
+@@ -16,6 +17,7 @@
+ #define APIC_TIMER_MODE_ONE_SHOT 0
+ #define APIC_TIMER_MODE_TSC_DEADLINE  2
+ 
++#if !(CONFIG_PC99_APIC_TIMER_FREQUENCY > 0)
+ static BOOT_CODE uint32_t apic_measure_freq(void)
+ {
+     pit_init();
+@@ -32,6 +34,23 @@ static BOOT_CODE uint32_t apic_measure_freq(void)
+     /* calculate APIC/bus cycles per ms = frequency in kHz */
+     return (0xffffffff - apic_read_reg(APIC_TIMER_CURRENT)) / PIT_WRAPAROUND_MS;
+ }
++#endif
++
++uint64_t bootprof_apic_cycles;
++uint32_t bootprof_apic_khz;
++
++/* APIC timer kHz: pinned by config, else measured against the PIT. */
++static BOOT_CODE uint32_t apic_timer_khz(void)
++{
++#if CONFIG_PC99_APIC_TIMER_FREQUENCY > 0
++    bootprof_apic_khz = CONFIG_PC99_APIC_TIMER_FREQUENCY / 1000;
++#else
++    uint64_t t = x86_rdtsc();
++    bootprof_apic_khz = apic_measure_freq();
++    bootprof_apic_cycles = x86_rdtsc() - t;
++#endif
++    return bootprof_apic_khz;
++}
+ 
+ BOOT_CODE paddr_t apic_get_base_paddr(void)
+ {
+@@ -58,7 +77,7 @@ BOOT_CODE bool_t apic_init(bool_t mask_legacy_irqs)
+     /* can we use tsc deadline mode? */
+     uint32_t cpuid = x86_cpuid_ecx(0x1, 0x0);
+     if (!(cpuid & BIT(CPUID_TSC_DEADLINE_BIT))) {
+-        apic_khz = apic_measure_freq();
++        apic_khz = apic_timer_khz();
+         x86KSapicRatio = div64((uint64_t)x86KStscMhz * 1000llu, apic_khz);
+         printf("Apic Khz %lu, TSC Mhz %lu, ratio %lu\n", (long) apic_khz, (long) x86KStscMhz, (long) x86KSapicRatio);
+     } else {
+@@ -66,7 +85,7 @@ BOOT_CODE bool_t apic_init(bool_t mask_legacy_irqs)
+         x86KSapicRatio = 0;
+     }
+ #else
+-    apic_khz = apic_measure_freq();
++    apic_khz = apic_timer_khz();
+ #endif
+     apic_version.words[0] = apic_read_reg(APIC_VERSION);
+ 
+diff --git a/src/arch/x86/kernel/boot_sys.c b/src/arch/x86/kernel/boot_sys.c
+index 694a636..c5e0f99 100644
+--- a/src/arch/x86/kernel/boot_sys.c
++++ b/src/arch/x86/kernel/boot_sys.c
+@@ -832,6 +832,8 @@ BOOT_CODE VISIBLE void boot_sys(
+     printf("BOOTPROF kernel tsc_mhz=%u tsc_init_us=%llu\n",
+            bootprof_tsc_mhz,
+            (unsigned long long)bootprof_us(bootprof_tsc_init_cycles));
++    printf("BOOTPROF kernel apic_khz=%u apic_cal_us=%llu\n",
++           bootprof_apic_khz, (unsigned long long)bootprof_us(bootprof_apic_cycles));
+     printf("BOOTPROF kernel entry_us=%llu exit_us=%llu kernel_us=%llu\n",
+            (unsigned long long)bootprof_us(bootprof_entry),
+            (unsigned long long)bootprof_us(bootprof_exit),
+diff --git a/src/plat/pc99/config.cmake b/src/plat/pc99/config.cmake
+index 6a382b2..579294f 100644
+--- a/src/plat/pc99/config.cmake
++++ b/src/plat/pc99/config.cmake
+@@ -45,3 +45,14 @@ config_string(
+     DEPENDS "KernelPlatPC99"
+     UNQUOTE UNDEF_DISABLED
+ )
++
++config_string(
++    KernelPC99APICTimerFrequency PC99_APIC_TIMER_FREQUENCY
++    "Provide a static definition of the local APIC timer frequency (in Hz, divisor 1). \
++    If this isn't set then the boot code measures it against the PIT, which takes 50-100ms. \
++    On Skylake and later Intel CPUs this is the core crystal clock (CPUID 0x15 ECX, \
++    24 MHz on client parts); under KVM and QEMU it is 1 GHz."
++    DEFAULT 0
++    DEPENDS "KernelPlatPC99"
++    UNQUOTE UNDEF_DISABLED
++)

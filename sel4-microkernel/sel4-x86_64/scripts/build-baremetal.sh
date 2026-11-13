@@ -3,22 +3,33 @@
 # task, instrumented to print boot timestamps (BOOTPROF lines) to COM1 and to
 # the screen (VGA text on BIOS, GOP framebuffer on UEFI).
 #
-#   scripts/build-baremetal.sh [--tsc-hz HZ]
+#   scripts/build-baremetal.sh [--tsc-hz HZ] [--apic-hz HZ]
 #
-# --tsc-hz 0 (default) keeps seL4's PIT calibration (~100 ms). Pass the
-# machine's TSC frequency in Hz (the first boot prints tsc_mhz) to skip it.
+# seL4 measures two clocks against the PIT at boot, ~100 ms each:
+#   --tsc-hz  TSC frequency (first boot prints tsc_mhz)
+#   --apic-hz local APIC timer frequency (first boot prints apic_khz;
+#             24000000 on Skylake+ client CPUs, 1000000000 under KVM/QEMU)
+# 0 (default) keeps the measurement.
 #
-# Output: build/baremetal/tsc-<HZ>/sel4-bootprof.iso (dd it to a USB stick).
+# Output in build/baremetal/tsc-<HZ>-apic-<HZ>/:
+#   sel4-bootprof.iso  GRUB image, BIOS + UEFI (dd it to a USB stick)
+#   kernel32.elf       ELF32 kernel, multiboot + PVH (QEMU -kernel uses multiboot)
+#   kernel-pvh.elf     PVH-only copy (QEMU pc/microvm, Firecracker, Cloud Hypervisor)
+#   rootserver.elf     root task (-initrd / boot module)
 set -euo pipefail
 
 TSC_HZ=0
+APIC_HZ=0
 while [ $# -gt 0 ]; do
     case "$1" in
         --tsc-hz) TSC_HZ="${2:?--tsc-hz needs a value}"; shift 2 ;;
-        *) echo "usage: $0 [--tsc-hz HZ]" >&2; exit 2 ;;
+        --apic-hz) APIC_HZ="${2:?--apic-hz needs a value}"; shift 2 ;;
+        *) echo "usage: $0 [--tsc-hz HZ] [--apic-hz HZ]" >&2; exit 2 ;;
     esac
 done
-[[ "$TSC_HZ" =~ ^[0-9]+$ ]] || { echo "--tsc-hz must be an integer (Hz)" >&2; exit 2; }
+for v in "$TSC_HZ" "$APIC_HZ"; do
+    [[ "$v" =~ ^[0-9]+$ ]] || { echo "frequencies must be integers (Hz)" >&2; exit 2; }
+done
 
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BM="$PROJECT_DIR/baremetal"
@@ -28,7 +39,7 @@ cd "$PROJECT_DIR"
 # bump both together.
 SEL4_REV=44b2b946fc51fc6ebdaf126ff72b9e073575dc81
 SEL4_SRC="$PROJECT_DIR/sel4-kit/seL4-$SEL4_REV"
-OUT="$PROJECT_DIR/build/baremetal/tsc-$TSC_HZ"
+OUT="$PROJECT_DIR/build/baremetal/tsc-$TSC_HZ-apic-$APIC_HZ"
 TOOLCHAIN="+$(sed -n 's/^channel = "\(.*\)"/\1/p' ../rust-toolchain.toml)"
 
 for cmd in git cmake ninja gcc objcopy python3 cargo grub-mkrescue xorriso mformat; do
@@ -60,11 +71,13 @@ cmake -G Ninja -S "$SEL4_SRC" -B "$OUT/kernel" \
     -DCMAKE_TOOLCHAIN_FILE="$SEL4_SRC/gcc.cmake" -DCROSS_COMPILER_PREFIX= \
     -DCMAKE_INSTALL_PREFIX="$OUT/sel4-prefix" \
     -C "$BM/kernel-settings.cmake" \
-    -DKernelPC99TSCFrequency="$TSC_HZ" >/dev/null
+    -DKernelPC99TSCFrequency="$TSC_HZ" \
+    -DKernelPC99APICTimerFrequency="$APIC_HZ" >/dev/null
 ninja -C "$OUT/kernel" all >/dev/null
 ninja -C "$OUT/kernel" install >/dev/null
 # QEMU's multiboot1 -kernel loader only accepts ELF32; GRUB takes either.
 objcopy -O elf32-i386 "$OUT/sel4-prefix/bin/kernel.elf" "$OUT/kernel32.elf"
+python3 -I "$BM/tools/pvh_only.py" "$OUT/kernel32.elf" "$OUT/kernel-pvh.elf" >/dev/null
 
 # --- root task ---
 SEL4_PREFIX="$OUT/sel4-prefix" cargo "$TOOLCHAIN" build --release --locked \
@@ -74,7 +87,7 @@ SEL4_PREFIX="$OUT/sel4-prefix" cargo "$TOOLCHAIN" build --release --locked \
     -Z build-std-features=compiler-builtins-mem \
     -Zjson-target-spec
 ROOTTASK="$OUT/target/x86_64-sel4-roottask/release/sel4-x86-rootserver.elf"
-cp "$ROOTTASK" "$OUT/rootserver.elf"  # with kernel32.elf: the QEMU/KVM -kernel/-initrd pair
+cp "$ROOTTASK" "$OUT/rootserver.elf"
 
 # --- GRUB image ---
 rm -rf "$OUT/iso"
@@ -87,4 +100,5 @@ grub-mkrescue -o "$OUT/sel4-bootprof.iso" "$OUT/iso" 2>/dev/null
 echo "kernel:    $OUT/sel4-prefix/bin/kernel.elf"
 echo "roottask:  $ROOTTASK"
 echo "image:     $OUT/sel4-bootprof.iso"
-(cd "$OUT" && sha256sum sel4-bootprof.iso iso/boot/kernel.elf iso/boot/rootserver.elf)
+echo "pvh:       $OUT/kernel-pvh.elf"
+(cd "$OUT" && sha256sum sel4-bootprof.iso kernel32.elf kernel-pvh.elf rootserver.elf)

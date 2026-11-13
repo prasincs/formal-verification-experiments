@@ -1,0 +1,349 @@
+diff --git a/include/arch/x86/arch/kernel/pvh.h b/include/arch/x86/arch/kernel/pvh.h
+new file mode 100644
+index 0000000..db6ed53
+--- /dev/null
++++ b/include/arch/x86/arch/kernel/pvh.h
+@@ -0,0 +1,42 @@
++/*
++ * PVH boot ABI (Xen arch-x86/hvm/start_info.h), as implemented by QEMU,
++ * Firecracker and Cloud Hypervisor: entered in 32-bit protected mode, paging
++ * off, at XEN_ELFNOTE_PHYS32_ENTRY, with %ebx = physical address of
++ * struct hvm_start_info.
++ *
++ * SPDX-License-Identifier: GPL-2.0-only
++ */
++#pragma once
++
++#include <types.h>
++
++#define PVH_START_MAGIC 0x336ec578u
++#define PVH_MEMMAP_TYPE_RAM 1
++
++typedef struct pvh_start_info {
++    uint32_t magic;
++    uint32_t version;
++    uint32_t flags;
++    uint32_t nr_modules;
++    uint64_t modlist_paddr;
++    uint64_t cmdline_paddr;
++    uint64_t rsdp_paddr;
++    /* version >= 1 */
++    uint64_t memmap_paddr;
++    uint32_t memmap_entries;
++    uint32_t reserved;
++} PACKED pvh_start_info_t;
++
++typedef struct pvh_modlist_entry {
++    uint64_t paddr;
++    uint64_t size;
++    uint64_t cmdline_paddr;
++    uint64_t reserved;
++} PACKED pvh_modlist_entry_t;
++
++typedef struct pvh_memmap_entry {
++    uint64_t addr;
++    uint64_t size;
++    uint32_t type;
++    uint32_t reserved;
++} PACKED pvh_memmap_entry_t;
+diff --git a/src/arch/x86/64/head.S b/src/arch/x86/64/head.S
+index 7853351..e293dec 100644
+--- a/src/arch/x86/64/head.S
++++ b/src/arch/x86/64/head.S
+@@ -271,6 +271,24 @@ BEGIN_FUNC(common_init)
+     ret
+ END_FUNC(common_init)
+ 
++/* PVH entry (XEN_ELFNOTE_PHYS32_ENTRY): 32-bit protected mode, paging off,
++ * %ebx = struct hvm_start_info paddr. Reuse the multiboot path with a magic
++ * that boot_sys() recognises. */
++BEGIN_FUNC(_start_pvh)
++    movl $0x336ec578, %eax /* PVH_START_MAGIC */
++    jmp _start
++END_FUNC(_start_pvh)
++
++.section .note.pvh, "a", @note
++    .align 4
++    .long 4               /* namesz: "Xen\0" */
++    .long 4               /* descsz */
++    .long 18              /* XEN_ELFNOTE_PHYS32_ENTRY */
++    .asciz "Xen"
++    .align 4
++    .long _start_pvh
++.previous
++
+ BEGIN_FUNC(_start)
+     /* Assume we are MultiBooted, e.g. by GRUB.
+      * While not immediately checked, the magic number is checked prior to 
+diff --git a/src/arch/x86/kernel/boot_sys.c b/src/arch/x86/kernel/boot_sys.c
+index 1203e8c..694a636 100644
+--- a/src/arch/x86/kernel/boot_sys.c
++++ b/src/arch/x86/kernel/boot_sys.c
+@@ -4,6 +4,7 @@
+  * SPDX-License-Identifier: GPL-2.0-only
+  */
+ 
++#include <arch/kernel/pvh.h>
+ #include <arch/bootprof.h>
+ #include <config.h>
+ #include <util.h>
+@@ -725,6 +726,72 @@ static BOOT_CODE bool_t try_boot_sys_mbi2(
+     return true;
+ }
+ 
++static BOOT_CODE bool_t try_boot_sys_pvh(pvh_start_info_t const *si)
++{
++    if (si->magic != PVH_START_MAGIC) {
++        printf("PVH: bad start_info magic %x\n", si->magic);
++        return false;
++    }
++    cmdline_parse(si->cmdline_paddr ? (const char *)(word_t)si->cmdline_paddr : "", &cmdline_opt);
++    printf("PVH: start_info v%u, %u module(s), rsdp=%llx\n",
++           si->version, si->nr_modules, (unsigned long long)si->rsdp_paddr);
++
++    boot_state.mem_p_regs.count = 0;
++    boot_state.mb_mmap_info.mmap_length = 0;
++    boot_state.vbe_info.vbeMode = -1;
++
++    if (si->version < 1 || si->memmap_entries == 0) {
++        printf("PVH: no memory map (start_info version %u)\n", si->version);
++        return false;
++    }
++    pvh_memmap_entry_t const *mm = (pvh_memmap_entry_t const *)(word_t)si->memmap_paddr;
++    for (word_t i = 0; i < si->memmap_entries; i++) {
++        printf("\tPhysical Memory Region from %llx size %llx type %u\n",
++               (unsigned long long)mm[i].addr, (unsigned long long)mm[i].size, mm[i].type);
++        if (!mm[i].addr) {
++            boot_state.mem_lower = mm[i].size;
++        }
++        if (mm[i].type == PVH_MEMMAP_TYPE_RAM && mm[i].addr >= HIGHMEM_PADDR) {
++            if (!add_mem_p_regs((p_region_t) {
++            mm[i].addr, mm[i].addr + mm[i].size
++        })) {
++                return false;
++            }
++        }
++    }
++
++    if (si->nr_modules < 1) {
++        printf("Expect at least one boot module (containing a userland image)\n");
++        return false;
++    }
++    pvh_modlist_entry_t const *mods = (pvh_modlist_entry_t const *)(word_t)si->modlist_paddr;
++    for (word_t i = 0; i < si->nr_modules; i++) {
++        uint64_t end = mods[i].paddr + mods[i].size;
++        printf("  module #%lu: start=0x%llx end=0x%llx\n", i,
++               (unsigned long long)mods[i].paddr, (unsigned long long)end);
++        /* Boot page tables identity-map only the low 4 GiB. */
++        if (mods[i].size == 0 || end > BIT(32) || end < mods[i].paddr) {
++            printf("PVH: invalid module %lu\n", i);
++            return false;
++        }
++        if (i == 0) {
++            boot_state.boot_module_start = mods[i].paddr;
++        }
++        if (boot_state.mods_end_paddr < end) {
++            boot_state.mods_end_paddr = end;
++        }
++    }
++
++    if (si->rsdp_paddr) {
++        if (si->rsdp_paddr >= BIT(32)) {
++            return false;
++        }
++        memcpy(&boot_state.acpi_rsdp, (void *)(word_t)si->rsdp_paddr, sizeof(boot_state.acpi_rsdp));
++        return true;
++    }
++    return acpi_init(&boot_state.acpi_rsdp);
++}
++
+ static inline uint64_t bootprof_us(uint64_t cycles)
+ {
+     return bootprof_tsc_mhz ? cycles / bootprof_tsc_mhz : 0;
+@@ -743,6 +810,8 @@ BOOT_CODE VISIBLE void boot_sys(
+         result = try_boot_sys_mbi1(mbi);
+     } else if (multiboot_magic == MULTIBOOT2_MAGIC) {
+         result = try_boot_sys_mbi2(mbi);
++    } else if (multiboot_magic == PVH_START_MAGIC) {
++        result = try_boot_sys_pvh(mbi);
+     } else {
+         printf("Boot loader is not multiboot 1 or 2 compliant %lx\n", multiboot_magic);
+     }
+diff --git a/src/plat/pc99/linker.lds b/src/plat/pc99/linker.lds
+index 3fcb286..c95da27 100644
+--- a/src/plat/pc99/linker.lds
++++ b/src/plat/pc99/linker.lds
+@@ -31,6 +31,7 @@ PHDRS {
+     phys PT_LOAD FILEHDR PHDRS ;
+     boot PT_LOAD ;
+     virt PT_LOAD ;
++    note PT_NOTE ;
+ }
+ 
+ SECTIONS
+@@ -48,6 +49,9 @@ SECTIONS
+         . = . + 1;
+     } :phys
+ 
++    /* PVH entry note; sits in the gap before .phys.bss. */
++    .note.pvh : { *(.note.pvh) } :phys :note
++
+     .phys.bss ADDR(.phys) + SIZEOF(.phys) + 4K (NOLOAD) :
+     {
+         . = ALIGN(16);
+diff --git a/src/plat/pc99/machine/acpi.c b/src/plat/pc99/machine/acpi.c
+index 044a8fa..451d036 100644
+--- a/src/plat/pc99/machine/acpi.c
++++ b/src/plat/pc99/machine/acpi.c
+@@ -235,6 +235,42 @@ BOOT_CODE static void *acpi_table_init(void *entry, enum acpi_type table_type)
+     return acpi_table;
+ }
+ 
++/* Root table: the RSDT when present, else the XSDT (ACPI 2.0+). MicroVM VMMs
++ * (QEMU microvm, Firecracker, Cloud Hypervisor) provide only an XSDT. Tables
++ * above 4 GiB are not reachable from boot code and are skipped. */
++BOOT_CODE static acpi_rsdt_t *acpi_root(acpi_rsdp_t *rsdp, word_t *entry_bytes)
++{
++    acpi_rsdt_t *root;
++    if (rsdp->rsdt_address) {
++        *entry_bytes = sizeof(uint32_t);
++        root = acpi_table_init((void *)(word_t)rsdp->rsdt_address, ACPI_RSDT);
++    } else if (rsdp->revision >= 2 && rsdp->xsdt_address && rsdp->xsdt_address < BIT(32)) {
++        *entry_bytes = sizeof(uint64_t);
++        root = acpi_table_init((void *)(word_t)rsdp->xsdt_address, ACPI_RSDT);
++    } else {
++        printf("ACPI: no usable RSDT or XSDT\n");
++        return NULL;
++    }
++    if (root->header.length < sizeof(acpi_header_t)) {
++        printf("ACPI: root table length %u invalid\n", root->header.length);
++        return NULL;
++    }
++    return root;
++}
++
++BOOT_CODE static word_t acpi_root_count(acpi_rsdt_t *root, word_t entry_bytes)
++{
++    return (root->header.length - sizeof(acpi_header_t)) / entry_bytes;
++}
++
++/* Entry i as a pointer, or NULL if above 4 GiB. XSDT entries are unaligned. */
++BOOT_CODE static void *acpi_root_entry(acpi_rsdt_t *root, word_t entry_bytes, word_t i)
++{
++    uint64_t paddr = 0;
++    memcpy(&paddr, (char *)root->entry + i * entry_bytes, entry_bytes);
++    return paddr < BIT(32) ? (void *)(word_t)paddr : NULL;
++}
++
+ BOOT_CODE bool_t acpi_init(acpi_rsdp_t *rsdp_data)
+ {
+     acpi_rsdp_t *acpi_rsdp = acpi_get_rsdp();
+@@ -256,8 +292,8 @@ BOOT_CODE bool_t acpi_init(acpi_rsdp_t *rsdp_data)
+ 
+ BOOT_CODE bool_t acpi_validate_rsdp(acpi_rsdp_t *acpi_rsdp)
+ {
+-    acpi_rsdt_t *acpi_rsdt;
+     acpi_rsdt_t *acpi_rsdt_mapped;
++    word_t entry_bytes;
+ 
+     if (acpi_calc_checksum((char *)acpi_rsdp, ACPI_V1_SIZE) != 0) {
+         printf("BIOS: ACPIv1 information corrupt\n");
+@@ -269,13 +305,13 @@ BOOT_CODE bool_t acpi_validate_rsdp(acpi_rsdp_t *acpi_rsdp)
+         return false;
+     }
+ 
+-    /* verify the rsdt, even though we do not actually make use of the mapping right now */
+-    acpi_rsdt = (acpi_rsdt_t *)(word_t)acpi_rsdp->rsdt_address;
+-    printf("ACPI: RSDT paddr=%p\n", acpi_rsdt);
+-    acpi_rsdt_mapped = (acpi_rsdt_t *)acpi_table_init(acpi_rsdt, ACPI_RSDT);
+-    printf("ACPI: RSDT vaddr=%p\n", acpi_rsdt_mapped);
++    /* verify the root table, even though we do not actually make use of the mapping right now */
++    acpi_rsdt_mapped = acpi_root(acpi_rsdp, &entry_bytes);
++    if (!acpi_rsdt_mapped) {
++        return false;
++    }
++    printf("ACPI: %s vaddr=%p\n", entry_bytes == sizeof(uint32_t) ? "RSDT" : "XSDT", acpi_rsdt_mapped);
+ 
+-    assert(acpi_rsdt_mapped->header.length > 0);
+     if (acpi_calc_checksum((char *)acpi_rsdt_mapped, acpi_rsdt_mapped->header.length) != 0) {
+         printf("ACPI: RSDT checksum failure\n");
+         return false;
+@@ -310,17 +346,22 @@ BOOT_CODE uint32_t acpi_madt_scan(
+ 
+     acpi_rsdt_t *acpi_rsdt_mapped;
+     acpi_madt_t *acpi_madt_mapped;
++    word_t entry_bytes;
+ 
+-    acpi_rsdt_mapped = (acpi_rsdt_t *)acpi_table_init((acpi_rsdt_t *)(word_t)acpi_rsdp->rsdt_address, ACPI_RSDT);
++    acpi_rsdt_mapped = acpi_root(acpi_rsdp, &entry_bytes);
++    if (!acpi_rsdt_mapped) {
++        return 0;
++    }
+ 
+     num_cpu = 0;
+     *num_ioapic = 0;
+ 
+-    assert(acpi_rsdt_mapped->header.length >= sizeof(acpi_header_t));
+-    /* Divide by uint32_t explicitly as this is the size as mandated by the ACPI standard */
+-    entries = (acpi_rsdt_mapped->header.length - sizeof(acpi_header_t)) / sizeof(uint32_t);
++    entries = acpi_root_count(acpi_rsdt_mapped, entry_bytes);
+     for (count = 0; count < entries; count++) {
+-        acpi_madt = (acpi_madt_t *)(word_t)acpi_rsdt_mapped->entry[count];
++        acpi_madt = acpi_root_entry(acpi_rsdt_mapped, entry_bytes, count);
++        if (!acpi_madt) {
++            continue;
++        }
+         acpi_madt_mapped = (acpi_madt_t *)acpi_table_init(acpi_madt, ACPI_RSDT);
+ 
+         if (strncmp(acpi_str_apic, acpi_madt_mapped->header.signature, 4) == 0) {
+@@ -434,13 +475,18 @@ BOOT_CODE bool_t acpi_fadt_scan(
+ 
+     acpi_rsdt_t *acpi_rsdt_mapped;
+     acpi_fadt_t *acpi_fadt_mapped;
+-    acpi_rsdt_mapped = (acpi_rsdt_t *)acpi_table_init((acpi_rsdt_t *)(word_t)acpi_rsdp->rsdt_address, ACPI_RSDT);
++    word_t entry_bytes;
++    acpi_rsdt_mapped = acpi_root(acpi_rsdp, &entry_bytes);
++    if (!acpi_rsdt_mapped) {
++        return false;
++    }
+ 
+-    assert(acpi_rsdt_mapped->header.length >= sizeof(acpi_header_t));
+-    /* Divide by uint32_t explicitly as this is the size as mandated by the ACPI standard */
+-    entries = (acpi_rsdt_mapped->header.length - sizeof(acpi_header_t)) / sizeof(uint32_t);
++    entries = acpi_root_count(acpi_rsdt_mapped, entry_bytes);
+     for (count = 0; count < entries; count++) {
+-        acpi_fadt = (acpi_fadt_t *)(word_t)acpi_rsdt_mapped->entry[count];
++        acpi_fadt = acpi_root_entry(acpi_rsdt_mapped, entry_bytes, count);
++        if (!acpi_fadt) {
++            continue;
++        }
+         acpi_fadt_mapped = (acpi_fadt_t *)acpi_table_init(acpi_fadt, ACPI_RSDT);
+ 
+         if (strncmp(acpi_str_fadt, acpi_fadt_mapped->header.signature, 4) == 0) {
+@@ -481,16 +527,22 @@ BOOT_CODE void acpi_dmar_scan(
+ 
+     acpi_rsdt_t *acpi_rsdt_mapped;
+     acpi_dmar_t *acpi_dmar_mapped;
++    word_t entry_bytes;
+ 
+-    acpi_rsdt_mapped = (acpi_rsdt_t *)acpi_table_init((acpi_rsdt_t *)(word_t)acpi_rsdp->rsdt_address, ACPI_RSDT);
++    acpi_rsdt_mapped = acpi_root(acpi_rsdp, &entry_bytes);
++    if (!acpi_rsdt_mapped) {
++        return;
++    }
+ 
+     *num_drhu = 0;
+     rmrr_count = 0;
+ 
+-    assert(acpi_rsdt_mapped->header.length >= sizeof(acpi_header_t));
+-    entries = (acpi_rsdt_mapped->header.length - sizeof(acpi_header_t)) / sizeof(uint32_t);
++    entries = acpi_root_count(acpi_rsdt_mapped, entry_bytes);
+     for (count = 0; count < entries; count++) {
+-        acpi_dmar = (acpi_dmar_t *)(word_t)acpi_rsdt_mapped->entry[count];
++        acpi_dmar = acpi_root_entry(acpi_rsdt_mapped, entry_bytes, count);
++        if (!acpi_dmar) {
++            continue;
++        }
+         acpi_dmar_mapped = (acpi_dmar_t *)acpi_table_init(acpi_dmar, ACPI_RSDT);
+ 
+         if (strncmp(acpi_str_dmar, acpi_dmar_mapped->header.signature, 4) == 0) {

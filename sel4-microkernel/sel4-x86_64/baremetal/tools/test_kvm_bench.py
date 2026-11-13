@@ -9,6 +9,7 @@ import kvm_bench as kb  # noqa: E402
 
 LOG = """Boot config: console_port = 0x3f8
 BOOTPROF kernel tsc_mhz=2400 tsc_init_us=5
+BOOTPROF kernel apic_khz=24000 apic_cal_us=0
 BOOTPROF kernel entry_us=31000 exit_us=33500 kernel_us=2500
 BOOTPROF user tsc_mhz=2400 user_us=33900
 seL4 x86_64 root server started
@@ -23,6 +24,7 @@ class Parse(unittest.TestCase):
         self.assertEqual(r["kernel_us"], 2500)
         self.assertEqual(r["user_minus_exit_us"], 400)
         self.assertEqual(r["tsc_mhz"], 2400)
+        self.assertEqual((r["apic_khz"], r["apic_cal_us"]), (24000, 0))
 
     def test_ignores_non_bootprof_and_unknown_keys(self):
         r = kb.parse_bootprof(["foo entry_us=1", "BOOTPROF kernel bogus=7 exit_us=9"])
@@ -48,7 +50,7 @@ class Stats(unittest.TestCase):
 class Cmd(unittest.TestCase):
     def args(self, accel):
         return kb.argparse.Namespace(qemu="q", accel=accel, machine="pc", mem="256M",
-                                     kernel="k.elf", rootserver="r.elf")
+                                     kernel="k.elf", rootserver="r.elf", icount=None)
 
     def test_kvm_uses_host_cpu(self):
         c = kb.qemu_cmd(self.args("kvm"))
@@ -61,6 +63,18 @@ class Cmd(unittest.TestCase):
     def test_tcg_cpu(self):
         c = kb.qemu_cmd(self.args("tcg"))
         self.assertTrue(c[c.index("-cpu") + 1].startswith("Nehalem"))
+        self.assertNotIn("enforce", c[c.index("-cpu") + 1])  # breaks -machine microvm
+        self.assertNotIn("-icount", c)
+
+    def test_icount(self):
+        a = self.args("tcg")
+        a.icount = 0
+        c = kb.qemu_cmd(a)
+        self.assertEqual(c[c.index("-icount") + 1], "shift=0,sleep=off")
+
+    def test_icount_requires_tcg(self):
+        with self.assertRaises(SystemExit):
+            kb.main(["--kernel", "k", "--rootserver", "r", "--accel", "kvm", "--icount", "0"])
 
 
 if __name__ == "__main__":

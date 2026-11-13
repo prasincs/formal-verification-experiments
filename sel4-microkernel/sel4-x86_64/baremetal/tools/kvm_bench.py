@@ -1,7 +1,13 @@
 #!/usr/bin/env python3
 """Boot the seL4 BOOTPROF image as a QEMU/KVM guest N times and summarize.
 
-    python3 kvm_bench.py --kernel K32.elf --rootserver RS.elf [--runs 20]
+    python3 kvm_bench.py --kernel K.elf --rootserver RS.elf [--runs 20]
+        [--machine pc | microvm,acpi=on] [--accel kvm | tcg [--icount 0]]
+
+--kernel kernel32.elf boots via multiboot; kernel-pvh.elf via PVH (required
+for microvm). Without KVM, `--accel tcg --icount 0` makes guest time an
+instruction count (1 insn = 1 ns): deterministic, comparable across
+configurations, but blind to I/O latency and VM-exit cost.
 
 Per run, it collects the guest's BOOTPROF values (guest TSC; under KVM the
 guest TSC starts near 0 at VM creation, so entry_us is roughly guest firmware
@@ -22,9 +28,10 @@ import subprocess
 import sys
 import time
 
-FIELDS = ("tsc_mhz", "tsc_init_us", "entry_us", "exit_us", "kernel_us", "user_us")
+FIELDS = ("tsc_mhz", "tsc_init_us", "apic_khz", "apic_cal_us", "entry_us", "exit_us", "kernel_us", "user_us")
 KVM_CPU = "host"
-TCG_CPU = "Nehalem,-vme,+pdpe1gb,-xsave,-xsaveopt,-xsavec,-fsgsbase,-invpcid,+syscall,+lm,enforce"
+# No "enforce": microvm requests features (spec-ctrl) that TCG lacks.
+TCG_CPU = "Nehalem,-vme,+pdpe1gb,-xsave,-xsaveopt,-xsavec,-fsgsbase,-invpcid,+syscall,+lm"
 
 
 def parse_bootprof(lines):
@@ -58,6 +65,8 @@ def summarize(runs, keys):
 
 def qemu_cmd(args):
     accel = ["-accel", "kvm", "-cpu", KVM_CPU] if args.accel == "kvm" else ["-accel", "tcg", "-cpu", TCG_CPU]
+    if args.icount is not None:
+        accel += ["-icount", f"shift={args.icount},sleep=off"]
     return [args.qemu, *accel, "-machine", args.machine, "-m", args.mem, "-smp", "1",
             "-nodefaults", "-no-reboot", "-display", "none", "-monitor", "none",
             "-serial", "stdio", "-kernel", args.kernel, "-initrd", args.rootserver]
@@ -108,7 +117,11 @@ def main(argv=None):
     ap.add_argument("--mem", default="256M")
     ap.add_argument("--qemu", default="qemu-system-x86_64")
     ap.add_argument("--timeout", type=float, default=30.0)
+    ap.add_argument("--icount", type=int, metavar="SHIFT",
+                    help="TCG only: virtual time from instruction count (2^SHIFT ns per insn)")
     args = ap.parse_args(argv)
+    if args.icount is not None and args.accel != "tcg":
+        ap.error("--icount requires --accel tcg")
     if args.accel == "kvm" and not os.access("/dev/kvm", os.R_OK | os.W_OK):
         sys.exit("/dev/kvm not accessible (enable VT-x, load kvm_intel, or run with sudo)")
 
@@ -123,12 +136,14 @@ def main(argv=None):
             continue
         runs.append(r)
         print(f"run {i}: host_ms={r.get('host_ms', float('nan')):.1f} "
-              + " ".join(f"{k}={r[k]}" for k in ("tsc_init_us", "entry_us", "kernel_us", "user_minus_exit_us") if k in r))
+              + " ".join(f"{k}={r[k]}" for k in ("tsc_init_us", "apic_cal_us", "entry_us", "kernel_us",
+                                                  "user_minus_exit_us") if k in r))
     if not runs:
         sys.exit("all runs failed")
     print(f"\n{len(runs)} ok, {failures} failed; tsc_mhz={runs[0].get('tsc_mhz')}")
     print(f"{'metric':20} {'n':>3} {'min':>10} {'median':>10} {'p90':>10} {'max':>10}")
-    for k, n, lo, med, p90, hi in summarize(runs, ("host_ms", "entry_us", "tsc_init_us", "kernel_us", "user_minus_exit_us")):
+    for k, n, lo, med, p90, hi in summarize(runs, ("host_ms", "entry_us", "tsc_init_us", "apic_cal_us",
+                                                   "kernel_us", "user_minus_exit_us")):
         print(f"{k:20} {n:>3} {lo:>10.1f} {med:>10.1f} {p90:>10.1f} {hi:>10.1f}")
     return 1 if failures else 0
 

@@ -50,6 +50,14 @@ class Cpu(unittest.TestCase):
         self.assertEqual(np.platform_info_mhz(0x1500, 0x1E), 2799)  # Nehalem 133.33 MHz bus
         self.assertIsNone(np.platform_info_mhz(0, 0x9E))
 
+    def test_apic_timer_hz(self):
+        c = np.parse_cpuinfo(CPUINFO_NUC9)
+        self.assertEqual(np.apic_timer_hz(c, (2, 200, 0, 0)), 24_000_000)        # table
+        self.assertEqual(np.apic_timer_hz(c, (2, 200, 38_400_000, 0)), 38_400_000)  # ECX wins
+        self.assertEqual(np.apic_timer_hz({**c, "flags": c["flags"] | {"hypervisor"}}, None), 1_000_000_000)
+        self.assertIsNone(np.apic_timer_hz({**c, "model": 0x01}, (0, 0, 0, 0)))
+        self.assertIsNone(np.apic_timer_hz({**c, "vendor": "AuthenticAMD"}, (2, 200, 0, 0)))
+
     def test_cpuid15(self):
         # Coffee Lake reports ECX=0: crystal comes from the model table.
         self.assertEqual(np.cpuid15_tsc_hz(2, 200, 0, 0x9E), 2_400_000_000)
