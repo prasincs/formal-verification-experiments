@@ -106,9 +106,13 @@ BOOTPROF user tsc_mhz=… user_us=…                # root task main()
 ### Toward microVMs: PVH, microvm, and an instruction-count baseline
 
 `kernel-pvh.elf` is `kernel32.elf` with its multiboot1 magic zeroed
-(`baremetal/tools/pvh_only.py` checks for the PVH note first). QEMU 8.2 prefers
-multiboot whenever both are present, so `kernel32.elf` takes the multiboot path
-even on `microvm`, silently and about 50% slower. `kvm_bench.py` reports the
+(`baremetal/tools/pvh_only.py` checks for the PVH note first). QEMU's
+`x86_load_linux()` tries `load_multiboot()` before `load_elfboot()`, and the
+source comment says this is deliberate. It does so in 8.2.2, in 11.1.3 (the
+latest release) and on master as of 2026-11. So `kernel32.elf` takes the
+multiboot path even on `microvm`, silently and about 50% slower. PVH loading
+also uses `I386_ELF_MACHINE`, so the PVH image must be ELF32 (hence the
+`objcopy`). `kvm_bench.py` reports the
 path it saw, and `--expect-path pvh` fails such runs.
 
 Without KVM, QEMU's `-icount` makes guest time an instruction count
