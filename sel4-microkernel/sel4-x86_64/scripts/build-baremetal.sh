@@ -13,8 +13,10 @@
 #
 # Output in build/baremetal/tsc-<HZ>-apic-<HZ>/:
 #   sel4-bootprof.iso  GRUB image, BIOS + UEFI (dd it to a USB stick)
+#   kernel64.elf       ELF64 kernel, multiboot2 + PVH note (Cloud Hypervisor, Firecracker:
+#                      their linux-loader requires ELF64 and ignores multiboot)
 #   kernel32.elf       ELF32 kernel, multiboot + PVH (QEMU -kernel uses multiboot)
-#   kernel-pvh.elf     PVH-only copy (QEMU pc/microvm, Firecracker, Cloud Hypervisor)
+#   kernel-pvh.elf     ELF32 PVH-only copy (QEMU pc/microvm via PVH)
 #   rootserver.elf     root task (-initrd / boot module)
 set -euo pipefail
 
@@ -76,6 +78,7 @@ cmake -G Ninja -S "$SEL4_SRC" -B "$OUT/kernel" \
 ninja -C "$OUT/kernel" all >/dev/null
 ninja -C "$OUT/kernel" install >/dev/null
 # QEMU's multiboot1 -kernel loader only accepts ELF32; GRUB takes either.
+cp "$OUT/sel4-prefix/bin/kernel.elf" "$OUT/kernel64.elf"
 objcopy -O elf32-i386 "$OUT/sel4-prefix/bin/kernel.elf" "$OUT/kernel32.elf"
 python3 -I "$BM/tools/pvh_only.py" "$OUT/kernel32.elf" "$OUT/kernel-pvh.elf" >/dev/null
 
@@ -101,4 +104,4 @@ echo "kernel:    $OUT/sel4-prefix/bin/kernel.elf"
 echo "roottask:  $ROOTTASK"
 echo "image:     $OUT/sel4-bootprof.iso"
 echo "pvh:       $OUT/kernel-pvh.elf"
-(cd "$OUT" && sha256sum sel4-bootprof.iso kernel32.elf kernel-pvh.elf rootserver.elf)
+(cd "$OUT" && sha256sum sel4-bootprof.iso kernel64.elf kernel32.elf kernel-pvh.elf rootserver.elf)

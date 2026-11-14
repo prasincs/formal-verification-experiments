@@ -43,6 +43,7 @@ Patches in `baremetal/patches/`, applied in order:
 | `0003-x86-pvh-boot-and-acpi-xsdt` | PVH entry (`XEN_ELFNOTE_PHYS32_ENTRY` and an `hvm_start_info` parser). Every pointer and range is checked to lie below 4 GiB with no wrap-around, and memory is clipped to whole pages. Also ACPI XSDT support: it prefers the XSDT on ACPI 2.0+, as the spec says, since QEMU `microvm`, Firecracker and Cloud Hypervisor publish nothing else. Tables above 4 GiB are skipped with a warning, and with the IOMMU enabled the kernel refuses to boot rather than risk losing the DMAR silently. | candidate |
 | `0004-x86-pinnable-apic-timer-frequency` | `KernelPC99APICTimerFrequency`. The non-MCS `apic_init()` otherwise always measures the APIC timer against the PIT (50–100 ms). Pins below 1 MHz (TSC or APIC) are compile errors. On bare metal, a pinned APIC frequency is cross-checked against the CPUID 15H crystal clock, with a warning on mismatch. | candidate |
 | `0005-x86-mbi2-mem-lower-units` | Upstream bug: the multiboot2 path stores `mem_lower` in bytes, but `copy_boot_code_aps()` expects KiB, which disables the SMP AP boot-code bounds check. | candidate |
+| `0006-x86-acpi-madt-enabled-bit` | Upstream bug: a MADT CPU entry is accepted only if `flags == 1`. ACPI 6.3 added bit 1 (Online Capable), and Cloud Hypervisor sets `flags = 3`, so seL4 found 0 CPUs. Now tests the Enabled bit, and logs skipped entries. | candidate |
 
 This is a measurement build (debug + printing on, IOMMU off), not the verified
 configuration.
@@ -52,7 +53,8 @@ pip3 install ply jinja2 pyyaml   # + git cmake ninja gcc xorriso mtools
                                  #   grub-pc-bin grub-efi-amd64-bin ovmf qemu-system-x86
 scripts/test-baremetal.sh        # QEMU regression test (see header)
 scripts/build-baremetal.sh [--tsc-hz HZ] [--apic-hz HZ]
-#   -> build/baremetal/tsc-<HZ>-apic-<HZ>/{sel4-bootprof.iso, kernel32.elf, kernel-pvh.elf, rootserver.elf}
+#   -> build/baremetal/tsc-<HZ>-apic-<HZ>/{sel4-bootprof.iso, kernel64.elf, kernel32.elf, kernel-pvh.elf, rootserver.elf}
+scripts/test-cloud-hypervisor-nested.sh  # seL4 under Cloud Hypervisor, nested in QEMU TCG
 ```
 
 seL4 measures two clocks against the PIT at boot, about 100 ms each. Pin both:
@@ -151,6 +153,38 @@ python3 baremetal/tools/kvm_bench.py --accel tcg --icount 0 --machine microvm,ac
     --expect-path pvh \
     --kernel build/baremetal/tsc-1000000000-apic-1000000000/kernel-pvh.elf \
     --rootserver build/baremetal/tsc-1000000000-apic-1000000000/rootserver.elf
+```
+
+### Cloud Hypervisor
+
+`scripts/test-cloud-hypervisor-nested.sh` boots `kernel64.elf` under Cloud
+Hypervisor v54.1 (static binary, pinned by SHA-256) without `/dev/kvm`. QEMU
+TCG emulates AMD SVM, an L1 Linux runs `kvm_amd`, and Cloud Hypervisor runs
+inside it. It asserts:
+
+- the PVH entry was taken
+- ACPI was found via the XSDT
+- the CPU was found via the MADT x2APIC entry
+- the root task was loaded in place from the top of RAM
+
+Findings:
+
+- **Cloud Hypervisor (and Firecracker) need ELF64.** Their `linux-loader` rejects
+  ELF32, the opposite of QEMU. The PVH note works unchanged in both.
+- **seL4 found 0 CPUs** until patch 0006, because of Cloud Hypervisor's MADT
+  `flags = 3`.
+- **Nested TCG needs `kvm_amd npt=0`.** With emulated nested paging, even a
+  6-instruction PVH test kernel triple-faults. This is a QEMU emulation issue,
+  not seL4.
+- **Timings are meaningless when nested.** One signal still stands out:
+  `flush_us` is about 0.3–0.6 s, because every serial byte is a VM exit into
+  Cloud Hypervisor's userspace. Keep printing out of production images.
+
+On a host with `/dev/kvm`:
+
+```bash
+cloud-hypervisor --kernel kernel64.elf --initramfs rootserver.elf \
+    --cpus boot=1 --memory size=256M --serial tty --console off
 ```
 
 With `/dev/kvm` (e.g. on the NUC), drop `--accel tcg --icount 0` and build with
